@@ -1,0 +1,25 @@
+{
+  "name": "slots-booking-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tiny slot-booking app used as the real, deployed target for the verify-fix example. Contains a deliberate one-session-per-account rule that causes a real monitoring incident.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "collision": "node scripts/collision-check.mjs"
+  },
+  "dependencies": {
+    "@upstash/redis": "^1.39.0",
+    "next": "^16.3.5",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "typescript": "^5.7.0"
+  }
+}

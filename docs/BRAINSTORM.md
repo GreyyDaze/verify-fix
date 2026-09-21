@@ -1,7 +1,7 @@
 # verify-fix — Brainstorm: where we are, where we go
 
 Plain English. Short sentences. Technical details kept.
-Revision 2: adds Part 7 (decisions aligned with how Checkly actually works).
+Revision 3: Part 7 decisions aligned with how Checkly actually works; D1 details from Checkly's env-var rules; D9 CI path.
 
 ---
 
@@ -150,9 +150,16 @@ Nothing was hand-written. The fake website is gone.
 Context: this proposal is aimed at Checkly. So where Checkly already has a convention, we adopt it instead of inventing one.
 
 ### D1. The customer brings the environment. We use Checkly's convention to point at it.
-- Checkly's own model: the same check runs against a preview or staging URL when `ENVIRONMENT_URL` is set, and against production on its schedule. Browser checks read `process.env.ENVIRONMENT_URL`; API checks get only the host replaced. `npx checkly test -e ENVIRONMENT_URL="https://staging.example.com"` passes it at runtime.
+- Checkly's own model: the same check runs against a preview or staging URL when `ENVIRONMENT_URL` is set, and against production on its schedule. Browser checks read `process.env.ENVIRONMENT_URL`; API checks get only the host replaced (path and query stay). `npx checkly test -e ENVIRONMENT_URL="https://staging.example.com"` passes it at runtime.
 - **Decision:** `verify-fix verify --target staging` sets `ENVIRONMENT_URL` (and `ENVIRONMENT_NAME`) exactly like Checkly does. We drop our private `APP_BASE_URL`. A check that already follows Checkly's convention needs no change to be verifiable.
 - We do not provision, seed, or manage environments. Same contract as `checkly test`.
+
+Details from Checkly's environment-variable rules that shape the implementation:
+- **`-e` is session-only.** Values passed with `--env` / `--env-file` apply to that test session only; they never update the variables used by scheduled monitors. So `--target` is a per-run override. verify-fix **never** calls `checkly deploy` or `checkly env add`. It only grades.
+- **Two mechanisms, one variable name.** Prepending `ENVIRONMENT_URL=… npx checkly test` does nothing — local env vars are not replaced inside code dependencies. When a scene runs through Checkly's runner (D4) we must pass `-e` / `--env-file`. When a scene runs in our local sandbox we set `process.env` directly. Same name, different plumbing.
+- **Accept `--env-file`.** `verify-fix verify --env-file ./.env.staging` uses the same file the customer already keeps for `checkly test --env-file` (or pulls with `checkly env pull`). No new config format. The file stays out of git.
+- **Handlebars have no fallback.** API-check constructs reference `{{ENVIRONMENT_URL}}`; if the variable is unset the check cannot run at all. The bundle records how the check resolves its target: `code` (has a fallback) or `handlebars` (none). A missing target variable is reported **UNCERTAIN — "target variable not set"**, never FAILED.
+- **Names, not values.** The bundle stores env var *names* only. Secrets stay in the customer's shell, CI secret store, or Checkly's encrypted remote variables (D8).
 
 ### D2. Two targets are allowed; scenes are assigned by risk.
 - `--target staging` (default): all scenes, including `inject` and `live-concurrent`.
@@ -186,6 +193,11 @@ Context: this proposal is aimed at Checkly. So where Checkly already has a conve
 - Checkly's guidance: use dedicated test users, never hardcode credentials, always read them from env vars.
 - Today `detectEnvScopeDodge` flags any credential change. Too blunt for production.
 - **Decision:** a credential that is **generated at runtime** (`Date.now()`, `randomUUID()`) stays a dodge. A credential that **moves to a different env var** is a declared environment change: allowed, recorded as an updated env assumption in the report, and the scenes must still hold. Hardcoded credentials in a patch are rejected outright.
+
+### D9. CI integration goes through the CLI / GitHub Action path, not deployment hooks.
+- Checkly offers two ways to run checks on a deployment: GitHub deployment hooks (Checkly listens for `deployment_status` events) and the CLI / GitHub Action (your pipeline starts a recorded test session).
+- Deployment hooks have documented limits: private locations are not available, client certificates are not applied, OpenTelemetry headers are not applied. Staging behind a firewall needs private locations.
+- **Decision:** verify-fix runs as a pipeline step, the same way `checkly test` does: deploy app → `verify-fix verify --target staging --env-file ./.env.staging` (exit 0 required) → `checkly deploy`. It does not register deployment hooks and does not depend on them.
 
 ### What did not change after the review
 The rulebook. The evidence gate. Repetitions. Mutants. Exit codes. The two hand-made parts are still removed. The tool's job is still: decide if a patch is real or fake, given evidence. The customer's job is still: provide a URL that behaves like the thing that broke.

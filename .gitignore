@@ -1,0 +1,20 @@
+# dependencies
+node_modules/
+
+# throwaway probes / degenerate sandbox scratch and seeded-COLLISION dumps
+*.err
+*.log
+probe-auth.ts
+entry-debug.ts
+entry-probe.ts
+x-probe*.ts
+x-scene-*.ts
+regen-oracle.mjs
+hedera
+
+# sandbox temp dirs
+/tmp/verify-fix-sandbox-*/
+
+# OS / editor
+.DS_Store
+*.swp

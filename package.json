@@ -1,0 +1,22 @@
+{
+  "name": "verify-fix",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pre-merge verification CLI: AI-free oracle engine for agent-proposed monitoring-check repairs.",
+  "type": "module",
+  "bin": {
+    "verify-fix": "bin/verify-fix"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test test/",
+    "typecheck": "tsc --noEmit",
+    "verify": "node src/cli.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.0"
+  }
+}

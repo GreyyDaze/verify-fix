@@ -7,7 +7,52 @@ import type { Assertion, AssertionInventory } from "../types.ts";
 import { assertionId, normalizeSubject } from "./id.ts";
 import { isFalsifiable, isWeakMatcher, matcherClass } from "./classify.ts";
 
-const EXPECT_RE = /expect\s*\(\s*([^)\]]+?)\s*\)\.([A-Za-z][\w$]*)\s*\(\s*([\s\S]*?)\s*\)/g;
+/**
+ * Find `expect(<subject>).<matcher>(<target>)` calls on one line with balanced
+ * parentheses, so real Playwright subjects such as
+ * `expect(page.getByTestId('x')).toHaveText('200')` are read whole. Quotes are
+ * respected. For the flat subjects of the seeded suite this yields exactly what
+ * the previous regex did (same subject/matcher/target → same assertion ids).
+ */
+function readBalanced(text: string, openIndex: number): { inner: string; end: number } | null {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = openIndex; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === "\\") i += 1;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") quote = ch;
+    else if (ch === "(") depth += 1;
+    else if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) return { inner: text.slice(openIndex + 1, i), end: i };
+    }
+  }
+  return null;
+}
+
+export function scanExpectCalls(text: string): Array<{ subject: string; matcher: string; target: string }> {
+  const out: Array<{ subject: string; matcher: string; target: string }> = [];
+  const head = /\bexpect\s*\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = head.exec(text)) !== null) {
+    const open = m.index + m[0].length - 1;
+    const subj = readBalanced(text, open);
+    if (!subj) continue;
+    const rest = text.slice(subj.end + 1);
+    const call = /^\s*\.\s*([A-Za-z][\w$]*)\s*\(/.exec(rest);
+    if (!call) continue;
+    const targetOpen = subj.end + 1 + call[0].length - 1;
+    const tgt = readBalanced(text, targetOpen);
+    if (!tgt) continue;
+    out.push({ subject: subj.inner.trim(), matcher: call[1], target: tgt.inner.trim() });
+    head.lastIndex = tgt.end + 1;
+  }
+  return out;
+}
 
 const STEP_PATTERNS: Array<{ label: string; re: RegExp }> = [
   { label: "page.goto", re: /page\.goto\(/ },
@@ -128,12 +173,10 @@ function findAssertions(source: string): Array<{ subject: string; matcher: strin
   const lines = splitLines(stripComments(source));
   const guardedLines = guardRanges(lines);
   for (const line of lines) {
-    EXPECT_RE.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = EXPECT_RE.exec(line.text)) !== null) {
-      const subject = normalizeSubject(m[1]);
-      const matcher = m[2];
-      const target = normalizeSubject(m[3]);
+    for (const call of scanExpectCalls(line.text)) {
+      const subject = normalizeSubject(call.subject);
+      const matcher = call.matcher;
+      const target = normalizeSubject(call.target);
       const guarded = guardedLines.has(line.lineNumber) || GUARDABLE.test(line.text);
       out.push({ subject, matcher, target, lineNumber: line.lineNumber, guarded });
     }

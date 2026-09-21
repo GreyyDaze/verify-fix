@@ -15,8 +15,8 @@ verify-fix/
 
 | Phase | What | Done when | Status |
 | --- | --- | --- | --- |
-| 0 | Real customer setup: Next.js app, Checkly Playwright Check Suite (2 locations, `runParallel`, shared `TEST_USER`), Vercel config | check green on production for a few hours | files built; deploy needs the user's Vercel/Upstash/Checkly accounts |
-| 1 | `verify-fix bundle --check <id> [--result <id>] --out ./bundle`: Checkly client, failing + last passing result + assets, trace → HAR, Rocky RCA → `REPRODUCTION` mode, config → `manifest.json`, `--measure N` for determinism | bundle of a green check is produced end to end | |
+| 0 | Real customer setup: Next.js app, Checkly Playwright Check Suite (2 locations, `runParallel`, shared `TEST_USER`), Vercel config | check green on production for a few hours | deployed: Vercel + Upstash + Checkly check `slots booking flow` green |
+| 1 | `verify-fix bundle --check <id> [--result <id>] --out ./bundle`: Checkly client, failing + last passing result + assets, trace → HAR, Rocky RCA → `REPRODUCTION` mode, config → `manifest.json`, `--measure N` for determinism | bundle of a green check is produced end to end | built + 25 new tests (fake Checkly over HTTP); first live run against the real account pending |
 | 2 | Cause the incident (overlapping runs), capture it with `bundle`, commit sanitized output to `fixtures/bundles/slots-booking-overlap/`, golden test | fixture + test committed | |
 | 3 | Generic scene layer: proxy modes passthrough / replay / inject / concurrent, `ENVIRONMENT_URL` + `ENVIRONMENT_NAME`, `--target`, `--env-file`, evidence gate, `environment` column, config diff + credential policy; migrate the 11 seeded patches; delete `app-sim.ts` | 25+ tests green on the new layer, seeded verdicts unchanged | |
 | 4 | Playwright runner: `page.route` inject, `routeFromHAR` replay, two contexts for concurrent, `page.on('request')` evidence | real spec runs through all four scene modes | |

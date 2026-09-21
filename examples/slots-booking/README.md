@@ -122,6 +122,20 @@ Then in the Checkly dashboard:
 
 Phase 0 is "done" when the check has been green on production for a few hours.
 
+### 4. Capture with the tool (Phase 1)
+
+```bash
+cd <repo root>
+(cd examples/slots-booking/monitoring && npx checkly checks list)   # find the check id (or copy it from the dashboard URL)
+./bin/verify-fix bundle --check <checkId> --out ./bundle --project examples/slots-booking/monitoring --verbose
+```
+
+While the check is still green this produces a *baseline* bundle (status
+`no-failure-yet`, one `healthy-live` scene). After the Phase 2 incident the same
+command produces the full bundle: failing + passing HAR, Rocky RCA, three scenes.
+Add `--measure 3 --measure-overlap 2` to also run the check on Checkly's cloud
+(sequentially, then two copies at once) and record pass rates.
+
 ## What lives where (so the tool's later phases make sense)
 
 | Thing | Comes from | Read by the tool in |

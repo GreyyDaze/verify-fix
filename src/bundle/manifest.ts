@@ -1,0 +1,439 @@
+// Manifest v3 builder — a pure function from what was fetched to what is
+// written. No network, no filesystem: everything here is unit-testable and
+// deterministic for the same inputs.
+
+import { parseInventory } from "../assertion/inventory.ts";
+import { fnv1a } from "../assertion/id.ts";
+import type { AssertionInventory } from "../types.ts";
+import type { ChecklyCheck, CheckResult, CheckResultSummary, ErrorGroup, RootCauseAnalysis } from "../checkly/types.ts";
+import type { TraceExtract } from "../trace/trace-to-har.ts";
+import type { HarEntry } from "../trace/har-types.ts";
+import { envVarNamesOnly } from "./sanitize.ts";
+import { classifyRca } from "./rca-mode.ts";
+import type { MeasureResult } from "./measure.ts";
+import type { DeterminismV3, FailurePoint, ManifestV3, ResultRef, SceneV3 } from "./types.ts";
+
+export interface FetchedResult {
+  summary: CheckResultSummary;
+  detail: CheckResult | null;
+  extract: TraceExtract | null;
+}
+
+export interface ManifestInputs {
+  check: ChecklyCheck;
+  failing: FetchedResult | null;
+  passing: FetchedResult | null;
+  errorGroup: ErrorGroup | null;
+  rca: RootCauseAnalysis | null;
+  history: CheckResultSummary[];
+  sources: Array<{ path: string; content: string }>;
+  mainSource: string | null;
+  project: { dir: string | null; gitCommit: string | null; logicalId: string | null; repoUrl: string | null };
+  measurement: MeasureResult | null;
+  recordings: { failing: string | null; passing: string | null; bodies: string };
+  assets: ManifestV3["provenance"]["assets"];
+  apiCalls: ManifestV3["provenance"]["apiCalls"];
+  accountId: string;
+  now: string;
+  toolVersion: string;
+}
+
+const REPS = 5;
+
+function resultErrors(detail: CheckResult | null): string[] {
+  if (!detail) return [];
+  const r = detail.playwrightCheckResult ?? detail.browserCheckResult ?? detail.multiStepCheckResult;
+  if (r?.errors?.length) return r.errors.map((e) => String(e).slice(0, 2000));
+  if (detail.apiCheckResult?.requestError) return [detail.apiCheckResult.requestError];
+  return [];
+}
+
+function toRef(r: FetchedResult | null): ResultRef | null {
+  if (!r) return null;
+  return {
+    id: r.summary.id,
+    startedAt: r.summary.startedAt,
+    runLocation: r.summary.runLocation,
+    resultType: r.summary.resultType ?? null,
+    attempts: r.summary.attempts ?? null,
+    errorGroupIds: r.summary.errorGroupIds ?? [],
+    errors: resultErrors(r.detail),
+    trace: r.extract
+      ? { files: [...r.extract.files.network, ...r.extract.files.trace], entries: r.extract.har.log.entries.length, actions: r.extract.actions.length }
+      : null,
+  };
+}
+
+function isApiLike(e: HarEntry): boolean {
+  const t = (e._resourceType ?? "").toLowerCase();
+  if (t === "xhr" || t === "fetch") return true;
+  const mime = e.response.content.mimeType ?? "";
+  return /json/i.test(mime);
+}
+
+function pathOf(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.pathname + u.search;
+  } catch {
+    return url;
+  }
+}
+
+function originOf(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+export function detectFailurePoint(failing: TraceExtract | null, passing: TraceExtract | null): FailurePoint | null {
+  if (!failing) return null;
+  const action = failing.failingAction
+    ? { apiName: failing.failingAction.apiName, title: failing.failingAction.title, error: failing.failingAction.error ?? "" }
+    : null;
+  const origin = originOf(failing.baseURL) ?? originOf(failing.har.log.entries.find((e) => e._resourceType === "document")?.request.url ?? null);
+  const candidates = failing.har.log.entries.filter((e) => {
+    if (origin && originOf(e.request.url) !== origin) return false;
+    const failed = e.response.status >= 400 || e.response.status <= 0 || !!e.response._failureText;
+    return failed && isApiLike(e);
+  });
+  const last = candidates.at(-1) ?? null;
+  let request: FailurePoint["request"] = null;
+  if (last) {
+    const key = `${last.request.method} ${pathOf(last.request.url).replace(/\?.*$/, "")}`;
+    const twin = passing?.har.log.entries.find((e) => `${e.request.method} ${pathOf(e.request.url).replace(/\?.*$/, "")}` === key) ?? null;
+    request = {
+      method: last.request.method,
+      url: last.request.url,
+      path: pathOf(last.request.url),
+      status: last.response.status,
+      passingStatus: twin ? twin.response.status : null,
+      failureText: last.response._failureText ?? null,
+    };
+  }
+  if (!action && !request) return null;
+  return { action, request };
+}
+
+export function detectTargetResolution(check: ChecklyCheck, sources: Array<{ path: string; content: string }>): ManifestV3["target"]["resolution"] {
+  const url = check.request?.url ?? "";
+  if (/\{\{\s*ENVIRONMENT_URL\s*\}\}/.test(url)) return "handlebars";
+  if (sources.some((s) => /ENVIRONMENT_URL/.test(s.content))) return "code";
+  if (typeof check.script === "string" && /ENVIRONMENT_URL/.test(check.script)) return "code";
+  return "unknown";
+}
+
+function buildInventory(sources: Array<{ path: string; content: string }>, mainSource: string | null): AssertionInventory | null {
+  const specs = sources.filter((s) => s.path === mainSource || /\.(spec|test)\.[cm]?[jt]sx?$/.test(s.path));
+  if (specs.length === 0) return null;
+  const merged: AssertionInventory = { checkFile: mainSource ?? specs[0].path, assertions: [], steps: [], totalAssertions: 0 };
+  const seen = new Set<string>();
+  for (const s of specs) {
+    const inv = parseInventory(s.path, s.content);
+    for (const a of inv.assertions) {
+      if (seen.has(a.id)) continue;
+      seen.add(a.id);
+      merged.assertions.push(a);
+    }
+    merged.steps.push(...inv.steps.map((st) => (specs.length > 1 ? `${s.path}:${st}` : st)));
+  }
+  merged.totalAssertions = merged.assertions.length;
+  return merged;
+}
+
+/** Assertion ids whose matcher/target matches the failing expect() call. */
+function assertionsForFailure(inv: AssertionInventory | null, fp: FailurePoint | null): string[] {
+  if (!inv) return [];
+  const all = inv.assertions.map((a) => a.id);
+  const action = fp?.action;
+  if (!action) return all;
+  const m = /^expect\.(\w+)/.exec(action.apiName);
+  const matcher = m?.[1];
+  const expected = /expected=("(?:[^"\\]|\\.)*")/.exec(action.title)?.[1];
+  const hits = inv.assertions.filter((a) => (!matcher || a.matcher === matcher) && (!expected || a.target === expected || a.target === expected.replace(/"/g, "'")));
+  return hits.length ? hits.map((a) => a.id) : all;
+}
+
+function historyStats(history: CheckResultSummary[]): DeterminismV3["history"] {
+  const finals = history.filter((r) => (r.resultType ?? "FINAL") === "FINAL");
+  const byLocation: Record<string, { runs: number; passed: number }> = {};
+  let passed = 0;
+  for (const r of finals) {
+    const ok = !r.hasFailures && !r.hasErrors;
+    if (ok) passed += 1;
+    const loc = (byLocation[r.runLocation] ??= { runs: 0, passed: 0 });
+    loc.runs += 1;
+    if (ok) loc.passed += 1;
+  }
+  const times = finals.map((r) => r.startedAt).sort();
+  return {
+    window: history.length,
+    finalRuns: finals.length,
+    passed,
+    failed: finals.length - passed,
+    passRate: finals.length ? Number((passed / finals.length).toFixed(3)) : null,
+    byLocation,
+    from: times[0] ?? null,
+    to: times.at(-1) ?? null,
+  };
+}
+
+export function buildManifest(input: ManifestInputs): ManifestV3 {
+  const { check, failing, passing, rca, errorGroup } = input;
+  const notes: string[] = [];
+  const envVars = envVarNamesOnly(check.environmentVariables);
+  const locations = check.locations ?? [];
+  const runParallel = Boolean(check.runParallel);
+  const inventory = buildInventory(input.sources, input.mainSource);
+  const failurePoint = detectFailurePoint(failing?.extract ?? null, passing?.extract ?? null);
+  const resolution = detectTargetResolution(check, input.sources);
+  const recordedOrigin =
+    originOf(failing?.extract?.baseURL ?? passing?.extract?.baseURL ?? null) ??
+    originOf((failing ?? passing)?.extract?.har.log.entries.find((e) => e._resourceType === "document")?.request.url ?? null);
+
+  const rcaText = rca ? `${rca.analysis.classification}\n${rca.analysis.rootCause}\n${rca.analysis.userImpact}` : errorGroup?.cleanedErrorMessage ?? null;
+  const cls = classifyRca(rcaText);
+  const reproductionReason = rca
+    ? cls.matchedRule
+      ? `RCA text matched rule "${cls.matchedRule}" ("${cls.matchedText}") → ${cls.mode}`
+      : "RCA text matched no rule → both modes; the scene is UNCERTAIN if neither reproduces"
+    : errorGroup
+      ? cls.matchedRule
+        ? `no RCA; error-group message matched rule "${cls.matchedRule}" → ${cls.mode}`
+        : "no RCA and no rule matched → both modes"
+      : "no failing result yet → reproduction mode undecided (both)";
+
+  // ---- env assumptions (facts from the check config, all verifiable) ----
+  const envAssumptions: ManifestV3["envAssumptions"] = [];
+  envAssumptions.push({
+    id: "locations",
+    text: `the check runs from ${locations.length} location(s): ${locations.join(", ") || "none"}`,
+    verified: true,
+    verifiedBy: "checkly:GET /v1/checks",
+  });
+  if (runParallel && locations.length > 1) {
+    envAssumptions.push({
+      id: "run-parallel",
+      text: "all locations run at the same moment (runParallel: true) — overlapping runs are normal",
+      verified: true,
+      verifiedBy: "checkly:GET /v1/checks",
+    });
+  }
+  if (envVars.length) {
+    envAssumptions.push({
+      id: "env-vars",
+      text: `the check reads environment variables: ${envVars.map((v) => v.key + (v.secret ? " (secret)" : "")).join(", ")} — names only, values stay in Checkly`,
+      verified: true,
+      verifiedBy: "checkly:GET /v1/checks",
+    });
+    const accountVar = envVars.find((v) => /(user|account|login|email|username)/i.test(v.key));
+    if (accountVar && locations.length > 1) {
+      envAssumptions.push({
+        id: "shared-account",
+        text: `every location uses the same ${accountVar.key} value (check-level variable) — one shared test account`,
+        verified: true,
+        verifiedBy: "checkly:GET /v1/checks",
+      });
+    }
+  }
+  envAssumptions.push({
+    id: "target-resolution",
+    text:
+      resolution === "code"
+        ? "the check reads process.env.ENVIRONMENT_URL, so `verify --target` can point it at another environment"
+        : resolution === "handlebars"
+          ? "the API check URL uses {{ENVIRONMENT_URL}} (no fallback): the variable must be set for every target"
+          : "the check does not read ENVIRONMENT_URL: it can only run against the URL baked into its code",
+    verified: true,
+    verifiedBy: "verify-fix:source-scan",
+  });
+  if (recordedOrigin) {
+    envAssumptions.push({ id: "recorded-origin", text: `recorded runs hit ${recordedOrigin}`, verified: true, verifiedBy: "playwright-trace" });
+  }
+
+  // ---- scenes ----
+  const scenes: SceneV3[] = [];
+  const failingId = failing?.summary.id ?? null;
+  const passingId = passing?.summary.id ?? null;
+  const lastAssertion = inventory?.assertions.at(-1)?.id ?? null;
+  const allAssertionIds = inventory?.assertions.map((a) => a.id) ?? [];
+  const failureAssertions = assertionsForFailure(inventory, failurePoint);
+
+  if (passingId) {
+    scenes.push({
+      sceneId: "healthy-live",
+      type: "HEALTHY",
+      mode: "live",
+      state: `the target behaves as in the last passing run (${passingId}, ${passing!.summary.runLocation}); the fixed check must pass`,
+      verdict: { mustFail: false, provenance: { kind: "recorded", runId: passingId, artifactId: "recordings/passing.har" }, envAssumptions: ["locations", "target-resolution"] },
+      experiments: [{ durationSec: 60, repetitions: REPS, expectStable: true }],
+      assertionsInvolved: allAssertionIds,
+      environment: "target",
+    });
+  } else if (lastAssertion) {
+    scenes.push({
+      sceneId: "healthy-live",
+      type: "HEALTHY",
+      mode: "live",
+      state: "no passing run recorded yet; the fixed check must pass on the target as written",
+      verdict: { mustFail: false, provenance: { kind: "code", assertionId: lastAssertion }, envAssumptions: ["locations", "target-resolution"] },
+      experiments: [{ durationSec: 60, repetitions: REPS, expectStable: true }],
+      assertionsInvolved: allAssertionIds,
+      environment: "target",
+      notes: ["provenance is code-derived because Checkly has no passing result for this check yet"],
+    });
+  }
+
+  if (failingId) {
+    const mode = cls.mode === "both" ? "live-concurrent:2" : cls.mode;
+    const alt = cls.mode === "both" ? "replay:failing.har" : undefined;
+    scenes.push({
+      sceneId: "reproduction",
+      type: "REPRODUCTION",
+      mode,
+      ...(alt ? { alternativeMode: alt } : {}),
+      state:
+        mode === "live-concurrent:2"
+          ? "two copies of the check run at once on the target, as the overlapping locations did in the failing run; the fixed check must pass"
+          : "the responses of the failing run are replayed from recordings/failing.har; the fixed check must pass against them",
+      verdict: { mustFail: false, provenance: { kind: "recorded", runId: failingId, artifactId: "recordings/failing.har" }, envAssumptions: ["locations", "run-parallel", "shared-account"].filter((id) => envAssumptions.some((a) => a.id === id)) },
+      experiments: [{ durationSec: 120, repetitions: REPS, expectStable: true }],
+      assertionsInvolved: failureAssertions,
+      environment: mode === "live-concurrent:2" ? "target" : "recording",
+      notes: [reproductionReason],
+    });
+
+    const req = failurePoint?.request;
+    const injectRule = req ? `inject:${req.method} ${req.path.replace(/\?.*$/, "")} -> ${req.status}` : "inject:<failing request unknown>";
+    scenes.push({
+      sceneId: "detection",
+      type: "DETECTION",
+      mode: injectRule as SceneV3["mode"],
+      state: req
+        ? `the failing response (${req.method} ${req.path.replace(/\?.*$/, "")} → ${req.status}) is injected on top of a live run; the fixed check MUST still fail (it may not hide the incident)`
+        : "the recorded failure is injected on top of a live run; the fixed check must still fail",
+      verdict: { mustFail: true, provenance: { kind: "recorded", runId: failingId, artifactId: "recordings/failing.har" }, envAssumptions: ["target-resolution"] },
+      experiments: [{ durationSec: 60, repetitions: REPS, expectStable: true }],
+      assertionsInvolved: failureAssertions,
+      environment: "target+recording",
+      ...(req ? {} : { notes: ["no failing API request could be identified in the trace; the scene layer must derive the injection from the failing action"] }),
+    });
+  } else {
+    notes.push("no failing result found for this check: REPRODUCTION and DETECTION scenes are absent until an incident is captured (re-run `verify-fix bundle` after a failure)");
+  }
+  notes.push("REGRESSION scenes (sibling checks) are not generated yet — planned once group listing is wired (Phase 3)");
+
+  const recorded = scenes.filter((s) => s.verdict.provenance.kind === "recorded").length;
+  const codeDerived = scenes.length - recorded;
+
+  const measurement = input.measurement;
+  const determinism: DeterminismV3 = {
+    measured: Boolean(measurement && (measurement.sequential.runs > 0 || measurement.overlap.pairs > 0)),
+    history: historyStats(input.history),
+    sequential: measurement && measurement.sequential.runs > 0 ? measurement.sequential : null,
+    overlap: measurement && measurement.overlap.pairs > 0 ? measurement.overlap : null,
+    lastVerifiedAt: input.now,
+  };
+
+  const primaryFile = input.mainSource ?? input.sources[0]?.path ?? null;
+  const incidentSlug = (input.project.logicalId ?? check.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  const incidentId = failingId ? `${incidentSlug}-${fnv1a(errorGroup?.id ?? failingId).slice(0, 6)}` : `${incidentSlug}-baseline`;
+
+  return {
+    schemaVersion: "v3",
+    generatedBy: `verify-fix bundle ${input.toolVersion}`,
+    generatedAt: input.now,
+    incidentId,
+    incident: {
+      title: failingId
+        ? `${check.name}: ${errorGroup?.cleanedErrorMessage?.split("\n")[0]?.slice(0, 120) ?? failurePoint?.action?.apiName ?? "check failed"}`
+        : `${check.name}: baseline (no failure recorded)`,
+      description: failingId
+        ? [errorGroup?.cleanedErrorMessage, failurePoint?.action?.error, rca?.analysis.rootCause].filter(Boolean).join("\n\n").slice(0, 4000)
+        : "Bundle of a healthy check. Contains the last passing run and the check's configuration; no incident yet.",
+      sourceReference: failingId ? `checkly:check-result:${check.id}/${failingId}` : passingId ? `checkly:check-result:${check.id}/${passingId}` : null,
+      status: failingId ? "captured" : "no-failure-yet",
+    },
+    check: {
+      id: check.id,
+      name: check.name,
+      checkType: check.checkType,
+      repo: input.project.repoUrl,
+      file: primaryFile,
+      files: input.sources.map((s) => s.path),
+      logicalId: input.project.logicalId,
+      deployedId: check.id,
+      projectCommit: input.project.gitCommit,
+    },
+    config: {
+      frequencyMinutes: check.frequency ?? null,
+      locations,
+      privateLocations: check.privateLocations ?? [],
+      runParallel,
+      retryStrategy: (check.retryStrategy as Record<string, unknown> | null | undefined) ?? null,
+      doubleCheck: typeof check.doubleCheck === "boolean" ? check.doubleCheck : null,
+      activated: Boolean(check.activated),
+      muted: Boolean(check.muted),
+      tags: check.tags ?? [],
+      runtimeId: check.runtimeId ?? null,
+      environmentVariables: envVars,
+      playwright:
+        check.checkType === "PLAYWRIGHT"
+          ? { configPath: check.playwrightConfigPath ?? null, projects: check.pwProjects ?? [], tags: check.pwTags ?? [], version: check.playwrightVersion ?? null }
+          : null,
+      apiRequest:
+        check.checkType === "API" || check.checkType === "URL"
+          ? { method: check.request?.method ?? null, url: check.request?.url ?? null, assertions: check.request?.assertions ?? [] }
+          : null,
+    },
+    target: {
+      resolution,
+      variable: "ENVIRONMENT_URL",
+      recordedOrigin,
+      note:
+        resolution === "unknown"
+          ? "verify --target cannot redirect this check; scenes will run against the recorded origin only"
+          : "verify --target sets ENVIRONMENT_URL/ENVIRONMENT_NAME for every live scene (Checkly's own convention)",
+    },
+    results: { failing: toRef(failing), passing: toRef(passing) },
+    rca: rca
+      ? {
+          id: rca.id,
+          createdAt: rca.created_at,
+          classification: rca.analysis.classification,
+          rootCause: rca.analysis.rootCause,
+          userImpact: rca.analysis.userImpact,
+          codeFix: rca.analysis.codeFix,
+          evidence: (rca.analysis.evidence ?? []).map((e) => ({ description: e.description, artifacts: e.artifacts ?? [] })),
+          provider: rca.provider,
+          model: rca.model,
+        }
+      : null,
+    errorGroup: errorGroup
+      ? { id: errorGroup.id, cleanedErrorMessage: errorGroup.cleanedErrorMessage, firstSeen: errorGroup.firstSeen, lastSeen: errorGroup.lastSeen }
+      : null,
+    reproduction: { mode: cls.mode, matchedRule: cls.matchedRule, matchedText: cls.matchedText, reason: reproductionReason },
+    failurePoint,
+    recordings: input.recordings,
+    scenes,
+    assertions: inventory,
+    envAssumptions,
+    determinism,
+    runBudget: { maxPerScene: 10, used: 0 },
+    oracleProvenance: { recorded, codeDerived },
+    provenance: {
+      accountIdHash: fnv1a(input.accountId),
+      checkId: check.id,
+      failingResultId: failingId,
+      passingResultId: passingId,
+      errorGroupId: errorGroup?.id ?? null,
+      rcaId: rca?.id ?? null,
+      assets: input.assets,
+      apiCalls: input.apiCalls,
+    },
+    notes,
+  };
+}

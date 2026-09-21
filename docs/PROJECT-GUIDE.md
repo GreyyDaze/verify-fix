@@ -788,6 +788,104 @@ the rule that decided the verdict.
 
 ---
 
+## 9b. The `bundle` command — capturing an incident from Checkly (Phase 1)
+
+Everything above grades a patch against a bundle that was written by hand.
+The redesign (docs/BRAINSTORM.md, docs/PLAN.md) replaces the hand-written
+bundle with one the tool records from the customer's real Checkly account:
+
+```bash
+export CHECKLY_API_KEY=cu_...  CHECKLY_ACCOUNT_ID=...     # or: npx checkly login (the tool reads the CLI's saved login)
+verify-fix bundle --check <checkId> --out ./bundle --project examples/slots-booking/monitoring
+```
+
+### Input
+
+- the **check id** (`npx checkly checks list` or the dashboard URL);
+- optionally `--result <id>` to pick the failing run (default: newest failed
+  `FINAL` result); `--project <dir>` pointing at the Checkly project that
+  deployed the check, so the spec source can be copied; `--measure N` to run
+  the check N times sequentially and `--measure-overlap M` to run M copies at
+  once through `npx checkly test --record` (the CLI must be installed in the
+  project); `--trigger-rca` to request a Rocky analysis when none exists;
+  `--bodies api|all|none` (default `api`: keep API bodies, drop static assets);
+  `--history N` (default 100 results for the pass-rate table); `--json`.
+- credentials only from the environment or the Checkly CLI's login files
+  (`~/Library/Preferences/@checkly/cli/auth.json` + `config.json` on macOS,
+  `~/.config/@checkly/cli/` on Linux). No flag takes a key; nothing is stored.
+
+### Data flow
+
+1. `GET /v1/checks/{id}` → type, locations, `runParallel`, retry strategy, env
+   var **names** (values are dropped immediately), Playwright config path.
+2. `GET /v2/check-results/{id}?resultType=FINAL&limit=…` → history. The
+   failing run = newest with `hasFailures`; the passing run = newest passing
+   result **before** it (so the healthy oracle predates the incident).
+3. For both: `GET /v1/check-results/{id}/{resultId}` + `…/assets?type=trace`,
+   then the trace zip is downloaded from the presigned URL — **without** the
+   auth headers (they are attached only to `api.checklyhq.com`).
+4. `src/trace/trace-to-har.ts`: the Playwright trace zip is parsed in memory
+   (`src/trace/zip.ts`, STORE + DEFLATE): `*.network` lines become HAR 1.2
+   entries, bodies are inlined from `resources/<sha1>`, `*.trace`
+   before/after events become an action list with the failing step and its
+   error message. Traces from several files (one per test) are merged by time.
+5. `src/bundle/sanitize.ts`: authorization/cookie/set-cookie/api-key headers,
+   secret-looking query params and JSON fields (`token`, `password`,
+   `secret`, `authorization`, …) are replaced by `REDACTED(<fnv1a>)` — same
+   input → same tag, so two runs stay comparable while the value is gone.
+6. Error group (`GET /v1/error-groups/{id}` from the result's
+   `errorGroupIds`) and Rocky RCA (`rootCauseAnalyses[0]`, or
+   `POST /v1/root-cause-analyses/error-groups/{id}` with `--trigger-rca`,
+   polled while it answers 202).
+7. `src/bundle/rca-mode.ts` maps the RCA text to a REPRODUCTION mode with a
+   fixed rule table (no model in the loop): race / parallel / session-superseded
+   → `live-concurrent:2`; selector / changed response / status code → 
+   `replay:failing.har`; no match → `both` (primary live-concurrent, alternative
+   replay). The matched rule and text are recorded so anyone can audit the choice.
+8. `src/bundle/manifest.ts` (pure function) builds `manifest.json` v3:
+   incident, check facts, target resolution (`code` when the spec reads
+   `ENVIRONMENT_URL`, `handlebars` for `{{ENVIRONMENT_URL}}` in API checks,
+   else `unknown`), the failure point (last failed same-origin API call in the
+   failing trace, with the status the passing run got), three scenes —
+   `healthy-live` (`live`, must pass, provenance = passing result id),
+   `reproduction` (RCA mode, must pass, provenance = failing result id),
+   `detection` (`inject:<METHOD path -> status>`, must fail) — the assertion
+   inventory of the real spec (`src/assertion/inventory.ts` now reads nested
+   subjects such as `expect(page.getByTestId('x'))`), environment assumptions
+   (locations, `runParallel`, shared `TEST_USER`), determinism from history and
+   from `--measure`, and provenance (hashed account id, result ids, asset
+   sha256, every API call made).
+9. `src/bundle/build.ts` writes the directory after a last guard: if any file
+   would contain an env var value longer than seven characters, the build
+   refuses to write.
+
+### Output
+
+```
+bundle/
+├── manifest.json            v3 — scenes, modes, provenance, failure point, determinism
+├── check.config.json        check facts as deployed (env var names only) + target resolution
+├── check/                   copied sources: checkly.config.ts, playwright.config.ts, tests/*.spec.ts
+├── recordings/failing.har   sanitized HAR of the failing run  (+ failing.actions.json)
+├── recordings/passing.har   sanitized HAR of the passing run  (+ passing.actions.json)
+├── results/{failing,passing}.json   the raw Checkly result documents (env values stripped)
+├── rca.json                 error group + Rocky RCA as returned
+├── README.md                human summary: scenes table, determinism, notes
+└── .gitignore               raw/ (only with --keep-raw)
+```
+
+The bundle is consumed by `verify` from Phase 3 on; today `verify` refuses
+v3 with a clear message. The only fields a person may still edit by hand are
+noted in the README of the bundle; every scene carries the result id it came
+from, so nothing in it has to be trusted on faith.
+
+### Files
+
+`src/checkly/{client,credentials,types}.ts`, `src/trace/{zip,har-types,trace-to-har}.ts`,
+`src/bundle/{build,manifest,measure,rca-mode,sanitize,types}.ts`, CLI in `src/cli.ts`;
+tests in `test/bundle/*.spec.ts` with a real ZIP writer and a fake Checkly served
+over local HTTP (`test/bundle/cli-http.spec.ts`).
+
 ## 10. Current state
 
 Implemented and exercised: bundle loading and provenance validation; the

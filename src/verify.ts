@@ -55,20 +55,36 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   for (const s of bundle.scenes) {
     observations.set(s.sceneId, await executor.runScene(bundle, patchSource, s));
   }
+  // Determinism evidence is about the CANDIDATE's own repetitions; snapshot it
+  // before the mutation phase runs weakened variants through the same executor.
+  const nonDet = synthetic ? [...new Set(synthetic.nondeterministicScenes)] : [];
 
   // Mutation phase: few, directed weak variants of the CANDIDATE patch.
-  // Killed = the suite caught it (detection switched to pass, or healthy broke).
-  // Survived = behaviorally identical to the candidate across the scenes — the
-  // oracle cannot see the piece the mutant removed → blind-spot signal.
+  // Killed = the verifier caught it: either the contract engine rejects the
+  // mutant outright (a core-path assertion removed/weakened, or an assertion
+  // wrapped so its failure is swallowed — the same static law that FAILs a
+  // candidate), or the scenes distinguish it (detection switched to pass, or
+  // healthy broke). Survived = the verifier would give the mutant the same
+  // verdict as the candidate — it cannot see the piece the mutant removed →
+  // blind-spot signal. An `uncertain` observation is no evidence either way,
+  // so it never counts as a catch.
   const mutantResults: MutantResult[] = [];
   const detectionScene = bundle.scenes.find((s) => s.type === "DETECTION");
   const healthyScene = bundle.scenes.find((s) => s.type === "HEALTHY");
   for (const m of seedMutants(patchSource, bundle.check.file)) {
-    const detObs = detectionScene ? await executor.runScene(bundle, m.source, detectionScene) : null;
-    const healthyObs = healthyScene ? await executor.runScene(bundle, m.source, healthyScene) : null;
-    const detCaught = detObs === null ? false : detObs.observed === "pass"; // masked a must-fail → caught
-    const healthyCaught = healthyObs === null ? false : healthyObs.observed === "fail"; // broke healthy → caught
-    const survived = !(detCaught || healthyCaught);
+    const staticKill = staticallyRejected(bundle, m.source);
+    let detObs: SceneObservation | null = null;
+    let healthyObs: SceneObservation | null = null;
+    let survived: boolean;
+    if (staticKill) {
+      survived = false;
+    } else {
+      detObs = detectionScene ? await executor.runScene(bundle, m.source, detectionScene) : null;
+      healthyObs = healthyScene ? await executor.runScene(bundle, m.source, healthyScene) : null;
+      const detCaught = detObs?.observed === "pass"; // masked a must-fail → caught
+      const healthyCaught = healthyObs?.observed === "fail"; // broke healthy → caught
+      survived = !(detCaught || healthyCaught);
+    }
     mutantResults.push({
       name: m.name,
       family: m.family,
@@ -76,11 +92,10 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
       detail: m.detail,
     });
     if (verbose) {
-      console.error(`[verify] mutant ${m.name} (${m.family}) survived=${survived} (det="${detObs?.observed}", healthy="${healthyObs?.observed}")`);
+      const how = staticKill ? `static: ${staticKill}` : `det="${detObs?.observed ?? "n/a"}", healthy="${healthyObs?.observed ?? "n/a"}"`;
+      console.error(`[verify] mutant ${m.name} (${m.family}) survived=${survived} (${how})`);
     }
   }
-
-  const nonDet = synthetic ? [...synthetic.nondeterministicScenes] : [];
   const healthySceneIds = bundle.scenes.filter((s) => s.type === "HEALTHY").map((s) => s.sceneId);
   const healthyRuns = healthySceneIds.map((id) => observations.get(id)?.repetitions ?? 0);
   const healthyRepetitionsMet = healthySceneIds.length > 0 && healthyRuns.every((r) => r >= PR12_HEALTHY_RUNS);
@@ -116,6 +131,16 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     envDodge,
     cost: executor.costReport(),
   };
+}
+
+/** The contract engine's static law applied to a mutant: returns the reason it
+ * would be FAILED before any scene runs, or null if only the scenes can tell. */
+export function staticallyRejected(bundle: Bundle, mutantSource: string): string | null {
+  const c = buildContract(bundle, mutantSource);
+  const core = [...c.diff.removed, ...c.diff.weakened].filter((a) => a.onCriticalPath);
+  if (core.length > 0) return `core-path assertion removed/weakened (${core.map((a) => `${a.subject}.${a.matcher}`).join(", ")})`;
+  if (c.suppressionCandidates.length > 0) return `suppression candidate (${c.suppressionCandidates.length})`;
+  return null;
 }
 
 export function healthyRunsUsed(bundle: Bundle, observations: Map<string, SceneObservation>): number {

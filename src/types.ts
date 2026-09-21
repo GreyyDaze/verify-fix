@@ -13,7 +13,17 @@ export type ExitCode = 0 | 1 | 2;
 
 export type VerdictValue = "PASS" | "FAILED" | "UNCERTAIN";
 
-export type ObservationValue = "pass" | "fail";
+/** What an oracle expects of a scene: binary by construction (PR-3). */
+export type OracleExpectation = "pass" | "fail";
+
+/**
+ * What an executor actually observed. `uncertain` is the third, mandatory
+ * value: the run produced no admissible evidence (the check never contacted
+ * the armed app, repetitions disagreed, the budget was exhausted, the sandbox
+ * crashed). It is never a match and never a mismatch — the decision table
+ * maps it to UNCERTAIN so a hitless run can never satisfy an oracle.
+ */
+export type ObservationValue = "pass" | "fail" | "uncertain";
 
 export interface SceneVerdict {
   /** true = the fixed check must FAIL in this state; false = must PASS. */
@@ -131,6 +141,8 @@ export interface SceneObservation {
   trace: TraceStep[];
   source: "synthetic" | "checkly";
   checklyRunIds?: string[];
+  /** Mandatory when observed === "uncertain": why no pass/fail could be admitted. */
+  reason?: string;
 }
 
 export interface TraceStep {
@@ -147,9 +159,12 @@ export type EvidenceRow = {
   experiment: string;
   oracle: string;
   observed: ObservationValue;
-  expected: ObservationValue;
+  expected: OracleExpectation;
+  /** true only when observed is a real pass/fail equal to expected. */
   matched: boolean;
   strength: number;
+  /** set when observed === "uncertain": the executor's stated reason. */
+  note?: string;
 };
 
 export interface Decision {

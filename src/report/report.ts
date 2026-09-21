@@ -28,7 +28,8 @@ export function buildReport(contract: ContractReport, decision: Decision, observ
   lines.push("| experiment | oracle | expected | observed | match | strength |");
   lines.push("|---|---|---|---|---|---|");
   for (const r of decision.rows) {
-    lines.push(`| ${r.experiment} | ${oracleShorthand(r)} | ${r.expected} | ${r.observed} | ${r.matched ? "✓" : "✗"} | ${r.strength.toFixed(3)} |`);
+    const match = r.observed === "uncertain" ? "?" : r.matched ? "✓" : "✗";
+    lines.push(`| ${r.experiment} | ${oracleShorthand(r)} | ${r.expected} | ${r.observed} | ${match} | ${r.strength.toFixed(3)} |`);
   }
   lines.push("");
   if (decision.adequacy) {
@@ -65,9 +66,13 @@ export function buildReport(contract: ContractReport, decision: Decision, observ
 
 export function topEvidence(contract: ContractReport, decision: Decision, observations: Map<string, SceneObservation>): string[] {
   const out: string[] = [];
-  const mismatches = decision.rows.filter((r) => !r.matched);
+  const mismatches = decision.rows.filter((r) => r.observed !== "uncertain" && !r.matched);
   for (const m of mismatches) {
     out.push(`experiment ${m.experiment} ran against oracle ${oracleShorthand(m)}, observed ${m.observed} vs expected ${m.expected} — MISMATCH, strength ${m.strength.toFixed(3)}`);
+  }
+  const inconclusive = decision.rows.filter((r) => r.observed === "uncertain");
+  for (const u of inconclusive) {
+    out.push(`experiment ${u.experiment} ran against oracle ${oracleShorthand(u)}, observed uncertain (expected ${u.expected}) — INCONCLUSIVE: ${u.note ?? "no admissible evidence"}`);
   }
   for (const r of decision.reasons.filter((x) => x.startsWith("core-path assertion") || x.startsWith("suppression") || x.startsWith("mutant"))) {
     out.push(r);

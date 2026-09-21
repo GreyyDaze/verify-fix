@@ -72,12 +72,14 @@ export function buildContract(bundle: Bundle, patchedSource: string): ContractRe
     .filter((a) => a.guarded && a.kind === "exact" && a.falsifiable)
     .map((a) => `${a.id} (${a.subject}) wrapped in catch/soft — can swallow the real failure`);
 
+  // Rows start with NO observation; the decision table fills `observed` from
+  // the executor. Starting at "pass" would make an unobserved scene look green.
   const rows: EvidenceRow[] = bundle.scenes.map((scene) => {
     const { observed: expected, oracle } = sceneExpected(scene);
     return {
       experiment: scene.sceneId,
       oracle,
-      observed: "pass",
+      observed: "uncertain",
       expected,
       matched: false,
       strength: 0,

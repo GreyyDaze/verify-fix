@@ -58,13 +58,14 @@ export default async function create(): Promise<AppSim> {
     const acct = String(body.account ?? url.searchParams.get("account") ?? "");
 
     if (url.pathname === "/login") {
-      const a = getAcct(acct);
-      console.error(`[app-sim /login] acct=${JSON.stringify(acct)} mode=${mode} → ${mode === "auth-fail" && acct !== "unused" ? "401" : "200"}`);
-      if (mode === "auth-fail" && acct !== "unused") {
-        // forced real failure: the login itself breaks for the monitored account
-        json(res, 401, { error: "forced auth failure" });
+      if (!acct) {
+        json(res, 400, { error: "account required" });
         return;
       }
+      const a = getAcct(acct);
+      // NOTE: auth-fail does NOT break login — the DETECTION scene breaks the
+      // *protected behavior* (booking, below). A detection state that broke
+      // login would only ever test the check's weakest step.
       a.version += 1; // this login is now the newest session
       const myToken = `tok-${acct}-${a.version}`;
       if (mode === "overlap" && a.lockHolders === 0) {
@@ -100,14 +101,24 @@ export default async function create(): Promise<AppSim> {
     }
 
     if (url.pathname === "/book") {
-      const a = getAcct(acct);
-      const auth = String(req.headers.authorization ?? "");
-      const token = auth.replace(/^Bearer\s+/, "");
-      const mine = token && token === `tok-${acct}-${a.version}`;
       if (mode === "auth-fail") {
+        // forced real failure: the protected behavior is broken for everyone
         json(res, 401, { error: "forced auth failure" });
         return;
       }
+      // The booking request carries no account field (the real check sends
+      // only {slot}); the session is identified by the bearer token, which
+      // encodes account + session version: tok-<account>-<version>.
+      const auth = String(req.headers.authorization ?? "");
+      const token = auth.replace(/^Bearer\s+/, "");
+      const parsed = /^tok-(.+)-(\d+)$/.exec(token);
+      if (!parsed) {
+        json(res, 401, { error: "missing or malformed session token" });
+        return;
+      }
+      const tokenAcct = parsed[1];
+      const a = getAcct(tokenAcct);
+      const mine = Number(parsed[2]) === a.version;
       if (!mine) {
         json(res, 401, { error: "session superseded by an overlapping run" });
         return;

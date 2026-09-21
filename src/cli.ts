@@ -67,7 +67,11 @@ async function main(): Promise<ExitCode> {
 
   let executor;
   if (args.executor === "synthetic") {
-    executor = new SyntheticExecutor(appSimPath ?? "", { verbose: args.verbose });
+    if (!appSimPath) {
+      process.stderr.write(`--executor synthetic requires an app-sim.ts in the bundle directory (${args.bundle})\n`);
+      return 2;
+    }
+    executor = new SyntheticExecutor(appSimPath, { verbose: args.verbose });
   } else if (args.executor === "checkly") {
     executor = new ChecklyExecutor({ dryRunOnly: args.dryRun || !process.env.CHECKLY_API_KEY, verbose: args.verbose });
   } else {

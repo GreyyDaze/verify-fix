@@ -2,7 +2,7 @@
 // reason traces to an executed comparison. This module is what grep audits:
 // it must contain no LLM import and no probabilistic judgment.
 
-import type { Bundle, Decision, EvidenceRow, ObservationValue, Scene, SceneObservation, VerdictValue } from "../types.ts";
+import type { Bundle, Decision, EvidenceRow, ObservationValue, OracleExpectation, Scene, SceneObservation, VerdictValue } from "../types.ts";
 import type { ContractReport } from "../contract/contract.ts";
 import type { AdequacyOutput, MutantResult } from "../adequacy/adequacy.ts";
 
@@ -18,7 +18,7 @@ export interface DecisionInput {
   runBudgetExhausted: boolean;
 }
 
-function expectedOf(scene: Scene): ObservationValue {
+function expectedOf(scene: Scene): OracleExpectation {
   return scene.verdict.mustFail ? "fail" : "pass";
 }
 
@@ -41,14 +41,19 @@ export function decide(input: DecisionInput): Decision {
   const rows: EvidenceRow[] = contract.rows.map((row) => {
     const scene = b.scenes.find((s) => s.sceneId === row.experiment)!;
     const obs = observations.get(scene.sceneId);
-    const observed: ObservationValue = obs?.observed ?? "pass";
-    const matched = observed === row.expected;
-    return { ...row, observed, matched, strength: adequacy.strength.score };
+    // A scene that was never observed is not a pass: it is missing evidence.
+    const observed: ObservationValue = obs?.observed ?? "uncertain";
+    const note = observed === "uncertain" ? obs?.reason ?? "scene was not observed" : undefined;
+    const matched = observed !== "uncertain" && observed === row.expected;
+    return { ...row, observed, matched, strength: adequacy.strength.score, ...(note ? { note } : {}) };
   });
 
-  const mismatchRows = rows.filter((r) => !r.matched);
+  // Only a real pass/fail can mismatch an oracle; an uncertain observation is
+  // neither evidence for nor against the patch.
+  const uncertainRows = rows.filter((r) => r.observed === "uncertain");
+  const mismatchRows = rows.filter((r) => r.observed !== "uncertain" && !r.matched);
   const regressionRows = rows.filter((r) => r.experiment.startsWith("scene-") && r.expected === "pass");
-  const regressionMismatch = regressionRows.filter((r) => !r.matched);
+  const regressionMismatch = regressionRows.filter((r) => r.observed !== "uncertain" && !r.matched);
 
   // ── law, in order ─────────────────────────────────────────────────────────
   if (contract.determinismGate.blocked) {
@@ -56,7 +61,7 @@ export function decide(input: DecisionInput): Decision {
   }
 
   if (nonDeterministicScenes.length > 0) {
-    reasons.push(`non-deterministic reproduction observed in: ${nonDeterministicScenes.join(", ")}`);
+    reasons.push(`non-deterministic reproduction observed in: ${[...new Set(nonDeterministicScenes)].join(", ")}`);
   }
 
   if (mismatchRows.length > 0) {
@@ -80,6 +85,18 @@ export function decide(input: DecisionInput): Decision {
   if (contract.suppressionCandidates.length > 0) {
     reasons.push(`suppression candidates (assertion wrapped so a real failure can be swallowed): ${contract.suppressionCandidates.join("; ")}`);
     return { verdict: "FAILED", exitCode: 1, rows, reasons, adequacy: adequacy.strength, weakness: adequacy.weakness };
+  }
+
+  // Inconclusive evidence gate: a scene with no admissible observation (the
+  // check never contacted the armed app, the sandbox could not run it, the
+  // repetitions disagreed, or the budget ran out) cannot satisfy its oracle in
+  // either direction. Nothing below may turn it into a PASS.
+  if (uncertainRows.length > 0) {
+    reasons.push(
+      uncertainRows.map((r) => `experiment ${r.experiment}: oracle ${r.oracle} ⇒ expected ${r.expected}, observed uncertain — ${r.note ?? "no admissible evidence"}`).join(" | ")
+    );
+    reasons.push("no admissible observation for one or more scenes → UNCERTAIN, never PASS");
+    return { verdict: "UNCERTAIN", exitCode: 2, rows, reasons, adequacy: adequacy.strength, weakness: adequacy.weakness };
   }
 
   const survivedMutants: MutantResult[] = adequacy.mutants.filter((m) => m.survived);

@@ -30,6 +30,54 @@ function splitLines(source: string): Line[] {
   return source.split(/\r?\n/).map((text, i) => ({ text, lineNumber: i + 1 }));
 }
 
+/**
+ * Blank out `// line` and `/* block *\/` comments while preserving every line
+ * break (line numbers stay stable for mutation/diff). String and template
+ * literals are respected so `"http://…"` is not treated as a comment. A
+ * commented-out `expect(...)` is NOT an assertion — without this, "comment out
+ * the assertion" is invisible to the inventory diff (a fooling vector).
+ */
+export function stripComments(source: string): string {
+  let out = "";
+  let i = 0;
+  let quote: string | null = null;
+  while (i < source.length) {
+    const ch = source[i];
+    const next = source[i + 1];
+    if (quote) {
+      out += ch;
+      if (ch === "\\" && i + 1 < source.length) {
+        out += next;
+        i += 2;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      i += 1;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      quote = ch;
+      out += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === "/" && next === "/") {
+      while (i < source.length && source[i] !== "\n") i += 1; // drop to end of line (keep the \n)
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      const end = source.indexOf("*/", i + 2);
+      const stop = end === -1 ? source.length : end + 2;
+      for (let k = i; k < stop; k++) if (source[k] === "\n") out += "\n"; // keep line breaks
+      i = stop;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
 /** Ranges of lines that are wrapped by a swallowing construct: inside a catch
  * block, or inside a try that has a matching catch (assertions there throw
  * harmlessly). try/finally WITHOUT catch is NOT a guard — legitimate fix. */
@@ -77,7 +125,7 @@ function guardRanges(lines: Line[]): Set<number> {
 
 function findAssertions(source: string): Array<{ subject: string; matcher: string; target: string; lineNumber: number; guarded: boolean }> {
   const out: Array<{ subject: string; matcher: string; target: string; lineNumber: number; guarded: boolean }> = [];
-  const lines = splitLines(source);
+  const lines = splitLines(stripComments(source));
   const guardedLines = guardRanges(lines);
   for (const line of lines) {
     EXPECT_RE.lastIndex = 0;
@@ -111,7 +159,7 @@ export function parseInventory(checkFile: string, source: string): AssertionInve
     };
   });
   const steps: string[] = [];
-  for (const line of splitLines(source)) {
+  for (const line of splitLines(stripComments(source))) {
     for (const p of STEP_PATTERNS) {
       if (p.re.test(line.text)) {
         steps.push(`${p.label}:${line.lineNumber}`);

@@ -1,12 +1,12 @@
 {
   "schemaVersion": "v3",
   "generatedBy": "verify-fix bundle 0.1.0",
-  "generatedAt": "2026-09-22T09:54:41.385Z",
+  "generatedAt": "2026-09-22T19:18:29.605Z",
   "incidentId": "slots-booking-monitoring-ee0ac7",
   "incident": {
-    "title": "slots booking flow: Error: expect(locator).toHaveText(expected) failed Locator: getByTestId('book-status') Expected: \"200\" Received: \"401\" T",
-    "description": "Error: expect(locator).toHaveText(expected) failed Locator: getByTestId('book-status') Expected: \"200\" Received: \"401\" Timeout: 10000ms Call log: - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms - waiting for getByTestId('book-status'\n\nExpect failed\n\nThe booking flow returned an HTTP 401 (unauthorized) status where the test and application logic expect a successful booking status of 200, indicating that authentication or authorization for the booking request failed on the backend. This is likely due to an environment or credential/configuration issue rather than a problem in the Playwright test code, which has not changed since the last passing run one second earlier.",
-    "sourceReference": "checkly:check-result:72409245-a334-4a09-ac0d-9a28faff1377/01a0c86d-ce74-7415-995c-73d6db5afcad",
+    "title": "slots booking flow: expect(locator).toHaveText(expected) failed — on getByTestId('book-status'), expected \"200\", received \"401\"",
+    "description": "Error: expect(locator).toHaveText(expected) failed\n\nLocator:  getByTestId('book-status')\nExpected: \"200\"\nReceived: \"401\"\nTimeout:  10000ms\n\nCall log:\n  - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms\n  - waiting for getByTestId('book-status')\n    23 × locator resolved to <span data-testid=\"book-status\">401</span>\n       - unexpected value \"401\"\n\n\n  34 |\n  35 |     // 3. booking answered 200\n> 36 |     await expect(page.getByTestId('book-status')).toHaveText('200')\n     |                                                   ^\n  37 |\n  38 |     // 4. booking confirmed\n  39 |     await expect(page.getByTestId('booking-result')).toHaveText('CONFIRMED')\n    at /tmp/playwright-01LWbv/user/tests/booking.spec.ts:36:51\n\nNetwork: POST /api/book → 401 (passing run: 200)\n\nRocky RCA (INFRASTRUCTURE_ERROR): The booking flow returned an HTTP 401 (unauthorized) status where the test and application logic expect a successful booking status of 200, indicating that authentication or authorization for the booking request failed on the backend. This is likely due to an environment or credential/configuration issue rather than a problem in the Playwright test code, which has not changed since the last passing run one second earlier.",
+    "sourceReference": "checkly:check-result:72409245-a334-4a09-ac0d-9a28faff1377/01a0ca80-d1bd-7558-9aa9-29b5349ad118",
     "status": "captured"
   },
   "check": {
@@ -22,7 +22,7 @@
     ],
     "logicalId": "slots-booking-monitoring",
     "deployedId": "72409245-a334-4a09-ac0d-9a28faff1377",
-    "projectCommit": "999497b344a9ea8f738cbf6c8ca9b8a5e5145b9a"
+    "projectCommit": "525b79eaf92056f744308b465bee6062e09504ee"
   },
   "config": {
     "frequencyMinutes": 5,
@@ -48,10 +48,13 @@
       }
     ],
     "playwright": {
-      "configPath": null,
-      "projects": [],
+      "configPath": "./playwright.config.ts",
+      "projects": [
+        "booking"
+      ],
       "tags": [],
-      "version": "1.63.0"
+      "version": "1.63.0",
+      "source": "project"
     },
     "apiRequest": null
   },
@@ -63,8 +66,9 @@
   },
   "results": {
     "failing": {
-      "id": "01a0c86d-ce74-7415-995c-73d6db5afcad",
-      "startedAt": "2026-09-22T09:23:55.191Z",
+      "id": "01a0ca80-d1bd-7558-9aa9-29b5349ad118",
+      "startedAt": "2026-09-22T19:03:55.665Z",
+      "stoppedAt": "2026-09-22T19:04:12.138Z",
       "runLocation": "us-east-1",
       "resultType": "FINAL",
       "attempts": 1,
@@ -72,8 +76,9 @@
         "6f3223de-350b-4f44-b660-620a60501d27"
       ],
       "errors": [
-        "[object Object]"
+        "Error: expect(locator).toHaveText(expected) failed\n\nLocator:  getByTestId('book-status')\nExpected: \"200\"\nReceived: \"401\"\nTimeout:  10000ms\n\nCall log:\n  - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms\n  - waiting for getByTestId('book-status')\n    23 × locator resolved to <span data-testid=\"book-status\">401</span>\n       - unexpected value \"401\"\n\n\n  34 |\n  35 |     // 3. booking answered 200\n> 36 |     await expect(page.getByTestId('book-status')).toHaveText('200')\n     |                                                   ^\n  37 |\n  38 |     // 4. booking confirmed\n  39 |     await expect(page.getByTestId('booking-result')).toHaveText('CONFIRMED')\n    at /tmp/playwright-01LWbv/user/tests/booking.spec.ts:36:51"
       ],
+      "failingTest": null,
       "trace": {
         "files": [
           "0-trace.network",
@@ -83,17 +88,19 @@
           "test.trace"
         ],
         "entries": 14,
-        "actions": 49
+        "actions": 15
       }
     },
     "passing": {
-      "id": "01a0c869-3d4a-74d9-8b61-7d186f3bb296",
-      "startedAt": "2026-09-22T09:20:19.424Z",
+      "id": "01a0ca80-d1bd-7558-9aa9-2f37224c96f1",
+      "startedAt": "2026-09-22T19:03:55.300Z",
+      "stoppedAt": "2026-09-22T19:04:02.374Z",
       "runLocation": "eu-west-1",
       "resultType": "FINAL",
       "attempts": 1,
       "errorGroupIds": [],
       "errors": [],
+      "failingTest": null,
       "trace": {
         "files": [
           "0-trace.network",
@@ -103,7 +110,7 @@
           "test.trace"
         ],
         "entries": 14,
-        "actions": 45
+        "actions": 16
       }
     }
   },
@@ -143,6 +150,7 @@
         ]
       }
     ],
+    "repairRecommendation": "DO_NOT_REPAIR",
     "provider": "openai",
     "model": "gpt-5.1"
   },
@@ -150,19 +158,31 @@
     "id": "6f3223de-350b-4f44-b660-620a60501d27",
     "cleanedErrorMessage": "Error: expect(locator).toHaveText(expected) failed Locator: getByTestId('book-status') Expected: \"200\" Received: \"401\" Timeout: 10000ms Call log: - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms - waiting for getByTestId('book-status'",
     "firstSeen": "2026-09-21T23:14:13.372Z",
-    "lastSeen": "2026-09-22T09:24:12.668Z"
+    "lastSeen": "2026-09-22T19:04:12.862Z"
   },
   "reproduction": {
-    "mode": "both",
-    "matchedRule": null,
-    "matchedText": null,
-    "reason": "RCA text matched no rule → both modes; the scene is UNCERTAIN if neither reproduces"
+    "mode": "live-concurrent:2",
+    "matchedRule": "overlapping-run",
+    "matchedText": "01a0ca80-d1bd-7558-9aa9-2f37224c96f1 @ eu-west-1",
+    "reason": "run 01a0ca80-d1bd-7558-9aa9-2f37224c96f1 from eu-west-1 started 0.4 s before the failing run and overlapped it for 6.7 s (it passed); the check has runParallel: true → live-concurrent:2",
+    "decidedBy": "result-timestamps",
+    "overlappingRuns": [
+      {
+        "runId": "01a0ca80-d1bd-7558-9aa9-2f37224c96f1",
+        "runLocation": "eu-west-1",
+        "startedAt": "2026-09-22T19:03:55.300Z",
+        "stoppedAt": "2026-09-22T19:04:02.374Z",
+        "startDeltaMs": 365,
+        "overlapMs": 6709,
+        "passed": true
+      }
+    ]
   },
   "failurePoint": {
     "action": {
-      "apiName": "Frame.expect",
-      "title": "Frame.expect selector=\"internal:testid=[data-testid=\\\"book-status\\\"s]\" expression=\"to.have.text\" timeout=10000 expected=\"200\"",
-      "error": "Expect failed"
+      "apiName": "Expect \"toHaveText\"",
+      "title": "Expect \"toHaveText\" expected=\"200\"",
+      "error": "Error: expect(locator).toHaveText(expected) failed\n\nLocator:  getByTestId('book-status')\nExpected: \"200\"\nReceived: \"401\"\nTimeout:  10000ms\n\nCall log:\n  - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms\n  - waiting for getByTestId('book-status')\n    23 × locator resolved to <span data-testid=\"book-status\">401</span>\n       - unexpected value \"401\"\n\n\n  34 |\n  35 |     // 3. booking answered 200\n> 36 |     await expect(page.getByTestId('book-status')).toHaveText('200')\n     |                                                   ^\n  37 |\n  38 |     // 4. booking confirmed\n  39 |     await expect(page.getByTestId('booking-result')).toHaveText('CONFIRMED')\n    at /tmp/playwright-01LWbv/user/tests/booking.spec.ts:36:51"
     },
     "request": {
       "method": "POST",
@@ -171,6 +191,12 @@
       "status": 401,
       "passingStatus": 200,
       "failureText": null
+    },
+    "assertion": {
+      "file": "booking.spec.ts",
+      "line": 36,
+      "column": 51,
+      "assertionId": "assert:fab411b3"
     }
   },
   "recordings": {
@@ -183,12 +209,12 @@
       "sceneId": "healthy-live",
       "type": "HEALTHY",
       "mode": "live",
-      "state": "the target behaves as in the last passing run (01a0c869-3d4a-74d9-8b61-7d186f3bb296, eu-west-1); the fixed check must pass",
+      "state": "the target behaves as in the last passing run (01a0ca80-d1bd-7558-9aa9-2f37224c96f1, eu-west-1); the fixed check must pass",
       "verdict": {
         "mustFail": false,
         "provenance": {
           "kind": "recorded",
-          "runId": "01a0c869-3d4a-74d9-8b61-7d186f3bb296",
+          "runId": "01a0ca80-d1bd-7558-9aa9-2f37224c96f1",
           "artifactId": "recordings/passing.har"
         },
         "envAssumptions": [
@@ -215,19 +241,19 @@
       "sceneId": "reproduction",
       "type": "REPRODUCTION",
       "mode": "live-concurrent:2",
-      "alternativeMode": "replay:failing.har",
-      "state": "two copies of the check run at once on the target, as the overlapping locations did in the failing run; the fixed check must pass",
+      "state": "two copies of the check run at once on the target, as the overlapping locations did in the failing run (us-east-1 + eu-west-1); the fixed check must pass",
       "verdict": {
         "mustFail": false,
         "provenance": {
           "kind": "recorded",
-          "runId": "01a0c86d-ce74-7415-995c-73d6db5afcad",
+          "runId": "01a0ca80-d1bd-7558-9aa9-29b5349ad118",
           "artifactId": "recordings/failing.har"
         },
         "envAssumptions": [
           "locations",
           "run-parallel",
-          "shared-account"
+          "shared-account",
+          "overlapping-run"
         ]
       },
       "experiments": [
@@ -242,7 +268,7 @@
       ],
       "environment": "target",
       "notes": [
-        "RCA text matched no rule → both modes; the scene is UNCERTAIN if neither reproduces"
+        "run 01a0ca80-d1bd-7558-9aa9-2f37224c96f1 from eu-west-1 started 0.4 s before the failing run and overlapped it for 6.7 s (it passed); the check has runParallel: true → live-concurrent:2"
       ]
     },
     {
@@ -254,7 +280,7 @@
         "mustFail": true,
         "provenance": {
           "kind": "recorded",
-          "runId": "01a0c86d-ce74-7415-995c-73d6db5afcad",
+          "runId": "01a0ca80-d1bd-7558-9aa9-29b5349ad118",
           "artifactId": "recordings/failing.har"
         },
         "envAssumptions": [
@@ -369,6 +395,12 @@
       "text": "recorded runs hit https://slots-booking-verify-fix.vercel.app",
       "verified": true,
       "verifiedBy": "playwright-trace"
+    },
+    {
+      "id": "overlapping-run",
+      "text": "the failing run overlapped in time with 01a0ca80-d1bd-7558-9aa9-2f37224c96f1 (eu-west-1, passed)",
+      "verified": true,
+      "verifiedBy": "checkly:GET /v2/check-results (startedAt/stoppedAt)"
     }
   ],
   "determinism": {
@@ -376,25 +408,25 @@
     "history": {
       "window": 100,
       "finalRuns": 100,
-      "passed": 84,
-      "failed": 16,
-      "passRate": 0.84,
+      "passed": 76,
+      "failed": 24,
+      "passRate": 0.76,
       "byLocation": {
-        "us-east-1": {
-          "runs": 50,
-          "passed": 42
-        },
         "eu-west-1": {
+          "runs": 50,
+          "passed": 34
+        },
+        "us-east-1": {
           "runs": 50,
           "passed": 42
         }
       },
-      "from": "2026-09-22T05:53:55.497Z",
-      "to": "2026-09-22T09:54:00.390Z"
+      "from": "2026-09-22T15:08:55.282Z",
+      "to": "2026-09-22T19:15:01.904Z"
     },
     "sequential": null,
     "overlap": null,
-    "lastVerifiedAt": "2026-09-22T09:54:41.385Z"
+    "lastVerifiedAt": "2026-09-22T19:18:29.605Z"
   },
   "runBudget": {
     "maxPerScene": 10,
@@ -407,8 +439,8 @@
   "provenance": {
     "accountIdHash": "c16b931f",
     "checkId": "72409245-a334-4a09-ac0d-9a28faff1377",
-    "failingResultId": "01a0c86d-ce74-7415-995c-73d6db5afcad",
-    "passingResultId": "01a0c869-3d4a-74d9-8b61-7d186f3bb296",
+    "failingResultId": "01a0ca80-d1bd-7558-9aa9-29b5349ad118",
+    "passingResultId": "01a0ca80-d1bd-7558-9aa9-2f37224c96f1",
     "errorGroupId": "6f3223de-350b-4f44-b660-620a60501d27",
     "rcaId": "6bd1f5a6-3b67-43e0-afbf-68c6b2840d94",
     "assets": [
@@ -416,15 +448,15 @@
         "result": "failing",
         "name": "trace.zip",
         "type": "trace",
-        "bytes": 112041,
-        "sha256": "4a5af3d1f58a8b5c89d12a945cb200e8b9a85be499c717cbca21a64c8bc6cd1d"
+        "bytes": 114880,
+        "sha256": "71969b05d2e04ef06fda7dc7cdd838b5d583a731cd725dc1b6d54e648919e81f"
       },
       {
         "result": "passing",
         "name": "trace.zip",
         "type": "trace",
-        "bytes": 84548,
-        "sha256": "b9d5257836c4ba5ee9443293f06ec7099f1b40d0893268e462a7d00d235a1ce3"
+        "bytes": 84727,
+        "sha256": "f45ea594ff565e348babd894baa467897371767b7e1d03b1ce22c741180094bb"
       }
     ],
     "apiCalls": [
@@ -440,32 +472,32 @@
       },
       {
         "method": "GET",
-        "url": "https://api.checklyhq.com/v1/check-results/72409245-a334-4a09-ac0d-9a28faff1377/01a0c86d-ce74-7415-995c-73d6db5afcad",
+        "url": "https://api.checklyhq.com/v1/check-results/72409245-a334-4a09-ac0d-9a28faff1377/01a0ca80-d1bd-7558-9aa9-29b5349ad118",
         "status": 200
       },
       {
         "method": "GET",
-        "url": "https://api.checklyhq.com/v1/check-results/72409245-a334-4a09-ac0d-9a28faff1377/01a0c86d-ce74-7415-995c-73d6db5afcad/assets",
+        "url": "https://api.checklyhq.com/v1/check-results/72409245-a334-4a09-ac0d-9a28faff1377/01a0ca80-d1bd-7558-9aa9-29b5349ad118/assets",
         "status": 200
       },
       {
         "method": "GET",
-        "url": "https://api.checklyhq.com/next/assets/check-run-data/us-east-1/bb1905b1-d2f9-436f-b2db-86d1210c11c0%2F72409245-a334-4a09-ac0d-9a28faff1377%2F1790069034045%2F0cc525a24d%2Fassets.zip/redirect",
+        "url": "https://api.checklyhq.com/next/assets/check-run-data/us-east-1/bb1905b1-d2f9-436f-b2db-86d1210c11c0%2F72409245-a334-4a09-ac0d-9a28faff1377%2F1790103834045%2F06df8f72e1%2Fassets.zip/redirect",
         "status": 200
       },
       {
         "method": "GET",
-        "url": "https://api.checklyhq.com/v1/check-results/72409245-a334-4a09-ac0d-9a28faff1377/01a0c869-3d4a-74d9-8b61-7d186f3bb296",
+        "url": "https://api.checklyhq.com/v1/check-results/72409245-a334-4a09-ac0d-9a28faff1377/01a0ca80-d1bd-7558-9aa9-2f37224c96f1",
         "status": 200
       },
       {
         "method": "GET",
-        "url": "https://api.checklyhq.com/v1/check-results/72409245-a334-4a09-ac0d-9a28faff1377/01a0c869-3d4a-74d9-8b61-7d186f3bb296/assets",
+        "url": "https://api.checklyhq.com/v1/check-results/72409245-a334-4a09-ac0d-9a28faff1377/01a0ca80-d1bd-7558-9aa9-2f37224c96f1/assets",
         "status": 200
       },
       {
         "method": "GET",
-        "url": "https://api.checklyhq.com/next/assets/check-run-data/eu-west-1/bb1905b1-d2f9-436f-b2db-86d1210c11c0%2F72409245-a334-4a09-ac0d-9a28faff1377%2F1790068734045%2F07950d2d92%2Fassets.zip/redirect",
+        "url": "https://api.checklyhq.com/next/assets/check-run-data/eu-west-1/bb1905b1-d2f9-436f-b2db-86d1210c11c0%2F72409245-a334-4a09-ac0d-9a28faff1377%2F1790103834045%2F5c07a63e5b%2Fassets.zip/redirect",
         "status": 200
       },
       {
@@ -476,6 +508,7 @@
     ]
   },
   "notes": [
+    "Rocky classified the failure as INFRASTRUCTURE_ERROR (DO_NOT_REPAIR); the result timestamps show an overlapping run from another location, which the RCA text does not name — the tool follows the timestamps",
     "REGRESSION scenes (sibling checks) are not generated yet — planned once group listing is wired (Phase 3)"
   ]
 }

@@ -12,7 +12,7 @@
     ],
     "logicalId": "slots-booking-monitoring",
     "deployedId": "72409245-a334-4a09-ac0d-9a28faff1377",
-    "projectCommit": "999497b344a9ea8f738cbf6c8ca9b8a5e5145b9a"
+    "projectCommit": "525b79eaf92056f744308b465bee6062e09504ee"
   },
   "config": {
     "frequencyMinutes": 5,
@@ -38,10 +38,13 @@
       }
     ],
     "playwright": {
-      "configPath": null,
-      "projects": [],
+      "configPath": "./playwright.config.ts",
+      "projects": [
+        "booking"
+      ],
       "tags": [],
-      "version": "1.63.0"
+      "version": "1.63.0",
+      "source": "project"
     },
     "apiRequest": null
   },

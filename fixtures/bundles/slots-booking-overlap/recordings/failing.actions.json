@@ -1,394 +1,196 @@
 [
  {
-  "callId": "call@9",
-  "apiName": "BrowserContext.exposeBinding",
-  "title": "BrowserContext.exposeBinding",
-  "startTime": 1662.579,
-  "endTime": 1664.053,
-  "error": null
- },
- {
-  "callId": "call@11",
-  "apiName": "BrowserContext.addInitScript",
-  "title": "BrowserContext.addInitScript",
-  "startTime": 1665.966,
-  "endTime": 1666.452,
-  "error": null
- },
- {
-  "callId": "call@13",
-  "apiName": "BrowserContext.newPage",
-  "title": "BrowserContext.newPage",
-  "startTime": 1669.583,
-  "endTime": 1709.83,
-  "error": null
- },
- {
-  "callId": "call@15",
-  "apiName": "Frame.goto",
-  "title": "Frame.goto url=\"/\"",
-  "startTime": 1713.699,
-  "endTime": 1888.603,
-  "error": null
- },
- {
-  "callId": "call@18",
-  "apiName": "Frame.fill",
-  "title": "Frame.fill selector=\"internal:label=\\\"Account\\\"i\" value=\"demo\"",
-  "startTime": 1896.371,
-  "endTime": 1933.407,
-  "error": null
- },
- {
-  "callId": "call@21",
-  "apiName": "Frame.click",
-  "title": "Frame.click selector=\"internal:role=button[name=\\\"Log in\\\"i]\"",
-  "startTime": 1936.941,
-  "endTime": 1991.339,
-  "error": null
- },
- {
-  "callId": "call@23",
-  "apiName": "Frame.expect",
-  "title": "Frame.expect selector=\"internal:testid=[data-testid=\\\"login-status\\\"s]\" expression=\"to.have.text\" timeout=10000 expected=\"200\"",
-  "startTime": 1997.326,
-  "endTime": 2084.869,
-  "error": null
- },
- {
-  "callId": "call@27",
-  "apiName": "Frame.expect",
-  "title": "Frame.expect expression=\"to.have.url\" timeout=10000 expected=\"[object Object]\"",
-  "startTime": 2088.803,
-  "endTime": 2093.696,
-  "error": null
- },
- {
-  "callId": "call@29",
-  "apiName": "Frame.expect",
-  "title": "Frame.expect selector=\"internal:role=heading[name=\\\"Book a slot\\\"i]\" expression=\"to.be.visible\" timeout=10000",
-  "startTime": 2097.764,
-  "endTime": 2105.175,
-  "error": null
- },
- {
-  "callId": "call@31",
-  "apiName": "Frame.click",
-  "title": "Frame.click selector=\"internal:role=button[name=\\\"Book 09:30\\\"i]\"",
-  "startTime": 2107.17,
-  "endTime": 3914.726,
-  "error": null
- },
- {
-  "callId": "call@33",
-  "apiName": "Frame.expect",
-  "title": "Frame.expect selector=\"internal:testid=[data-testid=\\\"book-status\\\"s]\" expression=\"to.have.text\" timeout=10000 expected=\"200\"",
-  "startTime": 3921.301,
-  "endTime": 13922.568,
-  "error": "Expect failed"
- },
- {
-  "callId": "call@36",
-  "apiName": "Frame.evaluateExpression",
-  "title": "Frame.evaluateExpression expression=\"(() => { const flush = globalThis.__checklyFlushVitals__; return typeof flush === \\\"function\\\" ? flush() : undefined })()\"",
-  "startTime": 13978.71,
-  "endTime": 13987.136,
-  "error": null
- },
- {
-  "callId": "hook@1",
-  "apiName": "Test.hook",
-  "title": "Test.hook",
-  "startTime": 1470.213,
-  "endTime": 1711.412,
-  "error": null
- },
- {
-  "callId": "fixture@30",
-  "apiName": "Test.fixture",
-  "title": "Test.fixture",
-  "startTime": 1483.506,
-  "endTime": 1642.968,
-  "error": null
- },
- {
   "callId": "pw:api@31",
-  "apiName": "Test.pw:api",
-  "title": "Test.pw:api",
-  "startTime": 1486.613,
-  "endTime": 1642.824,
-  "error": null
- },
- {
-  "callId": "fixture@34",
-  "apiName": "Test.fixture",
-  "title": "Test.fixture",
-  "startTime": 1644.189,
-  "endTime": 1660.507,
-  "error": null
+  "apiName": "Launch browser",
+  "title": "Launch browser",
+  "category": "pw:api",
+  "startTime": 1438.728,
+  "endTime": 1607.112,
+  "error": null,
+  "location": null
  },
  {
   "callId": "pw:api@35",
-  "apiName": "Test.pw:api",
-  "title": "Test.pw:api",
-  "startTime": 1645.652,
-  "endTime": 1651.864,
-  "error": null
- },
- {
-  "callId": "fixture@36",
-  "apiName": "Test.fixture",
-  "title": "Test.fixture",
-  "startTime": 1660.631,
-  "endTime": 1667.122,
-  "error": null
+  "apiName": "Create context",
+  "title": "Create context",
+  "category": "pw:api",
+  "startTime": 1609.435,
+  "endTime": 1614.121,
+  "error": null,
+  "location": null
  },
  {
   "callId": "pw:api@37",
-  "apiName": "Test.pw:api",
-  "title": "Test.pw:api",
-  "startTime": 1661.458,
-  "endTime": 1664.798,
-  "error": null
+  "apiName": "Expose binding",
+  "title": "Expose binding",
+  "category": "pw:api",
+  "startTime": 1619.972,
+  "endTime": 1621.697,
+  "error": null,
+  "location": {
+   "file": "/checkly/node_modules/.pnpm/@checkly+playwright-reporter@file+packages+playwright-reporter_@playwright+test@1.60.0_debug@4.4.3/node_modules/@checkly/playwright-reporter/dist/setup.js",
+   "line": 1,
+   "column": 4634
+  }
  },
  {
   "callId": "pw:api@38",
-  "apiName": "Test.pw:api",
-  "title": "Test.pw:api",
-  "startTime": 1665.422,
-  "endTime": 1667.004,
-  "error": null
- },
- {
-  "callId": "fixture@39",
-  "apiName": "Test.fixture",
-  "title": "Test.fixture",
-  "startTime": 1667.606,
-  "endTime": 1711.265,
-  "error": null
+  "apiName": "Add init script",
+  "title": "Add init script",
+  "category": "pw:api",
+  "startTime": 1622.063,
+  "endTime": 1622.752,
+  "error": null,
+  "location": {
+   "file": "/checkly/node_modules/.pnpm/@checkly+playwright-reporter@file+packages+playwright-reporter_@playwright+test@1.60.0_debug@4.4.3/node_modules/@checkly/playwright-reporter/dist/setup.js",
+   "line": 1,
+   "column": 4782
+  }
  },
  {
   "callId": "pw:api@40",
-  "apiName": "Test.pw:api",
-  "title": "Test.pw:api",
-  "startTime": 1669.065,
-  "endTime": 1711.201,
-  "error": null
+  "apiName": "Create page",
+  "title": "Create page",
+  "category": "pw:api",
+  "startTime": 1623.648,
+  "endTime": 1656.056,
+  "error": null,
+  "location": null
  },
  {
   "callId": "pw:api@41",
-  "apiName": "Test.pw:api",
-  "title": "Test.pw:api url=\"/\"",
-  "startTime": 1712.978,
-  "endTime": 1893.721,
-  "error": null
+  "apiName": "Navigate",
+  "title": "Navigate url=\"/\"",
+  "category": "pw:api",
+  "startTime": 1656.958,
+  "endTime": 1808.186,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-01LWbv/user/tests/booking.spec.ts",
+   "line": 21,
+   "column": 16
+  }
  },
  {
   "callId": "pw:api@42",
-  "apiName": "Test.pw:api",
-  "title": "Test.pw:api value=\"demo\"",
-  "startTime": 1896.05,
-  "endTime": 1935.113,
-  "error": null
+  "apiName": "Fill \"demo\"",
+  "title": "Fill \"demo\" value=\"demo\"",
+  "category": "pw:api",
+  "startTime": 1810.449,
+  "endTime": 1848.329,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-01LWbv/user/tests/booking.spec.ts",
+   "line": 23,
+   "column": 38
+  }
  },
  {
   "callId": "pw:api@43",
-  "apiName": "Test.pw:api",
-  "title": "Test.pw:api",
-  "startTime": 1936.675,
-  "endTime": 1992.667,
-  "error": null
+  "apiName": "Click",
+  "title": "Click",
+  "category": "pw:api",
+  "startTime": 1850.106,
+  "endTime": 1896.061,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-01LWbv/user/tests/booking.spec.ts",
+   "line": 24,
+   "column": 56
+  }
  },
  {
   "callId": "expect@44",
-  "apiName": "Test.expect",
-  "title": "Test.expect expected=\"200\"",
-  "startTime": 1995.737,
-  "endTime": 2087.207,
-  "error": null
+  "apiName": "Expect \"toHaveText\"",
+  "title": "Expect \"toHaveText\" expected=\"200\"",
+  "category": "expect",
+  "startTime": 1900.289,
+  "endTime": 2001.521,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-01LWbv/user/tests/booking.spec.ts",
+   "line": 27,
+   "column": 52
+  }
  },
  {
   "callId": "expect@45",
-  "apiName": "Test.expect",
-  "title": "Test.expect expected=\"Object\"",
-  "startTime": 2087.779,
-  "endTime": 2095.774,
-  "error": null
+  "apiName": "Expect \"toHaveURL\"",
+  "title": "Expect \"toHaveURL\" expected=\"Object\"",
+  "category": "expect",
+  "startTime": 2002.059,
+  "endTime": 2011.51,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-01LWbv/user/tests/booking.spec.ts",
+   "line": 30,
+   "column": 24
+  }
  },
  {
   "callId": "expect@46",
-  "apiName": "Test.expect",
-  "title": "Test.expect",
-  "startTime": 2096.6,
-  "endTime": 2106.26,
-  "error": null
+  "apiName": "Expect \"toBeVisible\"",
+  "title": "Expect \"toBeVisible\"",
+  "category": "expect",
+  "startTime": 2012.184,
+  "endTime": 2018.884,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-01LWbv/user/tests/booking.spec.ts",
+   "line": 31,
+   "column": 70
+  }
  },
  {
   "callId": "pw:api@47",
-  "apiName": "Test.pw:api",
-  "title": "Test.pw:api",
-  "startTime": 2106.941,
-  "endTime": 3920.026,
-  "error": null
+  "apiName": "Click",
+  "title": "Click",
+  "category": "pw:api",
+  "startTime": 2019.737,
+  "endTime": 3842.676,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-01LWbv/user/tests/booking.spec.ts",
+   "line": 33,
+   "column": 60
+  }
  },
  {
   "callId": "expect@48",
-  "apiName": "Test.expect",
-  "title": "Test.expect expected=\"200\"",
-  "startTime": 3920.599,
-  "endTime": 13928.488,
-  "error": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoHaveText\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m failed\n\nLocator:  getByTestId('book-status')\nExpected: \u001b[32m\"200\"\u001b[39m\nReceived: \u001b[31m\"401\"\u001b[39m\nTimeout:  10000ms\n\nCall log:\n\u001b[2m  - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for getByTestId('book-status')\u001b[22m\n\u001b[2m    23 × locator resolved to <span data-testid=\"book-status\">401</span>\u001b[22m\n\u001b[2m       - unexpected value \"401\"\u001b[22m\n"
- },
- {
-  "callId": "hook@49",
-  "apiName": "Test.hook",
-  "title": "Test.hook",
-  "startTime": 13929.105,
-  "endTime": 14084.125,
-  "error": null
- },
- {
-  "callId": "fixture@50",
-  "apiName": "Test.fixture",
-  "title": "Test.fixture",
-  "startTime": 13976.666,
-  "endTime": 13976.835,
-  "error": null
- },
- {
-  "callId": "fixture@51",
-  "apiName": "Test.fixture",
-  "title": "Test.fixture",
-  "startTime": 13976.866,
-  "endTime": 13992.094,
-  "error": null
+  "apiName": "Expect \"toHaveText\"",
+  "title": "Expect \"toHaveText\" expected=\"200\"",
+  "category": "expect",
+  "startTime": 3843.175,
+  "endTime": 13850.25,
+  "error": "Error: expect(locator).toHaveText(expected) failed\n\nLocator:  getByTestId('book-status')\nExpected: \"200\"\nReceived: \"401\"\nTimeout:  10000ms\n\nCall log:\n  - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms\n  - waiting for getByTestId('book-status')\n    23 × locator resolved to <span data-testid=\"book-status\">401</span>\n       - unexpected value \"401\"\n",
+  "location": {
+   "file": "/tmp/playwright-01LWbv/user/tests/booking.spec.ts",
+   "line": 36,
+   "column": 51
+  }
  },
  {
   "callId": "pw:api@52",
-  "apiName": "Test.pw:api",
-  "title": "Test.pw:api",
-  "startTime": 13978.155,
-  "endTime": 13990.722,
-  "error": null
- },
- {
-  "callId": "test.attach@53",
-  "apiName": "Test.test.attach",
-  "title": "Test.test.attach",
-  "startTime": 13991.672,
-  "endTime": 13991.998,
-  "error": null
- },
- {
-  "callId": "fixture@54",
-  "apiName": "Test.fixture",
-  "title": "Test.fixture",
-  "startTime": 13992.341,
-  "endTime": 14066.922,
-  "error": null
+  "apiName": "Evaluate",
+  "title": "Evaluate expression=\"(() => { const flush = globalThis.__checklyFlushVitals__; return typeof flush === \\\"function\\\" ? flush() : undefined })()\"",
+  "category": "pw:api",
+  "startTime": 13899.002,
+  "endTime": 13910.551,
+  "error": null,
+  "location": {
+   "file": "/checkly/node_modules/.pnpm/@checkly+playwright-reporter@file+packages+playwright-reporter_@playwright+test@1.60.0_debug@4.4.3/node_modules/@checkly/playwright-reporter/dist/setup.js",
+   "line": 1,
+   "column": 5151
+  }
  },
  {
   "callId": "pw:api@55",
-  "apiName": "Test.pw:api",
-  "title": "Test.pw:api",
-  "startTime": 14053.288,
-  "endTime": 14066.851,
-  "error": null
- },
- {
-  "callId": "attach@0da3d62cc52773071547ba32589a3df5",
-  "apiName": "Test.test.attach",
-  "title": "Test.test.attach",
-  "startTime": 14073.872,
-  "endTime": 14073.891,
-  "error": null
- },
- {
-  "callId": "fixture@64",
-  "apiName": "Test.fixture",
-  "title": "Test.fixture",
-  "startTime": 14075.114,
-  "endTime": 14075.151,
-  "error": null
- },
- {
-  "callId": "fixture@65",
-  "apiName": "Test.fixture",
-  "title": "Test.fixture",
-  "startTime": 14075.192,
-  "endTime": 14075.22,
-  "error": null
- },
- {
-  "callId": "fixture@67",
-  "apiName": "Test.fixture",
-  "title": "Test.fixture",
-  "startTime": 14075.661,
-  "endTime": 14075.712,
-  "error": null
- },
- {
-  "callId": "fixture@75",
-  "apiName": "Test.fixture",
-  "title": "Test.fixture",
-  "startTime": 14078.764,
-  "endTime": 14078.804,
-  "error": null
- },
- {
-  "callId": "fixture@79",
-  "apiName": "Test.fixture",
-  "title": "Test.fixture",
-  "startTime": 14079.6,
-  "endTime": 14079.624,
-  "error": null
- },
- {
-  "callId": "fixture@82",
-  "apiName": "Test.fixture",
-  "title": "Test.fixture",
-  "startTime": 14081.221,
-  "endTime": 14081.258,
-  "error": null
- },
- {
-  "callId": "hook@89",
-  "apiName": "Test.hook",
-  "title": "Test.hook",
-  "startTime": 14084.474,
-  "endTime": 14136.8,
-  "error": null
- },
- {
-  "callId": "fixture@93",
-  "apiName": "Test.fixture",
-  "title": "Test.fixture",
-  "startTime": 14088.449,
-  "endTime": 14088.483,
-  "error": null
- },
- {
-  "callId": "fixture@94",
-  "apiName": "Test.fixture",
-  "title": "Test.fixture",
-  "startTime": 14088.963,
-  "endTime": 14134.892,
-  "error": null
- },
- {
-  "callId": "fixture@98",
-  "apiName": "Test.fixture",
-  "title": "Test.fixture",
-  "startTime": 14135.674,
-  "endTime": 14135.701,
-  "error": null
- },
- {
-  "callId": "fixture@99",
-  "apiName": "Test.fixture",
-  "title": "Test.fixture",
-  "startTime": 14135.711,
-  "endTime": 14135.729,
-  "error": null
+  "apiName": "Close context",
+  "title": "Close context",
+  "category": "pw:api",
+  "startTime": 13951.078,
+  "endTime": 13957.887,
+  "error": null,
+  "location": null
  }
 ]

@@ -27,7 +27,7 @@ test("zip: rejects non-zip input", () => {
 
 const BASE = "https://slots.example.test";
 
-function overlapTrace() {
+function overlapTrace(format: "1.63" | "legacy" = "1.63") {
   return fakeTraceZip({
     baseURL: BASE,
     requests: [
@@ -40,9 +40,11 @@ function overlapTrace() {
     actions: [
       { apiName: "page.goto", params: { url: "/" } },
       { apiName: "locator.fill", params: { selector: "internal:label=\"Account\"i", value: "demo" } },
-      { apiName: "expect.toHaveText", params: { selector: "internal:testid=[data-testid=\"book-status\"s]", expectedText: [{ string: "200" }] }, error: "Timed out 10000ms waiting for expect(locator).toHaveText(expected)\n\nExpected string: \"200\"\nReceived string: \"401\"" },
-      { apiName: "expect.toHaveText", params: { selector: "x", expectedText: [{ string: "CONFIRMED" }] } },
+      { apiName: "step:Book the slot", line: 30 },
+      { apiName: "expect.toHaveText", params: { selector: "internal:testid=[data-testid=\"book-status\"s]", expectedText: [{ string: "200" }] }, line: 36, column: 51, error: "Timed out 10000ms waiting for expect(locator).toHaveText(expected)\n\nLocator: getByTestId('book-status')\nExpected string: \"200\"\nReceived string: \"401\"" },
+      { apiName: "expect.toHaveText", params: { selector: "x", expectedText: [{ string: "CONFIRMED" }] }, line: 37 },
     ],
+    format,
   });
 }
 
@@ -59,16 +61,41 @@ test("trace → HAR: entries, bodies by policy, actions and failing step", () =>
   assert.match(byPath["/_next/static/chunks/app.js"].response.content.comment ?? "", /omitted/);
   // playwright-internal pointers are gone
   assert.equal("_sha1" in byPath["/api/book"].response.content, false);
+  assert.equal("_file" in byPath["/api/book"].response.content, false);
   assert.equal((byPath["/api/book"] as unknown as Record<string, unknown>)._securityDetails, undefined);
-  // actions
-  assert.equal(ex.actions.length, 4);
+  // actions: test-runner steps of category pw:api / expect / test.step; hooks and fixtures dropped
+  assert.deepEqual(
+    ex.actions.map((a) => [a.apiName, a.category]),
+    [
+      ["page.goto", "pw:api"],
+      ["locator.fill", "pw:api"],
+      ["Book the slot", "test.step"],
+      ["expect.toHaveText", "expect"],
+      ["expect.toHaveText", "expect"],
+    ],
+  );
   assert.ok(ex.failingAction);
   assert.equal(ex.failingAction!.apiName, "expect.toHaveText");
-  assert.match(ex.failingAction!.title, /expected="200"/);
-  assert.match(ex.failingAction!.error!, /Received string: "401"/);
+  assert.equal(ex.failingAction!.category, "expect");
+  assert.match(ex.failingAction!.title, /expected="200"/, "params come from the browser call joined through stepId");
+  assert.match(ex.failingAction!.error!, /Received string: "401"/, "error text is the test runner's, not the bare 'Expect failed'");
+  assert.deepEqual(ex.failingAction!.location, { file: "/tmp/checkly/user/tests/booking.spec.ts", line: 36, column: 51 });
+  assert.equal(ex.files.trace.length, 2, "0-trace.trace + test.trace");
   // "all" keeps the script body, "none" drops everything
   assert.equal(traceZipToHar(overlapTrace(), { bodies: "all" }).har.log.entries[1].response.content.text, "console.log(1)");
   assert.equal(traceZipToHar(overlapTrace(), { bodies: "none" }).har.log.entries[4].response.content.text, undefined);
+});
+
+test("trace → HAR: legacy traces (_sha1 bodies, apiName calls, no test.trace) still parse", () => {
+  const ex = traceZipToHar(overlapTrace("legacy"), { bodies: "api" });
+  assert.equal(ex.har.log.entries.length, 5);
+  const book = ex.har.log.entries.find((e) => e.request.url.endsWith("/api/book"))!;
+  assert.match(book.response.content.text!, /session superseded/);
+  assert.equal(ex.actions.length, 5);
+  assert.equal(ex.actions[0].category, "browser");
+  assert.equal(ex.failingAction!.apiName, "expect.toHaveText");
+  assert.match(ex.failingAction!.error!, /Received string: "401"/);
+  assert.equal(ex.failingAction!.location, null);
 });
 
 test("trace → HAR: merge keeps time order", () => {

@@ -102,7 +102,22 @@ export interface ApiCheckResultDetail {
   requestError?: string | null;
 }
 
+/**
+ * Shape seen live for PLAYWRIGHT results (GET /v1/check-results/{checkId}/{id},
+ * 2026-09): a top-level `errors` array of test failures, not a
+ * `playwrightCheckResult` object.
+ */
+export interface PlaywrightResultError {
+  error: { message: string; stack?: string | null };
+  specId?: string;
+  testFile?: string;
+  suitePath?: string[];
+  testTitle?: string;
+  projectName?: string;
+}
+
 export interface CheckResult extends CheckResultSummary {
+  errors?: Array<PlaywrightResultError | string> | null;
   apiCheckResult?: ApiCheckResultDetail | null;
   browserCheckResult?: BrowserLikeResult | null;
   multiStepCheckResult?: BrowserLikeResult | null;
@@ -149,10 +164,15 @@ export interface RootCauseAnalysis {
     codeFix: string | null;
     evidence: RcaEvidence[] | null;
     referenceLinks: Array<{ url: string; title: string }> | null;
+    /** seen live: Rocky's own repair verdict, e.g. "DO_NOT_REPAIR" */
+    repairRecommendation?: string | null;
+    /** seen live: the steps Rocky reconstructed, each with the errors it saw */
+    steps?: Array<{ name: string; errors?: string[] }> | null;
   };
   provider: string;
   model: string;
   durationMs: number;
+  userContext?: Array<{ text: string; type: string }> | null;
 }
 
 export interface ErrorGroup {

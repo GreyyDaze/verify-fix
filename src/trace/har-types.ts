@@ -9,8 +9,11 @@ export interface HarPostData {
   mimeType: string;
   text?: string;
   params?: Array<{ name: string; value?: string }>;
-  /** Playwright-internal pointer to resources/<sha1>; resolved and removed by the converter. */
+  comment?: string;
+  /** Playwright-internal pointers to the body blob; resolved and removed by the converter. */
   _sha1?: string;
+  /** "resources/<sha1>.<ext>" in traces from Playwright 1.5x+ */
+  _file?: string;
 }
 
 export interface HarContent {
@@ -21,6 +24,7 @@ export interface HarContent {
   compression?: number;
   comment?: string;
   _sha1?: string;
+  _file?: string;
 }
 
 export interface HarEntry {

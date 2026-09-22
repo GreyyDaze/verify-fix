@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { buildManifest, detectFailurePoint, detectTargetResolution, type ManifestInputs } from "../../src/bundle/manifest.ts";
+import { buildManifest, detectFailurePoint, detectTargetResolution, findOverlappingRuns, resultErrors, summarizeErrorMessage, specLocation, type ManifestInputs } from "../../src/bundle/manifest.ts";
 import { classifyRca } from "../../src/bundle/rca-mode.ts";
 import { traceZipToHar } from "../../src/trace/trace-to-har.ts";
 import { fakeTraceZip } from "../helpers/fake-trace.ts";
@@ -14,9 +14,42 @@ const PW_CONFIG = readFileSync(new URL("../../examples/slots-booking/web/playwri
 
 
 
-function summary(id: string, ok: boolean, startedAt: string, loc = "us-east-1"): CheckResultSummary {
-  return { id, hasFailures: !ok, hasErrors: false, runLocation: loc, startedAt, resultType: "FINAL", attempts: 1, errorGroupIds: ok ? [] : ["eg-1"] };
+function summary(id: string, ok: boolean, startedAt: string, loc = "us-east-1", stoppedAt?: string): CheckResultSummary {
+  return { id, hasFailures: !ok, hasErrors: false, runLocation: loc, startedAt, ...(stoppedAt ? { stoppedAt } : {}), resultType: "FINAL", attempts: 1, errorGroupIds: ok ? [] : ["eg-1"] };
 }
+
+/** The message Playwright 1.63 produces for the real incident (shape copied from a captured result). */
+const REAL_MESSAGE = [
+  "Error: expect(locator).toHaveText(expected) failed",
+  "",
+  "Locator:  getByTestId('book-status')",
+  "Expected: \"200\"",
+  "Received: \"401\"",
+  "Timeout:  10000ms",
+  "",
+  "Call log:",
+  "  - Expect \"toHaveText\" with timeout 10000ms",
+  "  - waiting for getByTestId('book-status')",
+  "    9 × locator resolved to <span data-testid=\"book-status\">401</span>",
+  "      - unexpected value \"401\"",
+  "",
+  "",
+  "  34 |     await page.getByRole('button', { name: 'Book 09:30' }).click()",
+  "  35 |",
+  "> 36 |     await expect(page.getByTestId('book-status')).toHaveText('200')",
+  "     |                                                   ^",
+  "  37 |     await expect(page.getByTestId('booking-result')).toHaveText('CONFIRMED')",
+  "    at /tmp/checkly/user/tests/booking.spec.ts:36:51",
+].join("\n");
+
+const REAL_RESULT_ERROR = {
+  error: { message: REAL_MESSAGE, stack: REAL_MESSAGE },
+  specId: "spec-1",
+  testFile: "tests/booking.spec.ts",
+  suitePath: ["slots booking flow"],
+  testTitle: "log in and book the 09:30 slot",
+  projectName: "booking",
+};
 
 function failingExtract() {
   return traceZipToHar(
@@ -182,6 +215,66 @@ test("manifest: no passing result → HEALTHY provenance falls back to code with
   assert.equal(healthy.verdict.provenance.kind, "code");
   assert.ok(healthy.notes?.some((n) => /no passing result/.test(n)));
   assert.equal(m.failurePoint?.request?.passingStatus, null);
+});
+
+test("manifest: an overlapping run from another location decides live-concurrent, even when the RCA text says otherwise", () => {
+  // failing run 10:00:00–10:00:25 @ eu-west-1; us-east-1 started 4 s earlier and passed
+  const history = [
+    summary("r-fail", false, "2026-09-21T10:00:00Z", "eu-west-1", "2026-09-21T10:00:25Z"),
+    summary("r-pass-2", true, "2026-09-21T09:59:56Z", "us-east-1", "2026-09-21T10:00:12Z"),
+    summary("r-pass-1", true, "2026-09-21T09:50:00Z", "eu-west-1", "2026-09-21T09:50:20Z"),
+  ];
+  const rcaInfra: RootCauseAnalysis = {
+    ...RCA_RACE,
+    analysis: { ...RCA_RACE.analysis, classification: "INFRASTRUCTURE_ERROR", rootCause: "The API returned an unexpected status code 401.", repairRecommendation: "DO_NOT_REPAIR" },
+  };
+  const m = buildManifest(inputs({ history, rca: rcaInfra, failing: { summary: history[0], detail: { ...history[0], errors: [REAL_RESULT_ERROR] }, extract: failingExtract() } }));
+  assert.equal(m.reproduction.mode, "live-concurrent:2");
+  assert.equal(m.reproduction.matchedRule, "overlapping-run");
+  assert.equal(m.reproduction.decidedBy, "result-timestamps");
+  assert.deepEqual(
+    m.reproduction.overlappingRuns.map((o) => [o.runId, o.runLocation, o.startDeltaMs, o.overlapMs, o.passed]),
+    [["r-pass-2", "us-east-1", 4000, 12000, true]],
+  );
+  assert.match(m.reproduction.reason, /r-pass-2 from us-east-1 started 4\.0 s before the failing run/);
+  assert.ok(m.notes.some((n) => /RCA text suggested replay:failing\.har/.test(n) && /follows the timestamps/.test(n)), m.notes.join("\n"));
+  assert.ok(m.envAssumptions.some((a) => a.id === "overlapping-run" && a.verified && /GET \/v2\/check-results/.test(a.verifiedBy)));
+  assert.equal(m.scenes[1].mode, "live-concurrent:2");
+  assert.ok(m.scenes[1].verdict.envAssumptions.includes("overlapping-run"), "the reproduction scene names the overlap as its evidence");
+  assert.equal(m.rca?.repairRecommendation, "DO_NOT_REPAIR");
+  // the same-location earlier run does not count as an overlap
+  assert.equal(findOverlappingRuns(history[0], history).length, 1);
+});
+
+test("manifest: real Playwright result shape → error text, failing test, spec line, assertion id, readable title", () => {
+  const history = [summary("r-fail", false, "2026-09-21T10:00:00Z", "eu-west-1"), summary("r-pass-2", true, "2026-09-21T09:55:00Z")];
+  const m = buildManifest(inputs({ history, failing: { summary: history[0], detail: { ...history[0], errors: [REAL_RESULT_ERROR] }, extract: failingExtract() } }));
+  assert.equal(m.results.failing?.errors.length, 1);
+  assert.match(m.results.failing!.errors[0], /^Error: expect\(locator\)\.toHaveText/);
+  assert.deepEqual(m.results.failing?.failingTest, { file: "tests/booking.spec.ts", title: "log in and book the 09:30 slot", project: "booking", line: 36, column: 51 });
+  assert.equal(m.incident.title, `${CHECK.name}: expect(locator).toHaveText(expected) failed — on getByTestId('book-status'), expected "200", received "401"`);
+  assert.match(m.incident.description, /Network: POST \/api\/book → 401 \(passing run: 200\)/);
+  assert.match(m.incident.description, /Rocky RCA \(Check configuration issue\)/);
+  // the failing step keeps the runner's full message, not the trace's bare error
+  assert.match(m.failurePoint!.action!.error, /Received: "401"/);
+  assert.deepEqual(m.failurePoint!.assertion, { file: "tests/booking.spec.ts", line: 36, column: 51, assertionId: "assert:fab411b3" });
+  // the detection scene binds exactly the assertion on the failing line
+  assert.deepEqual(m.scenes[2].assertionsInvolved, ["assert:fab411b3"]);
+});
+
+test("result errors: strings, playwright objects and API request errors all normalize to messages", () => {
+  assert.deepEqual(resultErrors({ id: "x", hasFailures: true, hasErrors: false, runLocation: "l", startedAt: "t", errors: [REAL_RESULT_ERROR, "plain"] }).map((e) => e.split("\n")[0]), [
+    "Error: expect(locator).toHaveText(expected) failed",
+    "plain",
+  ]);
+  assert.deepEqual(resultErrors({ id: "x", hasFailures: true, hasErrors: false, runLocation: "l", startedAt: "t", browserCheckResult: { errors: ["legacy"] } }), ["legacy"]);
+  assert.deepEqual(resultErrors({ id: "x", hasFailures: true, hasErrors: false, runLocation: "l", startedAt: "t", apiCheckResult: { requestError: "ECONNRESET" } }), ["ECONNRESET"]);
+  assert.deepEqual(resultErrors(null), []);
+  assert.deepEqual(specLocation(REAL_MESSAGE, "tests/booking.spec.ts"), { file: "tests/booking.spec.ts", line: 36, column: 51 });
+  assert.deepEqual(specLocation("> 12 | expect(x)", null), { file: null, line: 12, column: null });
+  assert.deepEqual(specLocation("nothing here", null), { file: null, line: null, column: null });
+  assert.equal(summarizeErrorMessage("Error: page.goto: net::ERR_NAME_NOT_RESOLVED at https://x\nCall log:\n  - navigating"), "page.goto: net::ERR_NAME_NOT_RESOLVED at https://x");
+  assert.equal(summarizeErrorMessage("x".repeat(400)).length, 160);
 });
 
 test("rca rule table: fixed mapping, earliest match wins, unknown → both", () => {

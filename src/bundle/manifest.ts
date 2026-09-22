@@ -5,13 +5,13 @@
 import { parseInventory } from "../assertion/inventory.ts";
 import { fnv1a } from "../assertion/id.ts";
 import type { AssertionInventory } from "../types.ts";
-import type { ChecklyCheck, CheckResult, CheckResultSummary, ErrorGroup, RootCauseAnalysis } from "../checkly/types.ts";
-import type { TraceExtract } from "../trace/trace-to-har.ts";
+import type { ChecklyCheck, CheckResult, CheckResultSummary, ErrorGroup, PlaywrightResultError, RootCauseAnalysis } from "../checkly/types.ts";
+import { stripAnsi, type TraceExtract } from "../trace/trace-to-har.ts";
 import type { HarEntry } from "../trace/har-types.ts";
 import { envVarNamesOnly } from "./sanitize.ts";
 import { classifyRca } from "./rca-mode.ts";
 import type { MeasureResult } from "./measure.ts";
-import type { DeterminismV3, FailurePoint, ManifestV3, ResultRef, SceneV3 } from "./types.ts";
+import type { DeterminismV3, FailurePoint, ManifestV3, OverlappingRun, ResultRef, SceneV3 } from "./types.ts";
 
 export interface FetchedResult {
   summary: CheckResultSummary;
@@ -28,7 +28,14 @@ export interface ManifestInputs {
   history: CheckResultSummary[];
   sources: Array<{ path: string; content: string }>;
   mainSource: string | null;
-  project: { dir: string | null; gitCommit: string | null; logicalId: string | null; repoUrl: string | null };
+  project: {
+    dir: string | null;
+    gitCommit: string | null;
+    logicalId: string | null;
+    repoUrl: string | null;
+    /** from the project's checkly.config.*; used when the API does not return these for PLAYWRIGHT checks */
+    playwright?: { configPath: string | null; projects: string[]; tags: string[] };
+  };
   measurement: MeasureResult | null;
   recordings: { failing: string | null; passing: string | null; bodies: string };
   assets: ManifestV3["provenance"]["assets"];
@@ -40,12 +47,53 @@ export interface ManifestInputs {
 
 const REPS = 5;
 
-function resultErrors(detail: CheckResult | null): string[] {
+function errorMessage(e: PlaywrightResultError | string): string {
+  if (typeof e === "string") return stripAnsi(e);
+  if (e && typeof e === "object") return stripAnsi(e.error?.message ?? JSON.stringify(e));
+  return String(e);
+}
+
+/** Every error message a result carries, whatever the check type. */
+export function resultErrors(detail: CheckResult | null): string[] {
   if (!detail) return [];
+  const out: string[] = [];
+  if (Array.isArray(detail.errors)) out.push(...detail.errors.map(errorMessage));
   const r = detail.playwrightCheckResult ?? detail.browserCheckResult ?? detail.multiStepCheckResult;
-  if (r?.errors?.length) return r.errors.map((e) => String(e).slice(0, 2000));
-  if (detail.apiCheckResult?.requestError) return [detail.apiCheckResult.requestError];
-  return [];
+  if (r?.errors?.length) out.push(...r.errors.map((e) => errorMessage(e as PlaywrightResultError | string)));
+  if (detail.apiCheckResult?.requestError) out.push(detail.apiCheckResult.requestError);
+  return out.map((m) => m.slice(0, 2000));
+}
+
+/** `at /tmp/…/user/tests/booking.spec.ts:36:51` or `> 36 |` → the spec line of the failure. */
+export function specLocation(message: string, testFile: string | null): { file: string | null; line: number | null; column: number | null } {
+  const at = /at\s+(?:.*[\\/])?([\w.-]+\.(?:spec|test)\.[cm]?[jt]sx?):(\d+):(\d+)/.exec(message);
+  if (at) return { file: testFile ?? at[1], line: Number(at[2]), column: Number(at[3]) };
+  const marker = /^>\s*(\d+)\s*\|/m.exec(message);
+  if (marker) return { file: testFile, line: Number(marker[1]), column: null };
+  return { file: testFile, line: null, column: null };
+}
+
+export function failingTestOf(detail: CheckResult | null): ResultRef["failingTest"] {
+  const first = Array.isArray(detail?.errors) ? detail!.errors.find((e) => e && typeof e === "object") : undefined;
+  if (!first || typeof first !== "object") return null;
+  const loc = specLocation(first.error?.message ?? "", first.testFile ?? null);
+  return { file: first.testFile ?? null, title: first.testTitle ?? null, project: first.projectName ?? null, line: loc.line, column: loc.column };
+}
+
+/**
+ * One line for humans out of a Playwright error message:
+ * `expect(locator).toHaveText(expected) failed` + Locator/Expected/Received.
+ */
+export function summarizeErrorMessage(message: string): string {
+  const lines = message.split("\n").map((l) => l.trim());
+  const head = (lines.find((l) => l) ?? "").replace(/^Error:\s*/, "").replace(/\s+failed$/, " failed");
+  const pick = (label: string) => lines.find((l) => l.startsWith(label + ":"))?.slice(label.length + 1).trim();
+  const locator = pick("Locator");
+  const expected = pick("Expected");
+  const received = pick("Received");
+  const bits = [locator ? `on ${locator}` : null, expected ? `expected ${expected}` : null, received ? `received ${received}` : null].filter(Boolean);
+  const out = bits.length ? `${head} — ${bits.join(", ")}` : head;
+  return out.length > 160 ? out.slice(0, 159) + "…" : out;
 }
 
 function toRef(r: FetchedResult | null): ResultRef | null {
@@ -53,11 +101,13 @@ function toRef(r: FetchedResult | null): ResultRef | null {
   return {
     id: r.summary.id,
     startedAt: r.summary.startedAt,
+    stoppedAt: r.summary.stoppedAt ?? r.detail?.stoppedAt ?? null,
     runLocation: r.summary.runLocation,
     resultType: r.summary.resultType ?? null,
     attempts: r.summary.attempts ?? null,
     errorGroupIds: r.summary.errorGroupIds ?? [],
     errors: resultErrors(r.detail),
+    failingTest: failingTestOf(r.detail),
     trace: r.extract
       ? { files: [...r.extract.files.network, ...r.extract.files.trace], entries: r.extract.har.log.entries.length, actions: r.extract.actions.length }
       : null,
@@ -89,11 +139,44 @@ function originOf(url: string | null): string | null {
   }
 }
 
-export function detectFailurePoint(failing: TraceExtract | null, passing: TraceExtract | null): FailurePoint | null {
+/** The assertion id on a given spec line (duplicates by id are kept here, unlike the merged inventory). */
+export function assertionIdAtLine(sources: Array<{ path: string; content: string }>, file: string | null, line: number): string | null {
+  const candidates = file ? sources.filter((s) => s.path === file || s.path.endsWith("/" + file) || file.endsWith("/" + s.path) || basenameOf(s.path) === basenameOf(file)) : [];
+  const specs = candidates.length ? candidates : sources.filter((s) => /\.(spec|test)\.[cm]?[jt]sx?$/.test(s.path));
+  for (const s of specs) {
+    const hit = parseInventory(s.path, s.content).assertions.find((a) => a.sourceLine === line);
+    if (hit) return hit.id;
+  }
+  return null;
+}
+
+function basenameOf(p: string): string {
+  return p.split(/[\\/]/).pop() ?? p;
+}
+
+export function detectFailurePoint(
+  failing: TraceExtract | null,
+  passing: TraceExtract | null,
+  resultDetail: CheckResult | null = null,
+  sources: Array<{ path: string; content: string }> = [],
+): FailurePoint | null {
   if (!failing) return null;
+  const resultMessages = resultErrors(resultDetail);
+  // Two copies of the failure text exist: the trace step's error and the
+  // result's error. The browser-side trace error can be the bare "Expect
+  // failed"; the result message is the runner's complete text (Expected /
+  // Received / code frame / spec line). Keep the longer one.
+  const traceError = failing.failingAction?.error ?? "";
+  const bestError = [traceError, resultMessages[0] ?? ""].sort((a, b) => b.length - a.length)[0];
   const action = failing.failingAction
-    ? { apiName: failing.failingAction.apiName, title: failing.failingAction.title, error: failing.failingAction.error ?? "" }
-    : null;
+    ? { apiName: failing.failingAction.apiName, title: failing.failingAction.title, error: bestError }
+    : resultMessages[0]
+      ? { apiName: "test", title: summarizeErrorMessage(resultMessages[0]), error: resultMessages[0] }
+      : null;
+  const fromTest = failingTestOf(resultDetail);
+  const fromTrace = failing.failingAction?.location ?? null;
+  const loc = fromTest?.line ? { file: fromTest.file, line: fromTest.line, column: fromTest.column } : fromTrace ? { file: fromTrace.file.replace(/^.*[\\/](?=tests?[\\/]|[^\\/]+$)/, ""), line: fromTrace.line, column: fromTrace.column } : specLocation(bestError, null);
+  const assertion = loc.line ? { file: loc.file, line: loc.line, column: loc.column ?? null, assertionId: assertionIdAtLine(sources, loc.file, loc.line) } : null;
   const origin = originOf(failing.baseURL) ?? originOf(failing.har.log.entries.find((e) => e._resourceType === "document")?.request.url ?? null);
   const candidates = failing.har.log.entries.filter((e) => {
     if (origin && originOf(e.request.url) !== origin) return false;
@@ -115,7 +198,38 @@ export function detectFailurePoint(failing: TraceExtract | null, passing: TraceE
     };
   }
   if (!action && !request) return null;
-  return { action, request };
+  return { action, request, assertion };
+}
+
+/**
+ * Runs of the same check whose time window intersects the failing run's —
+ * pure arithmetic on Checkly's own timestamps. An overlapping run from
+ * another location is the direct evidence for a concurrency incident, and it
+ * needs no interpretation of any text.
+ */
+export function findOverlappingRuns(failing: CheckResultSummary | null, history: CheckResultSummary[], fallbackDurationMs = 30_000): OverlappingRun[] {
+  if (!failing) return [];
+  const start = Date.parse(failing.startedAt);
+  const stop = failing.stoppedAt ? Date.parse(failing.stoppedAt) : start + fallbackDurationMs;
+  if (!Number.isFinite(start)) return [];
+  const out: OverlappingRun[] = [];
+  for (const r of history) {
+    if (r.id === failing.id) continue;
+    const s = Date.parse(r.startedAt);
+    if (!Number.isFinite(s)) continue;
+    const e = r.stoppedAt ? Date.parse(r.stoppedAt) : s + fallbackDurationMs;
+    if (e < start || s > stop) continue;
+    out.push({
+      runId: r.id,
+      runLocation: r.runLocation,
+      startedAt: r.startedAt,
+      stoppedAt: r.stoppedAt ?? null,
+      startDeltaMs: start - s,
+      overlapMs: r.stoppedAt || failing.stoppedAt ? Math.max(0, Math.min(stop, e) - Math.max(start, s)) : null,
+      passed: !r.hasFailures && !r.hasErrors,
+    });
+  }
+  return out.sort((a, b) => Math.abs(a.startDeltaMs) - Math.abs(b.startDeltaMs));
 }
 
 export function detectTargetResolution(check: ChecklyCheck, sources: Array<{ path: string; content: string }>): ManifestV3["target"]["resolution"] {
@@ -148,6 +262,7 @@ function buildInventory(sources: Array<{ path: string; content: string }>, mainS
 function assertionsForFailure(inv: AssertionInventory | null, fp: FailurePoint | null): string[] {
   if (!inv) return [];
   const all = inv.assertions.map((a) => a.id);
+  if (fp?.assertion?.assertionId) return [fp.assertion.assertionId];
   const action = fp?.action;
   if (!action) return all;
   const m = /^expect\.(\w+)/.exec(action.apiName);
@@ -188,23 +303,51 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   const locations = check.locations ?? [];
   const runParallel = Boolean(check.runParallel);
   const inventory = buildInventory(input.sources, input.mainSource);
-  const failurePoint = detectFailurePoint(failing?.extract ?? null, passing?.extract ?? null);
+  const failurePoint = detectFailurePoint(failing?.extract ?? null, passing?.extract ?? null, failing?.detail ?? null, input.sources);
   const resolution = detectTargetResolution(check, input.sources);
   const recordedOrigin =
     originOf(failing?.extract?.baseURL ?? passing?.extract?.baseURL ?? null) ??
     originOf((failing ?? passing)?.extract?.har.log.entries.find((e) => e._resourceType === "document")?.request.url ?? null);
 
+  // ---- reproduction mode: data first, text second ----
+  // 1. result timestamps: another location ran at the same time → concurrency
+  // 2. RCA / error-group text through the fixed rule table
+  // 3. nothing matched → both (live-concurrent first, replay as alternative)
+  const overlappingRuns = findOverlappingRuns(failing?.summary ?? null, input.history);
+  const otherLocationOverlap = overlappingRuns.filter((o) => o.runLocation !== failing?.summary.runLocation);
   const rcaText = rca ? `${rca.analysis.classification}\n${rca.analysis.rootCause}\n${rca.analysis.userImpact}` : errorGroup?.cleanedErrorMessage ?? null;
-  const cls = classifyRca(rcaText);
-  const reproductionReason = rca
-    ? cls.matchedRule
-      ? `RCA text matched rule "${cls.matchedRule}" ("${cls.matchedText}") → ${cls.mode}`
-      : "RCA text matched no rule → both modes; the scene is UNCERTAIN if neither reproduces"
-    : errorGroup
-      ? cls.matchedRule
-        ? `no RCA; error-group message matched rule "${cls.matchedRule}" → ${cls.mode}`
-        : "no RCA and no rule matched → both modes"
-      : "no failing result yet → reproduction mode undecided (both)";
+  const textCls = classifyRca(rcaText);
+  let cls: { mode: ReturnType<typeof classifyRca>["mode"]; matchedRule: string | null; matchedText: string | null };
+  let decidedBy: ManifestV3["reproduction"]["decidedBy"];
+  let reproductionReason: string;
+  if (!failing) {
+    cls = { mode: "both", matchedRule: null, matchedText: null };
+    decidedBy = "none";
+    reproductionReason = "no failing result yet → reproduction mode undecided (both)";
+  } else if (otherLocationOverlap.length) {
+    const o = otherLocationOverlap[0];
+    const when = o.startDeltaMs >= 0 ? `${(o.startDeltaMs / 1000).toFixed(1)} s before` : `${(-o.startDeltaMs / 1000).toFixed(1)} s after`;
+    cls = { mode: "live-concurrent:2", matchedRule: "overlapping-run", matchedText: `${o.runId} @ ${o.runLocation}` };
+    decidedBy = "result-timestamps";
+    reproductionReason = `run ${o.runId} from ${o.runLocation} started ${when} the failing run and overlapped it${o.overlapMs !== null ? ` for ${(o.overlapMs / 1000).toFixed(1)} s` : ""} (it ${o.passed ? "passed" : "failed"})${runParallel ? "; the check has runParallel: true" : ""} → live-concurrent:2`;
+    if (textCls.matchedRule && textCls.mode !== "live-concurrent:2") {
+      notes.push(`RCA text suggested ${textCls.mode} (rule "${textCls.matchedRule}") but the result timestamps show an overlapping run from another location; the tool follows the timestamps`);
+    } else if (rca && !textCls.matchedRule) {
+      notes.push(`Rocky classified the failure as ${rca.analysis.classification}${rca.analysis.repairRecommendation ? ` (${rca.analysis.repairRecommendation})` : ""}; the result timestamps show an overlapping run from another location, which the RCA text does not name — the tool follows the timestamps`);
+    }
+  } else {
+    cls = textCls;
+    decidedBy = textCls.matchedRule ? (rca ? "rca-text" : "error-group-text") : "none";
+    reproductionReason = rca
+      ? textCls.matchedRule
+        ? `RCA text matched rule "${textCls.matchedRule}" ("${textCls.matchedText}") → ${textCls.mode}`
+        : "RCA text matched no rule and no overlapping run was found → both modes; the scene is UNCERTAIN if neither reproduces"
+      : errorGroup
+        ? textCls.matchedRule
+          ? `no RCA; error-group message matched rule "${textCls.matchedRule}" → ${textCls.mode}`
+          : "no RCA, no rule matched, no overlapping run → both modes"
+        : "no RCA and no error group → both modes";
+  }
 
   // ---- env assumptions (facts from the check config, all verifiable) ----
   const envAssumptions: ManifestV3["envAssumptions"] = [];
@@ -253,6 +396,14 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   if (recordedOrigin) {
     envAssumptions.push({ id: "recorded-origin", text: `recorded runs hit ${recordedOrigin}`, verified: true, verifiedBy: "playwright-trace" });
   }
+  if (otherLocationOverlap.length) {
+    envAssumptions.push({
+      id: "overlapping-run",
+      text: `the failing run overlapped in time with ${otherLocationOverlap.map((o) => `${o.runId} (${o.runLocation}, ${o.passed ? "passed" : "failed"})`).join(", ")}`,
+      verified: true,
+      verifiedBy: "checkly:GET /v2/check-results (startedAt/stoppedAt)",
+    });
+  }
 
   // ---- scenes ----
   const scenes: SceneV3[] = [];
@@ -297,9 +448,9 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
       ...(alt ? { alternativeMode: alt } : {}),
       state:
         mode === "live-concurrent:2"
-          ? "two copies of the check run at once on the target, as the overlapping locations did in the failing run; the fixed check must pass"
+          ? `two copies of the check run at once on the target, as the overlapping locations did in the failing run${otherLocationOverlap.length ? ` (${failing!.summary.runLocation} + ${otherLocationOverlap[0].runLocation})` : ""}; the fixed check must pass`
           : "the responses of the failing run are replayed from recordings/failing.har; the fixed check must pass against them",
-      verdict: { mustFail: false, provenance: { kind: "recorded", runId: failingId, artifactId: "recordings/failing.har" }, envAssumptions: ["locations", "run-parallel", "shared-account"].filter((id) => envAssumptions.some((a) => a.id === id)) },
+      verdict: { mustFail: false, provenance: { kind: "recorded", runId: failingId, artifactId: "recordings/failing.har" }, envAssumptions: ["locations", "run-parallel", "shared-account", "overlapping-run"].filter((id) => envAssumptions.some((a) => a.id === id)) },
       experiments: [{ durationSec: 120, repetitions: REPS, expectStable: true }],
       assertionsInvolved: failureAssertions,
       environment: mode === "live-concurrent:2" ? "target" : "recording",
@@ -339,6 +490,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   };
 
   const primaryFile = input.mainSource ?? input.sources[0]?.path ?? null;
+  const failingErrors = resultErrors(failing?.detail ?? null);
   const incidentSlug = (input.project.logicalId ?? check.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
   const incidentId = failingId ? `${incidentSlug}-${fnv1a(errorGroup?.id ?? failingId).slice(0, 6)}` : `${incidentSlug}-baseline`;
 
@@ -349,10 +501,13 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
     incidentId,
     incident: {
       title: failingId
-        ? `${check.name}: ${errorGroup?.cleanedErrorMessage?.split("\n")[0]?.slice(0, 120) ?? failurePoint?.action?.apiName ?? "check failed"}`
+        ? `${check.name}: ${summarizeErrorMessage(failingErrors[0] ?? errorGroup?.cleanedErrorMessage ?? failurePoint?.action?.error ?? failurePoint?.action?.apiName ?? "check failed")}`
         : `${check.name}: baseline (no failure recorded)`,
       description: failingId
-        ? [errorGroup?.cleanedErrorMessage, failurePoint?.action?.error, rca?.analysis.rootCause].filter(Boolean).join("\n\n").slice(0, 4000)
+        ? [failingErrors[0] ?? errorGroup?.cleanedErrorMessage, failurePoint?.request ? `Network: ${failurePoint.request.method} ${failurePoint.request.path} → ${failurePoint.request.status}${failurePoint.request.passingStatus !== null ? ` (passing run: ${failurePoint.request.passingStatus})` : ""}` : null, rca ? `Rocky RCA (${rca.analysis.classification}): ${rca.analysis.rootCause}` : null]
+            .filter(Boolean)
+            .join("\n\n")
+            .slice(0, 4000)
         : "Bundle of a healthy check. Contains the last passing run and the check's configuration; no incident yet.",
       sourceReference: failingId ? `checkly:check-result:${check.id}/${failingId}` : passingId ? `checkly:check-result:${check.id}/${passingId}` : null,
       status: failingId ? "captured" : "no-failure-yet",
@@ -382,7 +537,13 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
       environmentVariables: envVars,
       playwright:
         check.checkType === "PLAYWRIGHT"
-          ? { configPath: check.playwrightConfigPath ?? null, projects: check.pwProjects ?? [], tags: check.pwTags ?? [], version: check.playwrightVersion ?? null }
+          ? {
+              configPath: check.playwrightConfigPath ?? input.project.playwright?.configPath ?? null,
+              projects: check.pwProjects?.length ? check.pwProjects : (input.project.playwright?.projects ?? []),
+              tags: check.pwTags?.length ? check.pwTags : (input.project.playwright?.tags ?? []),
+              version: check.playwrightVersion ?? null,
+              source: check.playwrightConfigPath || check.pwProjects?.length ? "api" : input.project.playwright?.configPath ? "project" : null,
+            }
           : null,
       apiRequest:
         check.checkType === "API" || check.checkType === "URL"
@@ -408,6 +569,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
           userImpact: rca.analysis.userImpact,
           codeFix: rca.analysis.codeFix,
           evidence: (rca.analysis.evidence ?? []).map((e) => ({ description: e.description, artifacts: e.artifacts ?? [] })),
+          repairRecommendation: rca.analysis.repairRecommendation ?? null,
           provider: rca.provider,
           model: rca.model,
         }
@@ -415,7 +577,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
     errorGroup: errorGroup
       ? { id: errorGroup.id, cleanedErrorMessage: errorGroup.cleanedErrorMessage, firstSeen: errorGroup.firstSeen, lastSeen: errorGroup.lastSeen }
       : null,
-    reproduction: { mode: cls.mode, matchedRule: cls.matchedRule, matchedText: cls.matchedText, reason: reproductionReason },
+    reproduction: { mode: cls.mode, matchedRule: cls.matchedRule, matchedText: cls.matchedText, reason: reproductionReason, decidedBy, overlappingRuns },
     failurePoint,
     recordings: input.recordings,
     scenes,

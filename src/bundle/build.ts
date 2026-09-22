@@ -20,7 +20,7 @@ import type { AssetManifestEntry, ChecklyCheck, CheckResult, CheckResultSummary,
 import { isZip, openZip } from "../trace/zip.ts";
 import { mergeHars, traceZipToHar, type BodyPolicy, type TraceExtract } from "../trace/trace-to-har.ts";
 import { sanitizeHar } from "./sanitize.ts";
-import { buildManifest, type FetchedResult } from "./manifest.ts";
+import { buildManifest, findOverlappingRuns, type FetchedResult } from "./manifest.ts";
 import { measureDeterminism, type MeasureResult, type Runner } from "./measure.ts";
 import type { ManifestV3 } from "./types.ts";
 
@@ -94,7 +94,16 @@ interface ProjectSources {
   gitCommit: string | null;
   logicalId: string | null;
   repoUrl: string | null;
+  /** Playwright facts read from the project's checkly.config.* (the API does not return them for PLAYWRIGHT checks) */
+  playwright: { configPath: string | null; projects: string[]; tags: string[] };
   warnings: string[];
+}
+
+/** `pwProjects: ['booking']` / `pwTags: ["@smoke"]` → ["booking"] */
+function stringList(source: string, key: string): string[] {
+  const m = new RegExp(`${key}\\s*:\\s*\\[([^\\]]*)\\]`).exec(source);
+  if (!m) return [];
+  return [...m[1].matchAll(/['"\`]([^'"\`]+)['"\`]/g)].map((x) => x[1]);
 }
 
 export function collectProjectSources(check: ChecklyCheck, projectDir: string | null | undefined, failingErrors: string[]): ProjectSources {
@@ -104,6 +113,7 @@ export function collectProjectSources(check: ChecklyCheck, projectDir: string | 
   let gitCommit: string | null = null;
   let logicalId: string | null = null;
   let repoUrl: string | null = null;
+  const playwright: ProjectSources["playwright"] = { configPath: null, projects: [], tags: [] };
 
   if (check.checkType === "BROWSER" || check.checkType === "MULTI_STEP") {
     if (typeof check.script === "string" && check.script.length) {
@@ -128,12 +138,16 @@ export function collectProjectSources(check: ChecklyCheck, projectDir: string | 
       sources.push({ path: relative(root, checklyConfig), content });
       logicalId = /logicalId\s*:\s*['"`]([^'"`]+)['"`]/.exec(content)?.[1] ?? null;
       repoUrl = /repoUrl\s*:\s*['"`]([^'"`]+)['"`]/.exec(content)?.[1] ?? null;
+      playwright.configPath = /playwrightConfigPath\s*:\s*['"`]([^'"`]+)['"`]/.exec(content)?.[1] ?? null;
+      playwright.projects = stringList(content, "pwProjects");
+      playwright.tags = stringList(content, "pwTags");
     } else {
       warnings.push(`no checkly.config.* found in ${root}`);
     }
 
     if (check.checkType === "PLAYWRIGHT") {
-      const configured = check.playwrightConfigPath ? resolve(root, check.playwrightConfigPath) : null;
+      const configuredPath = check.playwrightConfigPath ?? playwright.configPath;
+      const configured = configuredPath ? resolve(root, configuredPath) : null;
       const pwConfig =
         configured && existsSync(configured) ? configured : firstExisting(root, ["playwright.config.ts", "playwright.config.mts", "playwright.config.js", "playwright.config.mjs"]);
       if (pwConfig) {
@@ -158,7 +172,7 @@ export function collectProjectSources(check: ChecklyCheck, projectDir: string | 
     const named = specs.find((s) => errText.includes(s.path) || errText.includes(basename(s.path)));
     mainSource = named?.path ?? (specs.length === 1 ? specs[0].path : specs[0]?.path ?? null);
   }
-  return { sources, mainSource, gitCommit, logicalId, repoUrl, warnings };
+  return { sources, mainSource, gitCommit, logicalId, repoUrl, playwright, warnings };
 }
 
 async function fetchResultWithTrace(
@@ -307,11 +321,20 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   } else {
     failingSummary = history.find((r) => !isOk(r)) ?? null;
   }
+  // The passing reference, best first:
+  //   a) a run from another location that overlapped the failing run and
+  //      passed — same code, same minute, the closest control there is;
+  //   b) the last passing run before the failing one;
+  //   c) any passing run.
+  const overlapping = findOverlappingRuns(failingSummary, history);
+  const sibling = overlapping.find((o) => o.passed && o.runLocation !== failingSummary?.runLocation);
   const passingSummary =
+    (sibling ? history.find((r) => r.id === sibling.runId) : null) ??
     history.find((r) => isOk(r) && (!failingSummary || r.startedAt < failingSummary!.startedAt) && r.id !== failingSummary?.id) ??
     history.find((r) => isOk(r) && r.id !== failingSummary?.id) ??
     null;
-  log(`[bundle] failing=${failingSummary?.id ?? "none"} passing=${passingSummary?.id ?? "none"}`);
+  log(`[bundle] failing=${failingSummary?.id ?? "none"} passing=${passingSummary?.id ?? "none"}${sibling ? ` (overlapping run from ${sibling.runLocation}, started ${(sibling.startDeltaMs / 1000).toFixed(1)} s before)` : ""}`);
+  if (overlapping.length) log(`[bundle] ${overlapping.length} run(s) overlapped the failing run in time: ${overlapping.map((o) => `${o.runId}@${o.runLocation} ${o.passed ? "passed" : "failed"}`).join(", ")}`);
 
   // 3. results + traces
   const assets: ManifestV3["provenance"]["assets"] = [];
@@ -398,7 +421,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     history,
     sources: proj.sources,
     mainSource: proj.mainSource,
-    project: { dir: opts.projectDir ?? null, gitCommit: proj.gitCommit, logicalId: proj.logicalId, repoUrl: proj.repoUrl },
+    project: { dir: opts.projectDir ?? null, gitCommit: proj.gitCommit, logicalId: proj.logicalId, repoUrl: proj.repoUrl, playwright: proj.playwright },
     measurement,
     recordings,
     assets,
@@ -420,6 +443,27 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   if (failing) files.push({ file: "results/failing.json", text: JSON.stringify(trimmedResult(failing.detail) ?? failing.summary, null, 2) + "\n" });
   if (passing) files.push({ file: "results/passing.json", text: JSON.stringify(trimmedResult(passing.detail) ?? passing.summary, null, 2) + "\n" });
   if (rca || errorGroup) files.push({ file: "rca.json", text: JSON.stringify({ errorGroup: manifest.errorGroup, rca }, null, 2) + "\n" });
+  // the result window the decisions were made from (ids + timestamps only), so
+  // the overlap evidence and the pass rate can be re-checked offline
+  files.push({
+    file: "results/history.json",
+    text:
+      JSON.stringify(
+        history.map((r) => ({
+          id: r.id,
+          runLocation: r.runLocation,
+          startedAt: r.startedAt,
+          stoppedAt: r.stoppedAt ?? null,
+          hasFailures: r.hasFailures,
+          hasErrors: r.hasErrors,
+          resultType: r.resultType ?? null,
+          attempts: r.attempts ?? null,
+          errorGroupIds: r.errorGroupIds ?? [],
+        })),
+        null,
+        1,
+      ) + "\n",
+  });
   files.push({ file: ".gitignore", text: "raw/\n" });
   files.push({ file: "README.md", text: bundleReadme(manifest) });
 
@@ -445,12 +489,15 @@ function bundleReadme(m: ManifestV3): string {
     `- Config: every ${m.config.frequencyMinutes ?? "?"} min from ${m.config.locations.join(", ") || "no locations"}, runParallel=${m.config.runParallel}, env vars: ${m.config.environmentVariables.map((v) => v.key).join(", ") || "none"} (names only)`,
     `- Failing result: ${m.results.failing ? `\`${m.results.failing.id}\` (${m.results.failing.runLocation}, ${m.results.failing.startedAt})` : "none yet"}`,
     `- Passing result: ${m.results.passing ? `\`${m.results.passing.id}\` (${m.results.passing.runLocation}, ${m.results.passing.startedAt})` : "none"}`,
-    `- RCA: ${m.rca ? `${m.rca.classification} — ${m.rca.rootCause.slice(0, 200)}` : "none"}`,
-    `- Reproduction mode: **${m.reproduction.mode}** — ${m.reproduction.reason}`,
+    `- RCA: ${m.rca ? `${m.rca.classification}${m.rca.repairRecommendation ? ` / ${m.rca.repairRecommendation}` : ""} — ${m.rca.rootCause.slice(0, 200)}` : "none"}`,
+    `- Reproduction mode: **${m.reproduction.mode}** (decided by ${m.reproduction.decidedBy}) — ${m.reproduction.reason}`,
     m.failurePoint?.request
       ? `- Failure point: ${m.failurePoint.request.method} ${m.failurePoint.request.path} → ${m.failurePoint.request.status}${m.failurePoint.request.passingStatus !== null ? ` (passing run: ${m.failurePoint.request.passingStatus})` : ""}`
       : "- Failure point: not identified",
     m.failurePoint?.action ? `- Failing step: \`${m.failurePoint.action.title}\` — ${m.failurePoint.action.error.split("\n")[0]}` : "",
+    m.failurePoint?.assertion
+      ? `- Failing assertion: ${m.failurePoint.assertion.file ?? "spec"}:${m.failurePoint.assertion.line}${m.failurePoint.assertion.assertionId ? ` (${m.failurePoint.assertion.assertionId})` : ""}`
+      : "",
     "",
     "## Scenes",
     "",

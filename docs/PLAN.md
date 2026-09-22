@@ -16,12 +16,30 @@ verify-fix/
 | Phase | What | Done when | Status |
 | --- | --- | --- | --- |
 | 0 | Real customer setup: Next.js app + Checkly Playwright Check Suite in ONE project (`web/`: 2 locations, `runParallel`, shared `TEST_USER`, `bundle.packages.prune` so runners skip the app deps), Vercel config | check green on production for a few hours | deployed: Vercel + Upstash + Checkly check `slots booking flow` green |
-| 1 | `verify-fix bundle --check <id> [--result <id>] --out ./bundle`: Checkly client, failing + last passing result + assets, trace → HAR, Rocky RCA → `REPRODUCTION` mode, config → `manifest.json`, `--measure N` for determinism | bundle of a green check is produced end to end | built + 25 new tests (fake Checkly over HTTP); first live run against the real account pending |
-| 2 | Cause the incident (overlapping runs), capture it with `bundle`, commit sanitized output to `fixtures/bundles/slots-booking-overlap/`, golden test | fixture + test committed | |
+| 1 | `verify-fix bundle --check <id> [--result <id>] --out ./bundle`: Checkly client, failing + last passing result + assets, trace → HAR, Rocky RCA → `REPRODUCTION` mode, config → `manifest.json`, `--measure N` for determinism | bundle of a green check is produced end to end | built; ran live against the real account (bundle `2d7403c`); hardened against the real Playwright 1.63 trace and result shapes; 34 bundle tests incl. a golden test over the real bundle |
+| 2 | Cause the incident (overlapping runs), capture it with `bundle`, commit sanitized output to `fixtures/bundles/slots-booking-overlap/`, golden test | fixture + test committed | incident occurred naturally (16/100 runs); first capture committed; re-capture with the hardened tool pending |
 | 3 | Generic scene layer: proxy modes passthrough / replay / inject / concurrent, `ENVIRONMENT_URL` + `ENVIRONMENT_NAME`, `--target`, `--env-file`, evidence gate, `environment` column, config diff + credential policy; migrate the 11 seeded patches; delete `app-sim.ts` | 25+ tests green on the new layer, seeded verdicts unchanged | |
 | 4 | Playwright runner: `page.route` inject, `routeFromHAR` replay, two contexts for concurrent, `page.on('request')` evidence | real spec runs through all four scene modes | |
 | 5 | Live loop + CI gate (`gate.yml`: preview → `verify-fix verify --target staging --env-file .env.staging` → exit 0 → `checkly deploy`); three real fixes PASS, ten fakes FAIL; cost report | gate blocks a bad fix on a real PR | |
 | 6 | Example 2: Express API + ApiCheck with `{{ENVIRONMENT_URL}}`, changed-response incident, replay mode, host-only replacement, retry-config fakes | second bundle + golden test | |
+
+How the `REPRODUCTION` mode is decided (learned from the real bundle, where
+Rocky classified the overlap incident as `INFRASTRUCTURE_ERROR / DO_NOT_REPAIR`):
+
+1. **Result timestamps first.** If another run of the same check, from another
+   location, has a `[startedAt, stoppedAt]` window that intersects the failing
+   run's, the mode is `live-concurrent:2` (`matchedRule: overlapping-run`,
+   `decidedBy: result-timestamps`). This is arithmetic on Checkly's own data,
+   not a reading of any text. The bundle keeps the result window in
+   `results/history.json` so the overlap can be re-checked offline.
+2. **Rule table second.** Otherwise the RCA text (or the error-group message)
+   goes through the fixed table in `src/bundle/rca-mode.ts`.
+3. **Nothing matched → `both`** (`live-concurrent:2` first, `replay:failing.har`
+   as the alternative; the scene is UNCERTAIN if neither reproduces).
+
+When the RCA text and the timestamps disagree, the manifest says so in
+`notes` and follows the timestamps. Rocky's classification and
+`repairRecommendation` are recorded, never followed blindly.
 
 Rules that do not change between phases (see BRAINSTORM.md Part 7, D1–D9):
 no LLM in the decision path; the decision table is law; credentials only via

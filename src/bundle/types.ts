@@ -31,17 +31,35 @@ export interface SceneV3 {
 export interface ResultRef {
   id: string;
   startedAt: string;
+  stoppedAt: string | null;
   runLocation: string;
   resultType: string | null;
   attempts: number | null;
   errorGroupIds: string[];
+  /** error messages (first 2000 chars each) */
   errors: string[];
+  /** the failing test, when the result names it (Playwright results do) */
+  failingTest: { file: string | null; title: string | null; project: string | null; line: number | null; column: number | null } | null;
   trace: { files: string[]; entries: number; actions: number } | null;
 }
 
 export interface FailurePoint {
   action: { apiName: string; title: string; error: string } | null;
   request: { method: string; url: string; path: string; status: number; passingStatus: number | null; failureText: string | null } | null;
+  /** the spec line of the failing expect(), and the inventory assertion on that line */
+  assertion: { file: string | null; line: number; column: number | null; assertionId: string | null } | null;
+}
+
+/** Another run of the same check whose time window intersects the failing run's. */
+export interface OverlappingRun {
+  runId: string;
+  runLocation: string;
+  startedAt: string;
+  stoppedAt: string | null;
+  /** how many ms before the failing run this one started (negative = after) */
+  startDeltaMs: number;
+  overlapMs: number | null;
+  passed: boolean;
 }
 
 export interface DeterminismV3 {
@@ -91,7 +109,7 @@ export interface ManifestV3 {
     tags: string[];
     runtimeId: string | null;
     environmentVariables: Array<{ key: string; secret: boolean }>;
-    playwright: { configPath: string | null; projects: string[]; tags: string[]; version: string | null } | null;
+    playwright: { configPath: string | null; projects: string[]; tags: string[]; version: string | null; source: "api" | "project" | null } | null;
     apiRequest: { method: string | null; url: string | null; assertions: unknown[] } | null;
   };
   target: {
@@ -109,11 +127,21 @@ export interface ManifestV3 {
     userImpact: string;
     codeFix: string | null;
     evidence: Array<{ description: string; artifacts: Array<{ name: string; type: string }> }>;
+    repairRecommendation: string | null;
     provider: string;
     model: string;
   } | null;
   errorGroup: { id: string; cleanedErrorMessage: string; firstSeen: string; lastSeen: string } | null;
-  reproduction: { mode: ReproductionMode; matchedRule: string | null; matchedText: string | null; reason: string };
+  reproduction: {
+    mode: ReproductionMode;
+    /** "overlapping-run" (result timestamps) or an RCA text rule, or null */
+    matchedRule: string | null;
+    matchedText: string | null;
+    reason: string;
+    /** which kind of evidence decided the mode */
+    decidedBy: "result-timestamps" | "rca-text" | "error-group-text" | "none";
+    overlappingRuns: OverlappingRun[];
+  };
   failurePoint: FailurePoint | null;
   recordings: { failing: string | null; passing: string | null; bodies: string };
   scenes: SceneV3[];

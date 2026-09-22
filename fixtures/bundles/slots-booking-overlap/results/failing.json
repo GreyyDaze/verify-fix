@@ -1,0 +1,32 @@
+{
+  "id": "01a0c86d-ce74-7415-995c-73d6db5afcad",
+  "runLocation": "us-east-1",
+  "startedAt": "2026-09-22T09:23:55.191Z",
+  "stoppedAt": "2026-09-22T09:24:11.700Z",
+  "hasFailures": true,
+  "hasErrors": false,
+  "attempts": 1,
+  "resultType": "FINAL",
+  "errorGroupIds": [
+    "6f3223de-350b-4f44-b660-620a60501d27"
+  ],
+  "errors": [
+    {
+      "error": {
+        "message": "Error: expect(locator).toHaveText(expected) failed\n\nLocator:  getByTestId('book-status')\nExpected: \"200\"\nReceived: \"401\"\nTimeout:  10000ms\n\nCall log:\n  - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms\n  - waiting for getByTestId('book-status')\n    23 × locator resolved to <span data-testid=\"book-status\">401</span>\n       - unexpected value \"401\"\n\n\n  34 |\n  35 |     // 3. booking answered 200\n> 36 |     await expect(page.getByTestId('book-status')).toHaveText('200')\n     |                                                   ^\n  37 |\n  38 |     // 4. booking confirmed\n  39 |     await expect(page.getByTestId('booking-result')).toHaveText('CONFIRMED')\n    at /tmp/playwright-uaMSNz/user/tests/booking.spec.ts:36:51"
+      },
+      "specId": "a3a10f2351dcc49e1cb9-e66a56421386c6c28b65",
+      "testFile": "booking.spec.ts",
+      "suitePath": [
+        "booking.spec.ts",
+        "slots booking flow"
+      ],
+      "testTitle": "log in and book the 09:30 slot",
+      "projectName": "booking"
+    }
+  ],
+  "runtimeVersion": null,
+  "pages": [],
+  "traceSummary": null,
+  "apiCheckResult": null
+}

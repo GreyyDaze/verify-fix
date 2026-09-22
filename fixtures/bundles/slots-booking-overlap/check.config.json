@@ -1,0 +1,54 @@
+{
+  "check": {
+    "id": "72409245-a334-4a09-ac0d-9a28faff1377",
+    "name": "slots booking flow",
+    "checkType": "PLAYWRIGHT",
+    "repo": "https://github.com/GreyyDaze/verify-fix",
+    "file": "tests/booking.spec.ts",
+    "files": [
+      "checkly.config.ts",
+      "playwright.config.ts",
+      "tests/booking.spec.ts"
+    ],
+    "logicalId": "slots-booking-monitoring",
+    "deployedId": "72409245-a334-4a09-ac0d-9a28faff1377",
+    "projectCommit": "999497b344a9ea8f738cbf6c8ca9b8a5e5145b9a"
+  },
+  "config": {
+    "frequencyMinutes": 5,
+    "locations": [
+      "us-east-1",
+      "eu-west-1"
+    ],
+    "privateLocations": [],
+    "runParallel": true,
+    "retryStrategy": null,
+    "doubleCheck": null,
+    "activated": true,
+    "muted": false,
+    "tags": [
+      "slots-booking",
+      "verify-fix-example"
+    ],
+    "runtimeId": null,
+    "environmentVariables": [
+      {
+        "key": "TEST_USER",
+        "secret": false
+      }
+    ],
+    "playwright": {
+      "configPath": null,
+      "projects": [],
+      "tags": [],
+      "version": "1.63.0"
+    },
+    "apiRequest": null
+  },
+  "target": {
+    "resolution": "code",
+    "variable": "ENVIRONMENT_URL",
+    "recordedOrigin": "https://slots-booking-verify-fix.vercel.app",
+    "note": "verify --target sets ENVIRONMENT_URL/ENVIRONMENT_NAME for every live scene (Checkly's own convention)"
+  }
+}

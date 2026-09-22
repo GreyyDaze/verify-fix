@@ -113,7 +113,9 @@ test("golden (real bundle): the captured incident is the booking 401 at spec lin
   const m = buildManifest(inputs());
   assert.equal(m.incident.status, "captured");
   assert.equal(m.incident.title, "slots booking flow: expect(locator).toHaveText(expected) failed — on getByTestId('book-status'), expected \"200\", received \"401\"");
-  assert.equal(m.results.failing?.id, "01a0c86d-ce74-7415-995c-73d6db5afcad");
+  // The fixture is re-captured from the live account; the run id changes, the shape must not.
+  assert.equal(m.results.failing?.id, failingResult.id);
+  assert.equal(m.results.failing?.id, captured.results.failing?.id);
   assert.equal(m.results.failing?.runLocation, "us-east-1");
   assert.deepEqual(m.results.failing?.failingTest, { file: "booking.spec.ts", title: "log in and book the 09:30 slot", project: "booking", line: 36, column: 51 });
   assert.equal(m.results.failing?.errors.length, 1);
@@ -148,10 +150,23 @@ test("golden (real bundle): the captured incident is the booking 401 at spec lin
 test("golden (real bundle): reproduction mode comes from result timestamps when a sibling run overlapped, else from the rule table", () => {
   const m = buildManifest(inputs());
   if (historyFile) {
-    // re-captured bundle: the window is in the bundle → the overlap is checkable offline
+    // re-captured bundle: the window is in the bundle → the overlap is checkable offline.
+    // The passing reference IS the overlapping eu-west-1 run (the builder prefers it),
+    // so its delta and overlap are pure arithmetic on the two stored results.
     assert.equal(m.reproduction.decidedBy, "result-timestamps");
     assert.equal(m.reproduction.mode, "live-concurrent:2");
-    assert.ok(m.reproduction.overlappingRuns.some((o) => o.runLocation === "eu-west-1"));
+    assert.equal(m.reproduction.matchedRule, "overlapping-run");
+    const fStart = Date.parse(failingResult.startedAt);
+    const fStop = Date.parse(failingResult.stoppedAt!);
+    const pStart = Date.parse(passingResult.startedAt);
+    const pStop = Date.parse(passingResult.stoppedAt!);
+    const real = m.reproduction.overlappingRuns.find((o) => o.runId === passingResult.id);
+    assert.ok(real, "the passing reference must be listed as an overlapping run");
+    assert.equal(real.runLocation, "eu-west-1");
+    assert.equal(real.passed, true);
+    assert.equal(real.startDeltaMs, fStart - pStart);
+    assert.equal(real.overlapMs, Math.min(fStop, pStop) - Math.max(fStart, pStart));
+    assert.ok(real.startDeltaMs > 0 && real.startDeltaMs < 5000, `sibling started ${real.startDeltaMs} ms before the failing run`);
   } else {
     // first capture: only two results are in the fixture (09:20 and 09:23 — no overlap);
     // Rocky's text names no concurrency, so the fixed table says "both"
@@ -177,10 +192,10 @@ test("golden (real bundle): reproduction mode comes from result timestamps when 
   assert.equal(withSibling.reproduction.decidedBy, "result-timestamps");
   assert.equal(withSibling.reproduction.mode, "live-concurrent:2");
   assert.equal(withSibling.reproduction.matchedRule, "overlapping-run");
-  assert.deepEqual(
-    withSibling.reproduction.overlappingRuns.map((o) => [o.runId, o.startDeltaMs, o.overlapMs, o.passed]),
-    [["sibling-eu", 1000, 6000, true]],
-  );
+  // The synthetic sibling is listed next to whatever real overlap the fixture already holds.
+  const synthetic = withSibling.reproduction.overlappingRuns.find((o) => o.runId === "sibling-eu");
+  assert.deepEqual(synthetic && [synthetic.runId, synthetic.startDeltaMs, synthetic.overlapMs, synthetic.passed], ["sibling-eu", 1000, 6000, true]);
+  assert.equal(withSibling.reproduction.overlappingRuns.length, (historyFile ? 1 : 0) + 1);
   assert.ok(withSibling.notes.some((n) => /INFRASTRUCTURE_ERROR \(DO_NOT_REPAIR\)/.test(n) && /follows the timestamps/.test(n)), withSibling.notes.join("\n"));
   assert.ok(withSibling.envAssumptions.some((a) => a.id === "overlapping-run" && a.verified));
   assert.equal(withSibling.scenes[1].mode, "live-concurrent:2");

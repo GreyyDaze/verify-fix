@@ -6,10 +6,26 @@ Checkly recorded about it.
 
 ```
 examples/slots-booking/
-├── web/          Next.js app → deployed to Vercel (Vercel "Root Directory")
-├── monitoring/   Checkly project → `npx checkly deploy` (its own package.json)
-└── README.md     this file
+├── web/                    ONE project, one package.json (Vercel "Root Directory")
+│   ├── app/, lib/          Next.js app → deployed to Vercel
+│   ├── playwright.config.ts
+│   ├── tests/booking.spec.ts   the Playwright test that becomes the check
+│   └── checkly.config.ts   Checkly Playwright Check Suite → `npx checkly deploy`
+└── README.md               this file
 ```
+
+The check lives inside the app project, the layout Checkly's Playwright Check
+Suite quickstart assumes ("an existing repository that already contains
+Playwright tests"). Playwright Check Suites install *your* `package.json` on
+Checkly's runners, so `checkly.config.ts` sets
+`bundle.packages.prune: { dependencies: true }`: the bundled copy of
+`package.json` loses `next`, `react`, `@upstash/redis`, the shipped lockfile is
+pruned to match, and the runner installs only the dev side
+(`@playwright/test`, `checkly`). Files on disk are never modified. Verified
+offline with the CLI's own bundler (`npx checkly debug parse-project`): the
+tarball holds `package.json` (devDependencies only), a 237-package lockfile
+without `next`/`react`, `playwright.config.ts`, `tests/booking.spec.ts`,
+`tsconfig.json`.
 
 ## The app in one paragraph
 
@@ -37,9 +53,9 @@ Sessions live in memory locally and in Upstash Redis on Vercel
 
 ## The check in one paragraph
 
-`monitoring/tests/booking.spec.ts` is a normal Playwright test with four alarms:
+`web/tests/booking.spec.ts` is a normal Playwright test with four alarms:
 login answered 200 → we are on `/book` → booking answered 200 → result reads
-`CONFIRMED`. `monitoring/checkly.config.ts` turns it into a **Playwright Check
+`CONFIRMED`. `web/checkly.config.ts` turns it into a **Playwright Check
 Suite**: every 5 minutes, from `us-east-1` **and** `eu-west-1`, with
 `runParallel: true` and one shared `TEST_USER=demo`.
 
@@ -61,9 +77,8 @@ npm install
 npm run build && npm run start          # http://localhost:3000
 npm run collision                       # proves the rule at the API level (5 rows)
 
-# check, against the local app
-cd ../monitoring
-npm install && npx playwright install chromium
+# check, against the local app (same folder, same node_modules)
+npx playwright install chromium
 ENVIRONMENT_URL=http://localhost:3000 TEST_USER=demo npx playwright test
 ```
 
@@ -84,7 +99,7 @@ PASS  overlap: B books                     expected: 200 CONFIRMED  got: 200 CON
 1. Vercel → **Add New Project** → import `GreyyDaze/verify-fix`.
 2. **Root Directory** → `examples/slots-booking/web`. Framework: Next.js (auto).
 3. Deploy. Note the production URL and put it in
-   `monitoring/playwright.config.ts` (`PRODUCTION_URL`).
+   `web/playwright.config.ts` (`PRODUCTION_URL`).
 
 `web/vercel.json` contains
 `"ignoreCommand": "git diff --quiet HEAD^ HEAD -- :/examples/slots-booking/web"`,
@@ -103,7 +118,7 @@ instance has its own memory and overlapping logins never collide.
 ### 3. Checkly
 
 ```bash
-cd examples/slots-booking/monitoring
+cd examples/slots-booking/web
 npx checkly login                       # or export CHECKLY_API_KEY + CHECKLY_ACCOUNT_ID
 
 # ad-hoc run on Checkly's cloud — session-only, never touches scheduled monitors
@@ -126,8 +141,8 @@ Phase 0 is "done" when the check has been green on production for a few hours.
 
 ```bash
 cd <repo root>
-(cd examples/slots-booking/monitoring && npx checkly checks list)   # find the check id (or copy it from the dashboard URL)
-./bin/verify-fix bundle --check <checkId> --out ./bundle --project examples/slots-booking/monitoring --verbose
+(cd examples/slots-booking/web && npx checkly checks list)   # find the check id (or copy it from the dashboard URL)
+./bin/verify-fix bundle --check <checkId> --out ./bundle --project examples/slots-booking/web --verbose
 ```
 
 While the check is still green this produces a *baseline* bundle (status
@@ -140,7 +155,7 @@ Add `--measure 3 --measure-overlap 2` to also run the check on Checkly's cloud
 
 | Thing | Comes from | Read by the tool in |
 | --- | --- | --- |
-| check source, locations, frequency, `runParallel`, env-var **names** | `monitoring/checkly.config.ts` + `tests/booking.spec.ts` via `checkly deploy` | Phase 1 `verify-fix bundle` |
+| check source, locations, frequency, `runParallel`, env-var **names** | `web/checkly.config.ts` + `web/tests/booking.spec.ts` via `checkly deploy` | Phase 1 `verify-fix bundle` |
 | failing / passing run traces (→ HAR) | Checkly check results + assets (`trace: 'on'`) | Phase 1 |
 | root cause classification | Rocky RCA | Phase 1 (`REPRODUCTION` mode selection) |
 | env var **values** (`TEST_USER`, credentials) | Checkly (encrypted) / your `.env` — never git | Phase 3 (`--env-file`) |

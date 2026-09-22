@@ -2,13 +2,16 @@
   "name": "slots-booking-web",
   "version": "0.1.0",
   "private": true,
-  "description": "Tiny slot-booking app used as the real, deployed target for the verify-fix example. Contains a deliberate one-session-per-account rule that causes a real monitoring incident.",
+  "description": "Tiny slot-booking app used as the real, deployed target for the verify-fix example, together with its Checkly Playwright Check Suite (checkly.config.ts, playwright.config.ts, tests/). Contains a deliberate one-session-per-account rule that causes a real monitoring incident.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "collision": "node scripts/collision-check.mjs"
+    "collision": "node scripts/collision-check.mjs",
+    "pw": "playwright test",
+    "checkly:test": "checkly test --record",
+    "checkly:deploy": "checkly deploy"
   },
   "dependencies": {
     "@upstash/redis": "^1.39.0",
@@ -17,9 +20,11 @@
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "checkly": "^9.5.0",
     "typescript": "^5.7.0"
   }
 }

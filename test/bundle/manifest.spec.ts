@@ -9,8 +9,8 @@ import type { ChecklyCheck, CheckResultSummary, ErrorGroup, RootCauseAnalysis } 
 import { CHECK } from "../helpers/fixtures.ts";
 
 const BASE = "https://slots.example.test";
-const SPEC = readFileSync(new URL("../../examples/slots-booking/monitoring/tests/booking.spec.ts", import.meta.url), "utf8");
-const PW_CONFIG = readFileSync(new URL("../../examples/slots-booking/monitoring/playwright.config.ts", import.meta.url), "utf8");
+const SPEC = readFileSync(new URL("../../examples/slots-booking/web/tests/booking.spec.ts", import.meta.url), "utf8");
+const PW_CONFIG = readFileSync(new URL("../../examples/slots-booking/web/playwright.config.ts", import.meta.url), "utf8");
 
 
 

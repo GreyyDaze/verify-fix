@@ -113,10 +113,10 @@ function fakeClient(opts: { archive?: boolean } = {}) {
 
 function makeProjectDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "vf-project-"));
-  cpSync(join(REPO, "examples/slots-booking/monitoring/checkly.config.ts"), join(dir, "checkly.config.ts"));
-  cpSync(join(REPO, "examples/slots-booking/monitoring/playwright.config.ts"), join(dir, "playwright.config.ts"));
+  cpSync(join(REPO, "examples/slots-booking/web/checkly.config.ts"), join(dir, "checkly.config.ts"));
+  cpSync(join(REPO, "examples/slots-booking/web/playwright.config.ts"), join(dir, "playwright.config.ts"));
   mkdirSync(join(dir, "tests"));
-  cpSync(join(REPO, "examples/slots-booking/monitoring/tests/booking.spec.ts"), join(dir, "tests/booking.spec.ts"));
+  cpSync(join(REPO, "examples/slots-booking/web/tests/booking.spec.ts"), join(dir, "tests/booking.spec.ts"));
   mkdirSync(join(dir, "node_modules/should-be-skipped"), { recursive: true });
   writeFileSync(join(dir, "node_modules/should-be-skipped/x.spec.ts"), "expect(1).toBe(1)");
   return dir;

@@ -796,15 +796,17 @@ bundle with one the tool records from the customer's real Checkly account:
 
 ```bash
 export CHECKLY_API_KEY=cu_...  CHECKLY_ACCOUNT_ID=...     # or: npx checkly login (the tool reads the CLI's saved login)
-verify-fix bundle --check <checkId> --out ./bundle --project examples/slots-booking/monitoring
+verify-fix bundle --check <checkId> --out ./bundle --project examples/slots-booking/web
 ```
 
 ### Input
 
 - the **check id** (`npx checkly checks list` or the dashboard URL);
 - optionally `--result <id>` to pick the failing run (default: newest failed
-  `FINAL` result); `--project <dir>` pointing at the Checkly project that
-  deployed the check, so the spec source can be copied; `--measure N` to run
+  `FINAL` result); `--project <dir>` pointing at the project that deployed the
+  check (for the example: the app folder itself, `examples/slots-booking/web`,
+  which holds `checkly.config.ts`, `playwright.config.ts` and `tests/`), so
+  the spec source can be copied; `--measure N` to run
   the check N times sequentially and `--measure-overlap M` to run M copies at
   once through `npx checkly test --record` (the CLI must be installed in the
   project); `--trigger-rca` to request a Rocky analysis when none exists;

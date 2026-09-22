@@ -74,7 +74,7 @@ test("cli over http: bundle of the example check against a local Checkly stand-i
     const r = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
       const child = spawn(
         process.execPath,
-        ["--no-warnings", join(REPO, "src/cli.ts"), "bundle", "--check", CHECK.id, "--project", join(REPO, "examples/slots-booking/monitoring"), "--out", join(out, "bundle"), "--json", "--verbose"],
+        ["--no-warnings", join(REPO, "src/cli.ts"), "bundle", "--check", CHECK.id, "--project", join(REPO, "examples/slots-booking/web"), "--out", join(out, "bundle"), "--json", "--verbose"],
         { env, stdio: ["ignore", "pipe", "pipe"] },
       );
       let stdout = "";

@@ -246,6 +246,35 @@ test("manifest: an overlapping run from another location decides live-concurrent
   assert.equal(findOverlappingRuns(history[0], history).length, 1);
 });
 
+test("manifest: a sibling that failed at the same moment is not evidence of concurrency (drift shape)", () => {
+  // runParallel: both locations fail in the same minute, and so did the cycle before.
+  // The overlap is real but decides nothing — the failure does not depend on which copy wins.
+  const history = [
+    summary("d-fail-eu", false, "2026-09-23T10:00:00Z", "eu-west-1", "2026-09-23T10:00:20Z"),
+    summary("d-fail-us", false, "2026-09-23T09:59:59Z", "us-east-1", "2026-09-23T10:00:18Z"),
+    summary("d-fail-eu-0", false, "2026-09-23T09:55:00Z", "eu-west-1", "2026-09-23T09:55:20Z"),
+    summary("d-fail-us-0", false, "2026-09-23T09:54:59Z", "us-east-1", "2026-09-23T09:55:19Z"),
+    summary("d-pass-eu", true, "2026-09-23T09:50:00Z", "eu-west-1", "2026-09-23T09:50:15Z"),
+    summary("d-pass-us", true, "2026-09-23T09:49:59Z", "us-east-1", "2026-09-23T09:50:14Z"),
+  ];
+  const rcaDrift: RootCauseAnalysis = {
+    ...RCA_RACE,
+    analysis: { ...RCA_RACE.analysis, classification: "CHECK_ERROR", rootCause: "The locator getByTestId('book-status') was not found because the element was renamed in the latest deploy.", repairRecommendation: "REPAIR" },
+  };
+  const m = buildManifest(inputs({ history, rca: rcaDrift, failing: { summary: history[0], detail: { ...history[0], errors: [REAL_RESULT_ERROR] }, extract: failingExtract() }, passing: { summary: history[4], detail: null, extract: passingExtract() } }));
+  // the overlap is recorded as evidence …
+  assert.deepEqual(m.reproduction.overlappingRuns.map((o) => [o.runId, o.passed]), [["d-fail-us", false]]);
+  assert.ok(m.envAssumptions.some((a) => a.id === "overlapping-run" && /d-fail-us \(us-east-1, failed\)/.test(a.text)));
+  // … but it does not decide the mode; the text rule does
+  assert.notEqual(m.reproduction.decidedBy, "result-timestamps");
+  assert.notEqual(m.reproduction.matchedRule, "overlapping-run");
+  assert.equal(m.reproduction.decidedBy, "rca-text");
+  assert.equal(m.reproduction.mode, "replay:failing.har");
+  assert.ok(m.notes.some((n) => /d-fail-us @ us-east-1 overlapped the failing run and failed too/.test(n) && /not evidence of concurrency/.test(n)), m.notes.join("\n"));
+  assert.equal(m.scenes[1].mode, "replay:failing.har");
+  assert.equal(m.scenes[1].verdict.envAssumptions.includes("overlapping-run"), false, "a failed sibling is not the reproduction scene's evidence");
+});
+
 test("manifest: real Playwright result shape → error text, failing test, spec line, assertion id, readable title", () => {
   const history = [summary("r-fail", false, "2026-09-21T10:00:00Z", "eu-west-1"), summary("r-pass-2", true, "2026-09-21T09:55:00Z")];
   const m = buildManifest(inputs({ history, failing: { summary: history[0], detail: { ...history[0], errors: [REAL_RESULT_ERROR] }, extract: failingExtract() } }));

@@ -314,7 +314,13 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   // 2. RCA / error-group text through the fixed rule table
   // 3. nothing matched → both (live-concurrent first, replay as alternative)
   const overlappingRuns = findOverlappingRuns(failing?.summary ?? null, input.history);
-  const otherLocationOverlap = overlappingRuns.filter((o) => o.runLocation !== failing?.summary.runLocation);
+  // Only a sibling that PASSED while this run failed is evidence of a
+  // concurrency/state incident (one copy won, the other lost). With
+  // runParallel every run has a sibling; when the sibling failed too, the
+  // failure does not depend on which copy wins — the overlap decides nothing.
+  const siblingRuns = overlappingRuns.filter((o) => o.runLocation !== failing?.summary.runLocation);
+  const otherLocationOverlap = siblingRuns.filter((o) => o.passed);
+  const failedSiblings = siblingRuns.filter((o) => !o.passed);
   const rcaText = rca ? `${rca.analysis.classification}\n${rca.analysis.rootCause}\n${rca.analysis.userImpact}` : errorGroup?.cleanedErrorMessage ?? null;
   const textCls = classifyRca(rcaText);
   let cls: { mode: ReturnType<typeof classifyRca>["mode"]; matchedRule: string | null; matchedText: string | null };
@@ -338,6 +344,9 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   } else {
     cls = textCls;
     decidedBy = textCls.matchedRule ? (rca ? "rca-text" : "error-group-text") : "none";
+    if (failedSiblings.length) {
+      notes.push(`${failedSiblings.map((o) => `${o.runId} @ ${o.runLocation}`).join(", ")} overlapped the failing run and failed too — the failure does not depend on which copy wins, so the overlap is not evidence of concurrency`);
+    }
     reproductionReason = rca
       ? textCls.matchedRule
         ? `RCA text matched rule "${textCls.matchedRule}" ("${textCls.matchedText}") → ${textCls.mode}`
@@ -396,10 +405,10 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   if (recordedOrigin) {
     envAssumptions.push({ id: "recorded-origin", text: `recorded runs hit ${recordedOrigin}`, verified: true, verifiedBy: "playwright-trace" });
   }
-  if (otherLocationOverlap.length) {
+  if (siblingRuns.length) {
     envAssumptions.push({
       id: "overlapping-run",
-      text: `the failing run overlapped in time with ${otherLocationOverlap.map((o) => `${o.runId} (${o.runLocation}, ${o.passed ? "passed" : "failed"})`).join(", ")}`,
+      text: `the failing run overlapped in time with ${siblingRuns.map((o) => `${o.runId} (${o.runLocation}, ${o.passed ? "passed" : "failed"})`).join(", ")}`,
       verified: true,
       verifiedBy: "checkly:GET /v2/check-results (startedAt/stoppedAt)",
     });
@@ -450,7 +459,12 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
         mode === "live-concurrent:2"
           ? `two copies of the check run at once on the target, as the overlapping locations did in the failing run${otherLocationOverlap.length ? ` (${failing!.summary.runLocation} + ${otherLocationOverlap[0].runLocation})` : ""}; the fixed check must pass`
           : "the responses of the failing run are replayed from recordings/failing.har; the fixed check must pass against them",
-      verdict: { mustFail: false, provenance: { kind: "recorded", runId: failingId, artifactId: "recordings/failing.har" }, envAssumptions: ["locations", "run-parallel", "shared-account", "overlapping-run"].filter((id) => envAssumptions.some((a) => a.id === id)) },
+      verdict: {
+        mustFail: false,
+        provenance: { kind: "recorded", runId: failingId, artifactId: "recordings/failing.har" },
+        // "overlapping-run" is the scene's evidence only when a sibling passed
+        envAssumptions: ["locations", "run-parallel", "shared-account", ...(otherLocationOverlap.length ? ["overlapping-run"] : [])].filter((id) => envAssumptions.some((a) => a.id === id)),
+      },
       experiments: [{ durationSec: 120, repetitions: REPS, expectStable: true }],
       assertionsInvolved: failureAssertions,
       environment: mode === "live-concurrent:2" ? "target" : "recording",

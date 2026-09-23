@@ -28,9 +28,13 @@ Rocky classified the overlap incident as `INFRASTRUCTURE_ERROR / DO_NOT_REPAIR`)
 
 1. **Result timestamps first.** If another run of the same check, from another
    location, has a `[startedAt, stoppedAt]` window that intersects the failing
-   run's, the mode is `live-concurrent:2` (`matchedRule: overlapping-run`,
-   `decidedBy: result-timestamps`). This is arithmetic on Checkly's own data,
-   not a reading of any text. The bundle keeps the result window in
+   run's **and that run passed**, the mode is `live-concurrent:2`
+   (`matchedRule: overlapping-run`, `decidedBy: result-timestamps`). One copy
+   won and one lost: that is the signature of a concurrency/state incident.
+   With `runParallel` every run has a sibling; a sibling that failed too is
+   recorded in `overlappingRuns` and in a note but decides nothing (that is
+   the shape of drift or an app-wide outage). This is arithmetic on Checkly's
+   own data, not a reading of any text. The bundle keeps the result window in
    `results/history.json` so the overlap can be re-checked offline.
 2. **Rule table second.** Otherwise the RCA text (or the error-group message)
    goes through the fixed table in `src/bundle/rca-mode.ts`.

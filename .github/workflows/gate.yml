@@ -1,0 +1,221 @@
+name: verify-fix gate
+
+on:
+  deployment_status:
+
+permissions:
+  contents: read
+  deployments: read
+  pull-requests: read
+
+concurrency:
+  group: verify-fix-${{ github.event.deployment.sha }}-${{ github.event.deployment.environment }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "24"
+  CANDIDATE_PROJECT: examples/slots-booking/web
+  VERIFY_FIX_BUNDLE: ${{ vars.VERIFY_FIX_BUNDLE || 'fixtures/bundles/slots-booking-drift' }}
+
+jobs:
+  preview-gate:
+    name: verify-fix gate
+    if: >-
+      github.event.deployment_status.state == 'success' &&
+      github.event.deployment_status.environment_url != '' &&
+      github.event.deployment.environment != 'Production'
+    runs-on: ubuntu-latest
+    environment: verify-fix-preview
+    timeout-minutes: 45
+    steps:
+      - name: Confirm this is a same-repository pull request
+        id: pull-request
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = context.payload.deployment.sha
+            const { data: pulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: sha,
+            })
+            const pull = pulls.find((item) => item.state === 'open' && item.head.repo?.full_name === `${context.repo.owner}/${context.repo.repo}`)
+            if (!pull) core.setFailed('No same-repository pull request owns this preview. Secrets will not be exposed.')
+            else core.setOutput('number', String(pull.number))
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.deployment.sha }}
+
+      - name: Require checkout to match the deployed revision
+        env:
+          DEPLOYMENT_SHA: ${{ github.event.deployment.sha }}
+        run: test "$(git rev-parse HEAD)" = "$DEPLOYMENT_SHA"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install verify-fix
+        run: npm ci
+
+      - name: Install customer project
+        working-directory: ${{ env.CANDIDATE_PROJECT }}
+        run: npm ci
+
+      - name: Install Chromium for local failure scenes
+        working-directory: ${{ env.CANDIDATE_PROJECT }}
+        run: npx playwright install --with-deps chromium
+
+      - name: Wait for the exact Vercel preview
+        env:
+          TARGET_URL: ${{ github.event.deployment_status.environment_url }}
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        shell: bash
+        run: |
+          node -e "const u=new URL(process.env.TARGET_URL); if(u.protocol!=='https:') throw new Error('preview URL must use HTTPS')"
+          header=()
+          if [[ -n "$BYPASS" ]]; then header=(-H "x-vercel-protection-bypass: $BYPASS"); fi
+          curl --fail --silent --show-error --retry 18 --retry-delay 5 --retry-all-errors "${header[@]}" "$TARGET_URL/api/health" >/dev/null
+
+      - name: Build temporary runtime environment
+        env:
+          TEST_USER: ${{ secrets.TEST_USER }}
+          TEST_USER_US_EAST_1: ${{ secrets.TEST_USER_US_EAST_1 }}
+          TEST_USER_EU_WEST_1: ${{ secrets.TEST_USER_EU_WEST_1 }}
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        shell: bash
+        run: |
+          file="$RUNNER_TEMP/verify-fix.env"
+          umask 077
+          : > "$file"
+          [[ -n "$TEST_USER" ]] && printf 'TEST_USER=%s\n' "$TEST_USER" >> "$file"
+          [[ -n "$TEST_USER_US_EAST_1" ]] && printf 'TEST_USER_US_EAST_1=%s\n' "$TEST_USER_US_EAST_1" >> "$file"
+          [[ -n "$TEST_USER_EU_WEST_1" ]] && printf 'TEST_USER_EU_WEST_1=%s\n' "$TEST_USER_EU_WEST_1" >> "$file"
+          [[ -n "$BYPASS" ]] && printf 'CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET=%s\n' "$BYPASS" >> "$file"
+          echo "VERIFY_FIX_ENV_FILE=$file" >> "$GITHUB_ENV"
+
+      - name: Verify candidate
+        env:
+          CHECKLY_API_KEY: ${{ secrets.CHECKLY_API_KEY }}
+          CHECKLY_ACCOUNT_ID: ${{ vars.CHECKLY_ACCOUNT_ID }}
+          TARGET_URL: ${{ github.event.deployment_status.environment_url }}
+          TARGET_REVISION: ${{ github.event.deployment.sha }}
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          node bin/verify-fix verify \
+            --bundle "$VERIFY_FIX_BUNDLE" \
+            --candidate-project "$CANDIDATE_PROJECT" \
+            --project "$CANDIDATE_PROJECT" \
+            --target "$TARGET_URL" \
+            --target-revision "$TARGET_REVISION" \
+            --env-name preview \
+            --env-file "$VERIFY_FIX_ENV_FILE" \
+            --executor hybrid \
+            --report-json artifacts/verify-fix.json \
+            --report-markdown artifacts/verify-fix.md \
+            --verbose
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-fix-${{ github.event.deployment.sha }}
+          path: artifacts/verify-fix.*
+          if-no-files-found: warn
+
+  production-verify-and-deploy:
+    name: verify production then deploy checks
+    if: >-
+      github.event.deployment_status.state == 'success' &&
+      github.event.deployment_status.environment_url != '' &&
+      github.event.deployment.environment == 'Production'
+    runs-on: ubuntu-latest
+    environment: verify-fix-production
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.deployment.sha }}
+          fetch-depth: 0
+
+      - name: Require the deployed commit to be current main
+        env:
+          DEPLOYMENT_SHA: ${{ github.event.deployment.sha }}
+        shell: bash
+        run: |
+          git fetch origin main
+          test "$(git rev-parse HEAD)" = "$DEPLOYMENT_SHA"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install customer project
+        working-directory: ${{ env.CANDIDATE_PROJECT }}
+        run: npm ci
+
+      - name: Install Chromium for local failure scenes
+        working-directory: ${{ env.CANDIDATE_PROJECT }}
+        run: npx playwright install --with-deps chromium
+
+      - name: Build temporary runtime environment
+        env:
+          TEST_USER: ${{ secrets.TEST_USER }}
+          TEST_USER_US_EAST_1: ${{ secrets.TEST_USER_US_EAST_1 }}
+          TEST_USER_EU_WEST_1: ${{ secrets.TEST_USER_EU_WEST_1 }}
+        shell: bash
+        run: |
+          file="$RUNNER_TEMP/verify-fix.env"
+          umask 077
+          : > "$file"
+          [[ -n "$TEST_USER" ]] && printf 'TEST_USER=%s\n' "$TEST_USER" >> "$file"
+          [[ -n "$TEST_USER_US_EAST_1" ]] && printf 'TEST_USER_US_EAST_1=%s\n' "$TEST_USER_US_EAST_1" >> "$file"
+          [[ -n "$TEST_USER_EU_WEST_1" ]] && printf 'TEST_USER_EU_WEST_1=%s\n' "$TEST_USER_EU_WEST_1" >> "$file"
+          echo "VERIFY_FIX_ENV_FILE=$file" >> "$GITHUB_ENV"
+
+      - name: Verify production candidate source
+        env:
+          CHECKLY_API_KEY: ${{ secrets.CHECKLY_API_KEY }}
+          CHECKLY_ACCOUNT_ID: ${{ vars.CHECKLY_ACCOUNT_ID }}
+          TARGET_URL: ${{ github.event.deployment_status.environment_url }}
+          TARGET_REVISION: ${{ github.event.deployment.sha }}
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          node bin/verify-fix verify \
+            --bundle "$VERIFY_FIX_BUNDLE" \
+            --candidate-project "$CANDIDATE_PROJECT" \
+            --project "$CANDIDATE_PROJECT" \
+            --target "$TARGET_URL" \
+            --target-revision "$TARGET_REVISION" \
+            --env-name production \
+            --env-file "$VERIFY_FIX_ENV_FILE" \
+            --executor hybrid \
+            --report-json artifacts/verify-fix-production.json \
+            --report-markdown artifacts/verify-fix-production.md \
+            --verbose
+
+      - name: Deploy monitoring source after PASS
+        working-directory: ${{ env.CANDIDATE_PROJECT }}
+        env:
+          CHECKLY_API_KEY: ${{ secrets.CHECKLY_API_KEY }}
+          CHECKLY_ACCOUNT_ID: ${{ vars.CHECKLY_ACCOUNT_ID }}
+          TEST_USER: ${{ secrets.TEST_USER }}
+          TEST_USER_US_EAST_1: ${{ secrets.TEST_USER_US_EAST_1 }}
+          TEST_USER_EU_WEST_1: ${{ secrets.TEST_USER_EU_WEST_1 }}
+        run: npx checkly deploy --force
+
+      - name: Upload production verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-fix-production-${{ github.event.deployment.sha }}
+          path: artifacts/verify-fix-production.*
+          if-no-files-found: warn

@@ -99,7 +99,7 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
     schemaVersion: "v3",
     incidentId: m.incidentId,
     incident: { title: m.incident.title, description: m.incident.description, sourceReference: m.incident.sourceReference ?? undefined },
-    check: { repo: m.check.repo ?? "", file, logicalId: m.check.logicalId ?? "", deployedId: m.check.deployedId },
+    check: { repo: m.check.repo ?? "", file, name: m.check.name, logicalId: m.check.logicalId ?? "", deployedId: m.check.deployedId },
     checkSource,
     files,
     configFile,

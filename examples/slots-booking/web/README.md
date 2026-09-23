@@ -29,3 +29,19 @@ in this folder.
 `checkly.config.ts` sets `bundle.packages.prune: { dependencies: true }` so
 Checkly's runners install only the dev side of this `package.json`
 (`@playwright/test`, `checkly`), not Next.js. Files on disk are untouched.
+
+## Phase 5 gate setup
+
+Create protected GitHub environments named `verify-fix-preview` and
+`verify-fix-production`. Put `CHECKLY_API_KEY`, `TEST_USER`, optional regional
+users, and the optional Vercel automation bypass secret in GitHub Secrets. Put
+`CHECKLY_ACCOUNT_ID` in GitHub Variables. `VERIFY_FIX_BUNDLE` may select a
+newer sanitized incident bundle. The workflow creates its dotenv file under
+`$RUNNER_TEMP`; no runtime value is committed. The production deploy receives
+the same user variables from the protected environment after verification
+passes.
+
+`playwright.config.ts` reads
+`CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET` only when CI supplies it. It
+sends that value through Vercel's automation header. Public previews need no
+bypass value.

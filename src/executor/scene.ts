@@ -18,7 +18,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Bundle, ExperimentExecutor, ObservationValue, RunContext, Scene, SceneObservation, TraceStep } from "../types.ts";
+import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExecutor, type ObservationValue, type RunContext, type Scene, type SceneObservation, type TraceStep } from "../types.ts";
 import { runSandbox } from "../sandbox.ts";
 import { runPlaywrightSandbox } from "../playwright-sandbox.ts";
 import { sceneExpected } from "../contract/contract.ts";
@@ -79,6 +79,7 @@ export class SceneExecutor implements ExperimentExecutor {
   private readonly onRepetition: SceneExecutorOptions["onRepetition"];
   private readonly proxy = new SceneProxy();
   private used = new Map<string, number>();
+  private readonly cost: ExecutionCost = emptyExecutionCost();
   private harCache = new Map<string, Har | null>();
   nondeterministicScenes: string[] = [];
   budgetExhausted = false;
@@ -102,8 +103,15 @@ export class SceneExecutor implements ExperimentExecutor {
     return this.target !== null;
   }
 
-  costReport(): { scenes: number; runs: number } {
-    return { scenes: this.used.size, runs: [...this.used.values()].reduce((a, b) => a + b, 0) };
+  costReport(): ExecutionCost {
+    return {
+      ...this.cost,
+      scenes: this.used.size,
+      runs: this.cost.localRuns,
+      checklySessionIds: [...this.cost.checklySessionIds],
+      checklyResultIds: [...this.cost.checklyResultIds],
+      byScene: this.cost.byScene.map((row) => ({ ...row })),
+    };
   }
 
   budgetFor(bundle: Bundle): number {
@@ -209,6 +217,15 @@ export class SceneExecutor implements ExperimentExecutor {
     }
     const reps = Math.max(1, Math.min(wantedRuns, canRun));
     this.used.set(scene.sceneId, usedSoFar + reps);
+    const costRow = {
+      sceneId: scene.sceneId,
+      executor: "scene" as const,
+      repetitions: 0,
+      checkRuns: 0,
+      wallTimeMs: 0,
+      phase: ctx?.phase ?? "candidate" as const,
+    };
+    this.cost.byScene.push(costRow);
 
     const observedOutcomes: Array<"pass" | "fail"> = [];
     const mergedTrace: TraceStep[] = [];
@@ -220,15 +237,33 @@ export class SceneExecutor implements ExperimentExecutor {
 
     for (let rep = 0; rep < reps; rep++) {
       const urls = await this.proxy.arm({ mode, target: this.target, runs: concurrency, replayHar, replayBrowserAssetsFromTarget: replayBrowserAssets, failingHar, barrierTimeoutMs: this.barrierTimeoutMs });
-      const env = { ...this.env, ...(scene.env ?? {}) };
+      const baseEnv = { ...this.env, ...(scene.env ?? {}) };
+      const locations = config?.locations.length ? config.locations : bundle.config?.locations ?? [];
+      const startedAt = Date.now();
       const settled = await Promise.all(
-        urls.map((url, runIndex) =>
-          this.runCandidate(bundle, patchSource, ctx, url, env, repetitionSeed(scene.sceneId, rep, runIndex))
+        urls.map((url, runIndex) => {
+          const region = locations[runIndex % Math.max(1, locations.length)];
+          const env = {
+            ...baseEnv,
+            CHECKLY: "1",
+            CHECKLY_RUN_SOURCE: "TEST_RECORD",
+            CI: "1",
+            ...(region ? { CHECKLY_REGION: region } : {}),
+          };
+          return this.runCandidate(bundle, patchSource, ctx, url, env, repetitionSeed(scene.sceneId, rep, runIndex))
             .then((outcome) => ({ ok: true as const, outcome }))
             .catch((err: Error) => ({ ok: false as const, err }))
-            .finally(() => this.proxy.runFinished(runIndex)),
-        ),
+            .finally(() => this.proxy.runFinished(runIndex));
+        }),
       );
+      const elapsed = Date.now() - startedAt;
+      costRow.repetitions += 1;
+      costRow.checkRuns += concurrency;
+      costRow.wallTimeMs += elapsed;
+      this.cost.localRuns += concurrency;
+      if (bundle.playwright) this.cost.browserProcesses += concurrency * Math.max(1, bundle.playwright.projects.length);
+      this.cost.wallTimeMs += elapsed;
+      if (costRow.phase === "mutation") this.cost.mutationRuns += concurrency;
       const hits = this.proxy.hits();
       let repPassed = true;
       for (let runIndex = 0; runIndex < settled.length; runIndex++) {
@@ -292,7 +327,36 @@ function summarize(hits: Array<{ method: string; path: string; status: number; s
  * depends on. Deterministic, code-derived. Compares the SET of distinct
  * credential-bearing statements, so a fix that merely reuses the same account
  * in more requests is not a dodge. */
-export function detectEnvScopeDodge(original: string, patched: string): string | null {
+export interface EnvScopeContext {
+  locations?: string[];
+  declaredEnvKeys?: string[];
+}
+
+export function regionalUserEnvKey(location: string): string {
+  return `TEST_USER_${location.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
+}
+
+export function regionalUserKeys(source: string, context: EnvScopeContext): string[] | null {
+  const locations = context.locations ?? [];
+  if (locations.length < 2 || !/process\.env\.CHECKLY_REGION\b/.test(source)) return null;
+  const expected = locations.map(regionalUserEnvKey);
+  const declared = new Set(context.declaredEnvKeys ?? []);
+  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const mapped = locations.every((location, index) => {
+    const key = expected[index];
+    const entry = new RegExp(`["']${escape(location)}["']\\s*:\\s*process\\.env(?:\\.${key}|\\[['\"]${key}['\"]\\])`);
+    return declared.has(key) && entry.test(source);
+  });
+  if (!mapped) return null;
+  const selection = /\bTEST_USER\b\s*=\s*[A-Za-z_$][\w$]*\[\s*process\.env\.CHECKLY_REGION(?:\s*\?\?\s*(['"])\1)?\s*\]/.exec(source);
+  if (!selection) return null;
+  const selectionLine = source.slice(source.lastIndexOf("\n", selection.index) + 1, source.indexOf("\n", selection.index) === -1 ? source.length : source.indexOf("\n", selection.index));
+  if (!/\]\s*;?\s*(?:\/\/.*)?$/.test(selectionLine)) return null;
+  if (/(['"])[^'"]+\1/.test(selectionLine.replace(/(['"])\1/g, ""))) return null;
+  return expected;
+}
+
+export function detectEnvScopeDodge(original: string, patched: string, context: EnvScopeContext = {}): string | null {
   const ACCOUNT_TOKEN = /\b(?:account|username|email|user|ACCOUNT|USERNAME|EMAIL|TEST_USER)\b\s*[:=]/;
   const GEN = /Date\.now\(\)|Math\.random\(\)|randomUUID\(\)|crypto\.random/;
 
@@ -304,6 +368,11 @@ export function detectEnvScopeDodge(original: string, patched: string): string |
   if (genLine) {
     return `account/credential generated at runtime (${genLine.trim().slice(0, 60)}) — dodges the shared-account failure; envAssumption "single shared account" violated`;
   }
+  // A fixed mapping from each configured Checkly region to a declared user is
+  // a real overlap repair. It preserves stable identities while preventing two
+  // locations from invalidating the same session. Random or undeclared users
+  // remain a dodge.
+  if (regionalUserKeys(patched, context)) return null;
   const distinct = (lines: string[]) => [...new Set(lines.map((l) => l.trim().replace(/\s+/g, " ")))].sort();
   if (JSON.stringify(distinct(origLines)) !== JSON.stringify(distinct(newLines))) {
     return "account/credential constant changed — dodges the shared-account failure; envAssumption 'single shared account' violated";

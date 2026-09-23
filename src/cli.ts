@@ -6,15 +6,16 @@
 //   verify-fix measure --bundle <dir> --target <url> --project <dir> [--runs 20] [--env-file <file>]
 // Exit codes: 0 PASS/ok · 1 FAILED · 2 UNCERTAIN / usage / could not run.
 
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, existsSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { loadBundle } from "./bundle.ts";
 import { verify } from "./verify.ts";
 import { SceneExecutor } from "./executor/scene.ts";
-import { ChecklyExecutor } from "./executor/checkly.ts";
-import { loadPatch } from "./patch.ts";
+import { HybridExecutor } from "./executor/hybrid.ts";
+import { loadCandidateProject, loadPatch } from "./patch.ts";
 import { parseEnvFile } from "./scene/env.ts";
 import { measureLocalDeterminism } from "./measure-local.ts";
+import { buildCostMatrix, costMatrixMarkdown } from "./cost-report.ts";
 import { resolveCredentials, CREDENTIALS_HELP } from "./checkly/credentials.ts";
 import { ChecklyClient, ChecklyApiError } from "./checkly/client.ts";
 import { buildBundle } from "./bundle/build.ts";
@@ -26,11 +27,16 @@ const TOOL_VERSION = "0.1.0";
 interface Args {
   command: string | null;
   patch: string | null;
+  candidateProject: string | null;
   bundle: string | null;
-  executor: "scene" | "checkly";
+  executor: "scene" | "hybrid";
   target: string | null;
+  targetRevision: string | null;
+  reportJson: string | null;
+  reportMarkdown: string | null;
   envFile: string | null;
   envName: string | null;
+  /** Legacy direct-API flag. Parsed only so it can be rejected safely. */
   dryRun: boolean;
   json: boolean;
   verbose: boolean;
@@ -48,13 +54,15 @@ interface Args {
   history: number;
   // local measure
   runs: number;
+  // cost-report
+  reports: string | null;
 }
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
-    command: null, patch: null, bundle: null, executor: "scene", target: null, envFile: null, envName: null, dryRun: false, json: false, verbose: false,
+    command: null, patch: null, candidateProject: null, bundle: null, executor: "scene", target: null, targetRevision: null, reportJson: null, reportMarkdown: null, envFile: null, envName: null, dryRun: false, json: false, verbose: false,
     check: null, result: null, out: null, project: null, measure: 0, measureOverlap: 0, targetUrl: null,
-    triggerRca: false, bodies: "api", keepRaw: false, history: 100, runs: 20,
+    triggerRca: false, bodies: "api", keepRaw: false, history: 100, runs: 20, reports: null,
   };
   const value = (i: number, a: string): string => {
     const eq = a.indexOf("=");
@@ -67,6 +75,7 @@ function parseArgs(argv: string[]): Args {
     const takes = !a.includes("=");
     switch (key) {
       case "--patch": args.patch = value(i, a); if (takes) i++; break;
+      case "--candidate-project": args.candidateProject = value(i, a); if (takes) i++; break;
       case "--bundle": args.bundle = value(i, a); if (takes) i++; break;
       case "--executor": {
         const v = value(i, a);
@@ -75,6 +84,9 @@ function parseArgs(argv: string[]): Args {
         break;
       }
       case "--target": args.target = value(i, a); if (takes) i++; break;
+      case "--target-revision": args.targetRevision = value(i, a); if (takes) i++; break;
+      case "--report-json": args.reportJson = value(i, a); if (takes) i++; break;
+      case "--report-markdown": args.reportMarkdown = value(i, a); if (takes) i++; break;
       case "--env-file": args.envFile = value(i, a); if (takes) i++; break;
       case "--env-name": args.envName = value(i, a); if (takes) i++; break;
       case "--dry-run": args.dryRun = true; break;
@@ -92,6 +104,7 @@ function parseArgs(argv: string[]): Args {
       case "--keep-raw": args.keepRaw = true; break;
       case "--history": args.history = Number(value(i, a)); if (takes) i++; break;
       case "--runs": args.runs = Number(value(i, a)); if (takes) i++; break;
+      case "--reports": args.reports = value(i, a); if (takes) i++; break;
       case "--help": case "-h": args.command = "help"; break;
       default:
         if (!args.command && !a.startsWith("-")) args.command = a;
@@ -114,16 +127,22 @@ function usage(): string {
     "      an earlier, different failure of the same group (Rocky analyzes only a group's first failure).",
     "",
     "  verify-fix verify --patch <file|dir> --bundle <dir> --target <url> [--project <dir>]",
-    "                    [--env-file <file>] [--env-name <name>] [--executor scene|checkly] [--dry-run] [--json] [--verbose]",
-    "      Grades a candidate fix against a bundle. --patch is the new check file, or a directory whose files",
-    "      replace the bundle's check/ files (spec and/or checkly.config.ts). --target is the app the live",
-    "      scenes run against (becomes ENVIRONMENT_URL, Checkly's convention); the tool never picks one.",
-    "      Playwright bundles also need --project: the customer's project with @playwright/test installed.",
+    "              or: --candidate-project <dir> --bundle <dir> --target <url>",
+    "                    [--target-revision <sha>] [--env-file <file>] [--env-name <name>]",
+    "                    [--executor scene|hybrid] [--report-json <file>] [--report-markdown <file>] [--json] [--verbose]",
+    "      Grades a candidate fix against a bundle. --patch replaces captured check files for fixture testing.",
+    "      --candidate-project reads only the captured monitoring files plus their relative imports from a real",
+    "      customer project. --target is the exact app deployment under test. Hybrid mode runs HEALTHY and",
+    "      REGRESSION through the project-local Checkly CLI. It keeps REPRODUCTION and DETECTION in the scene proxy.",
+    "      Playwright bundles also need --project. It defaults to --candidate-project when that input is used.",
     "      --env-file gives the check its own variables (KEY=VALUE lines, like `checkly test --env-file`).",
     "",
     "  verify-fix measure --bundle <dir> --target <url> --project <dir> [--runs 20] [--env-file <file>] [--verbose]",
     "      Runs the original Playwright check locally through its reproduction mode, then writes measured",
     "      determinism numbers to manifest.json with method local-runner. No Checkly credentials are used.",
+    "",
+    "  verify-fix cost-report --reports <dir> [--json]",
+    "      Aggregates saved verification JSON reports by candidate and verdict. It reports runs and wall time.",
     "",
     "Exit codes: 0 = PASS/ok · 1 = FAILED · 2 = UNCERTAIN / usage error",
     "",
@@ -255,41 +274,90 @@ async function runMeasure(args: Args): Promise<ExitCode> {
 }
 
 async function runVerify(args: Args): Promise<ExitCode> {
-  if (!args.patch || !args.bundle) {
-    process.stderr.write("--patch and --bundle are required\n\n" + usage());
+  if (!args.bundle || (!args.patch && !args.candidateProject) || (args.patch && args.candidateProject)) {
+    process.stderr.write("--bundle and exactly one of --patch or --candidate-project are required\n\n" + usage());
+    return 2;
+  }
+  if (args.dryRun) {
+    process.stderr.write("--dry-run belonged to the retired direct-API executor; use --executor scene or --executor hybrid\n");
+    return 2;
+  }
+  if (args.target && !/^https?:\/\//.test(args.target)) {
+    process.stderr.write("--target must be an http(s) origin, e.g. https://preview.example.com\n");
+    return 2;
+  }
+  if (args.executor === "hybrid" && (!args.target || !args.targetRevision)) {
+    process.stderr.write("--executor hybrid requires the exact deployment --target <url> and --target-revision <sha>\n");
     return 2;
   }
   const { bundle } = loadBundle(args.bundle);
-  const patch = loadPatch(args.patch, bundle);
+  const patch = args.candidateProject ? loadCandidateProject(args.candidateProject, bundle) : loadPatch(args.patch!, bundle);
   const env = args.envFile ? parseEnvFile(readFileSync(args.envFile, "utf8")) : {};
-  if (args.target && !/^https?:\/\//.test(args.target)) {
-    process.stderr.write("--target must be an http(s) origin, e.g. https://staging.example.com\n");
+  const project = args.project ?? args.candidateProject;
+  if (bundle.playwright && !project) {
+    process.stderr.write("Playwright verification needs --project <dir> or --candidate-project <dir>\n");
+    return 2;
+  }
+  if (!["scene", "hybrid"].includes(args.executor)) {
+    process.stderr.write("--executor must be scene or hybrid\n");
     return 2;
   }
 
-  const executor =
-    args.executor === "checkly"
-      ? new ChecklyExecutor({ dryRunOnly: args.dryRun || !process.env.CHECKLY_API_KEY, verbose: args.verbose })
-      : new SceneExecutor({
-          target: args.target,
-          env,
-          environmentName: args.envName ?? undefined,
-          projectDir: args.project,
-          browserExecutablePath: process.env.VERIFY_FIX_BROWSER_PATH,
-          verbose: args.verbose,
-        });
+  const shared = {
+    target: args.target,
+    env,
+    environmentName: args.envName ?? undefined,
+    projectDir: project,
+    browserExecutablePath: process.env.VERIFY_FIX_BROWSER_PATH,
+    verbose: args.verbose,
+  };
+  const executor = args.executor === "hybrid"
+    ? new HybridExecutor({ ...shared, targetRevision: args.targetRevision ?? undefined })
+    : new SceneExecutor(shared);
 
-  const result = await verify({ bundle, patch, executor, target: args.target, env, environmentName: args.envName ?? undefined, verbose: args.verbose });
+  try {
+    const result = await verify({
+      bundle,
+      patch,
+      executor,
+      target: args.target,
+      targetRevision: args.targetRevision ?? undefined,
+      candidateProject: args.candidateProject ? resolve(args.candidateProject) : null,
+      env,
+      environmentName: args.envName ?? undefined,
+      projectDir: project,
+      verbose: args.verbose,
+    });
 
-  if (args.json) {
-    process.stdout.write(JSON.stringify(result.report.json, null, 2) + "\n");
-  } else {
-    process.stdout.write(result.report.markdown);
+    if (args.reportJson) writeFileSync(args.reportJson, JSON.stringify(result.report.json, null, 2) + "\n");
+    if (args.reportMarkdown) writeFileSync(args.reportMarkdown, result.report.markdown);
+    if (args.json) process.stdout.write(JSON.stringify(result.report.json, null, 2) + "\n");
+    else process.stdout.write(result.report.markdown);
+    if (args.verbose) {
+      process.stderr.write(`\n[verify-fix] cost: ${result.cost.checklyCloudRuns} Checkly cloud run(s), ${result.cost.localRuns} local run(s), ${result.cost.browserProcesses} browser process(es), ${(result.cost.wallTimeMs / 1000).toFixed(1)}s wall time\n`);
+    }
+    return result.decision.exitCode;
+  } catch (error) {
+    process.stderr.write(`verify failed: ${(error as Error).message}\n`);
+    if (args.verbose && (error as Error).stack) process.stderr.write((error as Error).stack + "\n");
+    return 2;
   }
-  if (args.verbose) {
-    process.stderr.write(`\n[verify-fix] cost: ${result.cost.scenes} scenes, ${result.cost.runs} sandbox/live runs\n`);
+}
+
+function runCostReport(args: Args): ExitCode {
+  if (!args.reports) {
+    process.stderr.write("--reports <dir> is required\n\n" + usage());
+    return 2;
   }
-  return result.decision.exitCode;
+  try {
+    const matrix = buildCostMatrix(args.reports);
+    if (args.json) process.stdout.write(JSON.stringify(matrix, null, 2) + "\n");
+    else process.stdout.write(costMatrixMarkdown(matrix));
+    return 0;
+  } catch (error) {
+    process.stderr.write(`cost report failed: ${(error as Error).message}\n`);
+    return 2;
+  }
 }
 
 async function main(): Promise<ExitCode> {
@@ -301,6 +369,7 @@ async function main(): Promise<ExitCode> {
   if (args.command === "bundle") return runBundle(args);
   if (args.command === "measure") return runMeasure(args);
   if (args.command === "verify") return runVerify(args);
+  if (args.command === "cost-report") return runCostReport(args);
   process.stderr.write(`unknown command: ${args.command}\n\n${usage()}`);
   return 2;
 }

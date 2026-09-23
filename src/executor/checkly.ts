@@ -6,7 +6,7 @@
 // prints exactly the operations a live run would perform. The definitive live
 // proof is a build-time task once credentials exist (prod PRD §11.2).
 
-import type { Bundle, ExperimentExecutor, Scene, SceneObservation, TraceStep } from "../types.ts";
+import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExecutor, type Scene, type SceneObservation, type TraceStep } from "../types.ts";
 import { sceneExpected } from "../contract/contract.ts";
 
 const API_BASE = process.env.CHECKLY_API_BASE ?? "https://api.checklyhq.com/v1";
@@ -41,8 +41,8 @@ export class ChecklyExecutor implements ExperimentExecutor {
     return Boolean(this.apiKey) && !this.dryRunOnly;
   }
 
-  costReport(): { scenes: number; runs: number } {
-    return { scenes: this.used, runs: this.used };
+  costReport(): ExecutionCost {
+    return { ...emptyExecutionCost(), scenes: this.used, runs: this.used, checklyTestSessions: this.used, checklyCloudRuns: this.used };
   }
 
   private checkCreds(): void {
@@ -123,7 +123,7 @@ export class ChecklyExecutor implements ExperimentExecutor {
       repetitions: 1,
       trace,
       source: "checkly",
-      checklyRunIds: [resultId],
+      checklyResultIds: [resultId],
     };
   }
 }

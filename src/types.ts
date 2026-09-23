@@ -84,6 +84,8 @@ export interface RunBudget {
 export interface CheckInfo {
   repo: string;
   file: string;
+  /** Display name used by `checkly test --grep` to select only this check. */
+  name?: string;
   logicalId: string;
   deployedId: string | null;
 }
@@ -179,7 +181,10 @@ export interface SceneObservation {
   source: "scene" | "checkly";
   /** what the run talked to: "target <host> (mode)" or "recording <file>" */
   environment?: string;
-  checklyRunIds?: string[];
+  /** Recorded Checkly test sessions used as evidence. */
+  checklySessionIds?: string[];
+  /** Individual Checkly result ids inside those sessions. */
+  checklyResultIds?: string[];
   /** Mandatory when observed === "uncertain": why no pass/fail could be admitted. */
   reason?: string;
 }
@@ -225,17 +230,62 @@ export interface RunContext {
   config: BundleConfig | null;
   /** Complete candidate check tree. Browser specs may import helper files from it. */
   files?: Record<string, string>;
+  /** Distinguishes the candidate from generated weakening checks in cost reports. */
+  phase?: "candidate" | "mutation";
+}
+
+export interface SceneCost {
+  sceneId: string;
+  executor: "scene" | "checkly";
+  repetitions: number;
+  checkRuns: number;
+  wallTimeMs: number;
+  phase: "candidate" | "mutation";
+}
+
+export interface ExecutionCost {
+  scenes: number;
+  runs: number;
+  checklyTestSessions: number;
+  checklyCloudRuns: number;
+  checklySessionIds: string[];
+  checklyResultIds: string[];
+  /** Local check executions. Concurrent checks count separately. */
+  localRuns: number;
+  /** Browser processes started by local Playwright executions. */
+  browserProcesses: number;
+  mutationRuns: number;
+  wallTimeMs: number;
+  byScene: SceneCost[];
+}
+
+export function emptyExecutionCost(): ExecutionCost {
+  return {
+    scenes: 0,
+    runs: 0,
+    checklyTestSessions: 0,
+    checklyCloudRuns: 0,
+    checklySessionIds: [],
+    checklyResultIds: [],
+    localRuns: 0,
+    browserProcesses: 0,
+    mutationRuns: 0,
+    wallTimeMs: 0,
+    byScene: [],
+  };
 }
 
 export interface ExperimentExecutor {
-  readonly kind: "scene" | "checkly";
+  readonly kind: "scene" | "checkly" | "hybrid";
   /** Run the fixed check code in one scene state and observe its outcome. */
   runScene(bundle: Bundle, patchSource: string, scene: Scene, ctx?: RunContext): Promise<SceneObservation>;
   /** True when the executor can produce live observed runs (PR-1). */
   isLive(): boolean;
-  costReport(): { scenes: number; runs: number };
+  costReport(): ExecutionCost;
   /** True when the per-scene run budget was hit (PR-10 → UNCERTAIN). */
   budgetExhausted: boolean;
   /** Scene ids whose repeated observations disagreed (flake → UNCERTAIN). */
   nondeterministicScenes: string[];
+  /** Executors with listeners or temporary state may release it here. */
+  close?(): Promise<void>;
 }

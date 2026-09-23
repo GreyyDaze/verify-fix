@@ -10,7 +10,17 @@
 // `process.env.VAR` (Playwright / code). A `process.env.VAR` followed by a
 // fallback (`?? x`, `|| x`) still runs, so it is only noted.
 
-export const CHECKLY_ENV = ["ENVIRONMENT_URL", "ENVIRONMENT_NAME"] as const;
+export const CHECKLY_ENV = [
+  "ENVIRONMENT_URL",
+  "ENVIRONMENT_NAME",
+  "CHECKLY",
+  "CHECKLY_RUN_SOURCE",
+  "CHECKLY_REGION",
+  "CHECKLY_CHECK_ID",
+  "CHECK_NAME",
+  "ACCOUNT_ID",
+  "CI",
+] as const;
 
 /** dotenv-style `KEY=VALUE` lines (comments and blanks ignored, quotes stripped). */
 export function parseEnvFile(text: string): Record<string, string> {
@@ -52,6 +62,12 @@ export function referencedEnvVars(source: string): EnvReference[] {
       seen.add(key);
       out.push({ name: m[1], form: "process.env", hasFallback: Boolean(m[2]), line: i + 1 });
     }
+    for (const m of text.matchAll(/process\.env\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\](\s*(\?\?|\|\|))?/g)) {
+      const key = `pe:${m[1]}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ name: m[1], form: "process.env", hasFallback: Boolean(m[2]), line: i + 1 });
+    }
   });
   return out;
 }
@@ -67,7 +83,8 @@ export interface EnvCheck {
 
 export function checkEnv(source: string, provided: Record<string, string>, declared: string[]): EnvCheck {
   const refs = referencedEnvVars(source);
-  const has = (n: string) => provided[n] !== undefined && provided[n] !== "";
+  const runtime = new Set<string>(CHECKLY_ENV);
+  const has = (n: string) => runtime.has(n) || (provided[n] !== undefined && provided[n] !== "");
   const missing = refs.filter((r) => !has(r.name) && !r.hasFallback);
   const defaulted = refs.filter((r) => !has(r.name) && r.hasFallback);
   const known = new Set<string>([...CHECKLY_ENV, ...declared]);

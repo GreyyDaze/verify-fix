@@ -2,7 +2,7 @@
 // a human can merge/block in ≤30s from the summary table + top-3 evidence lines.
 // Every sentence must reduce to "experiment X, oracle Y, matched/mismatched, strength Z".
 
-import type { Decision, EvidenceRow, SceneObservation } from "../types.ts";
+import type { Decision, EvidenceRow, ExecutionCost, SceneObservation } from "../types.ts";
 import type { ContractReport } from "../contract/contract.ts";
 
 export interface Report {
@@ -17,8 +17,19 @@ function oracleShorthand(row: EvidenceRow): string {
   return row.oracle.length > 42 ? `${row.oracle.slice(0, 39)}…` : row.oracle;
 }
 
-export function buildReport(contract: ContractReport, decision: Decision, observations: Map<string, SceneObservation>): Report {
+export interface ReportDetails {
+  cost?: ExecutionCost;
+  target?: string | null;
+  targetRevision?: string | null;
+  candidateProject?: string | null;
+  candidate?: string | null;
+}
+
+export function buildReport(contract: ContractReport, decision: Decision, observations: Map<string, SceneObservation>, details: ReportDetails = {}): Report {
   const lines: string[] = [];
+  const observationValues = [...observations.values()];
+  const checklySessionIds = [...new Set([...observationValues.flatMap((observation) => observation.checklySessionIds ?? []), ...(details.cost?.checklySessionIds ?? [])])];
+  const checklyResultIds = [...new Set([...observationValues.flatMap((observation) => observation.checklyResultIds ?? []), ...(details.cost?.checklyResultIds ?? [])])];
   lines.push(`# verify-fix report — ${contract.bundle.incidentId}`);
   lines.push("");
   lines.push(`**Verdict:** ${decision.verdict} (exit ${decision.exitCode})`);
@@ -50,6 +61,35 @@ export function buildReport(contract: ContractReport, decision: Decision, observ
   const top = topEvidence(contract, decision, observations);
   top.forEach((t, i) => lines.push(`${i + 1}. ${t}`));
   lines.push("");
+  if (details.target || details.targetRevision || details.candidateProject || details.candidate) {
+    lines.push("**Candidate target:**");
+    if (details.candidate) lines.push(`- Candidate: \`${details.candidate}\``);
+    if (details.target) lines.push(`- URL: ${details.target}`);
+    if (details.targetRevision) lines.push(`- Revision: \`${details.targetRevision}\``);
+    if (details.candidateProject) lines.push(`- Project: \`${details.candidateProject}\``);
+    lines.push("");
+  }
+  if (checklySessionIds.length > 0 || checklyResultIds.length > 0) {
+    lines.push("**Recorded Checkly evidence:**");
+    if (checklySessionIds.length > 0) lines.push(`- Test session ids: ${checklySessionIds.map((id) => `\`${id}\``).join(", ")}`);
+    if (checklyResultIds.length > 0) lines.push(`- Result ids: ${checklyResultIds.map((id) => `\`${id}\``).join(", ")}`);
+    lines.push("");
+  }
+  if (details.cost) {
+    const c = details.cost;
+    lines.push("**Cost:**");
+    lines.push(`- Checkly test sessions: ${c.checklyTestSessions}`);
+    lines.push(`- Checkly cloud check runs: ${c.checklyCloudRuns}`);
+    lines.push(`- Local runs: ${c.localRuns}`);
+    lines.push(`- Browser processes: ${c.browserProcesses}`);
+    lines.push(`- Mutation runs: ${c.mutationRuns}`);
+    lines.push(`- Total completed runs: ${c.runs}`);
+    lines.push(`- Wall time: ${(c.wallTimeMs / 1000).toFixed(1)}s`);
+    for (const row of c.byScene) {
+      lines.push(`- ${row.sceneId} (${row.phase}, ${row.executor}): ${row.checkRuns} check run(s), ${(row.wallTimeMs / 1000).toFixed(1)}s`);
+    }
+    lines.push("");
+  }
 
   const topOut = topEvidence(contract, decision, observations);
   return {
@@ -59,12 +99,18 @@ export function buildReport(contract: ContractReport, decision: Decision, observ
     markdown: lines.join("\n"),
     json: {
       incidentId: contract.bundle.incidentId,
+      candidate: details.candidate ?? null,
       verdict: decision.verdict,
       exitCode: decision.exitCode,
       rows: decision.rows,
       adequacy: decision.adequacy,
       reasons: decision.reasons,
       determinism: contract.bundle.determinism,
+      target: details.target ?? null,
+      targetRevision: details.targetRevision ?? null,
+      candidateProject: details.candidateProject ?? null,
+      checklyEvidence: { testSessionIds: checklySessionIds, resultIds: checklyResultIds },
+      cost: details.cost ?? null,
       topEvidence: topOut,
     },
   };

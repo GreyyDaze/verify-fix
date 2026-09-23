@@ -7,6 +7,7 @@ import { defineConfig, devices } from '@playwright/test'
 //   - Vercel/GitHub deployment integration sets it automatically.
 // When it is not set, the check targets production.
 const PRODUCTION_URL = 'https://slots-booking-verify-fix.vercel.app'
+const vercelBypass = process.env.CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET
 
 export default defineConfig({
   testDir: './tests',
@@ -19,6 +20,9 @@ export default defineConfig({
 
   use: {
     baseURL: process.env.ENVIRONMENT_URL ?? PRODUCTION_URL,
+    // Vercel's automation bypass is supplied only by CI. The secret is sent as
+    // a request header. It is never stored in this project or an incident bundle.
+    ...(vercelBypass ? { extraHTTPHeaders: { 'x-vercel-protection-bypass': vercelBypass } } : {}),
     // 'on' (not 'retain-on-failure') so that PASSING runs also keep a trace.
     // verify-fix's `bundle` command turns the trace of the last passing run
     // into recordings/passing.har and the failing run into failing.har.

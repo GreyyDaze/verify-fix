@@ -5,14 +5,14 @@
 // judged by the contract engine and the scenes; config by the config policy
 // (src/scene/config-diff.ts) and by the concurrency the scenes run at.
 
-import type { Bundle, BundleConfig, Decision, ExperimentExecutor, RunContext, Scene, SceneObservation } from "./types.ts";
+import type { Bundle, BundleConfig, Decision, ExecutionCost, ExperimentExecutor, RunContext, Scene, SceneObservation } from "./types.ts";
 import { buildContract, type ContractReport } from "./contract/contract.ts";
 import { assessAdequacy, type MutantResult } from "./adequacy/adequacy.ts";
 import { decide } from "./decision/decision.ts";
 import { seedMutants } from "./mutation.ts";
 import { buildReport, type Report } from "./report/report.ts";
-import { isSceneExecutor, detectEnvScopeDodge, SceneExecutor } from "./executor/scene.ts";
-import { ChecklyExecutor } from "./executor/checkly.ts";
+import { detectEnvScopeDodge, regionalUserKeys, SceneExecutor } from "./executor/scene.ts";
+import { HybridExecutor } from "./executor/hybrid.ts";
 import { inlinePatch, newFiles, originalConfigSource, patchedCheckSource, patchedConfig, patchedConfigSource, type PatchSet } from "./patch.ts";
 import { applyConfigPolicy, diffCheckConfig, parseCheckConfig, type ConfigPolicy } from "./scene/config-diff.ts";
 import { checkEnv, type EnvCheck } from "./scene/env.ts";
@@ -33,6 +33,10 @@ export interface VerifyOptions {
   /** Checkly/Playwright project whose node_modules runs browser specs. */
   projectDir?: string | null;
   browserExecutablePath?: string;
+  /** Exact deployment commit associated with the target URL. */
+  targetRevision?: string;
+  /** Report-only path of the project whose candidate files were loaded. */
+  candidateProject?: string | null;
   verbose?: boolean;
 }
 
@@ -46,33 +50,40 @@ export interface VerifyResult {
   configPolicy: ConfigPolicy;
   envCheck: EnvCheck;
   patchedConfig: BundleConfig | null;
-  cost: { scenes: number; runs: number };
+  cost: ExecutionCost;
 }
 
-export function makeExecutor(opts: { target?: string | null; env?: Record<string, string>; environmentName?: string; maxRunsPerScene?: number; projectDir?: string | null; browserExecutablePath?: string; verbose?: boolean }): ExperimentExecutor {
-  if (process.env.VERIFY_FIX_EXECUTOR === "checkly") {
-    return new ChecklyExecutor({ dryRunOnly: !process.env.CHECKLY_API_KEY, verbose: opts.verbose });
+export function makeExecutor(opts: { target?: string | null; targetRevision?: string; env?: Record<string, string>; environmentName?: string; maxRunsPerScene?: number; projectDir?: string | null; browserExecutablePath?: string; verbose?: boolean }): ExperimentExecutor {
+  if (process.env.VERIFY_FIX_EXECUTOR === "hybrid") {
+    return new HybridExecutor({ target: opts.target ?? null, targetRevision: opts.targetRevision, env: opts.env, environmentName: opts.environmentName, maxRunsPerScene: opts.maxRunsPerScene, projectDir: opts.projectDir, browserExecutablePath: opts.browserExecutablePath, verbose: opts.verbose });
   }
   return new SceneExecutor({ target: opts.target ?? null, env: opts.env, environmentName: opts.environmentName, maxRunsPerScene: opts.maxRunsPerScene, projectDir: opts.projectDir, browserExecutablePath: opts.browserExecutablePath, verbose: opts.verbose });
 }
 
 export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
+  const verifyStartedAt = Date.now();
   const { bundle, verbose } = opts;
   const patch: PatchSet = typeof opts.patch === "string" ? inlinePatch(bundle, opts.patch) : opts.patch;
   const patchSource = patchedCheckSource(bundle, patch);
-  const executor = opts.executor ?? makeExecutor({ target: opts.target, env: opts.env, environmentName: opts.environmentName, maxRunsPerScene: opts.maxRunsPerScene, projectDir: opts.projectDir, browserExecutablePath: opts.browserExecutablePath, verbose });
-  const scene = isSceneExecutor(executor) ? executor : null;
+  const executor = opts.executor ?? makeExecutor({ target: opts.target, targetRevision: opts.targetRevision, env: opts.env, environmentName: opts.environmentName, maxRunsPerScene: opts.maxRunsPerScene, projectDir: opts.projectDir, browserExecutablePath: opts.browserExecutablePath, verbose });
 
   // ── static: code dodges, config policy, environment ──────────────────────
-  const envDodge = detectEnvScopeDodge(bundle.checkSource, patchSource);
   const originalCfg = parseCheckConfig(originalConfigSource(bundle));
   const patchedCfgView = parseCheckConfig(patchedConfigSource(bundle, patch));
   const codeChanged = patchSource !== bundle.checkSource;
   const configPolicy = applyConfigPolicy(diffCheckConfig(originalCfg, patchedCfgView), codeChanged, originalCfg, patchedCfgView);
   const runConfig = patchedConfig(bundle, patch);
-  const ctx: RunContext = { config: runConfig, files: { ...bundle.files, ...patch.files } };
-  const provided = { ...(opts.env ?? {}), ...(scene ? scene.env : {}) };
-  const declared = [...(bundle.config?.environmentVariables ?? []), ...configPolicy.declaredEnvKeys];
+  const declared = [...new Set([...(bundle.config?.environmentVariables ?? []), ...(runConfig?.environmentVariables ?? []), ...configPolicy.declaredEnvKeys])];
+  let envDodge = detectEnvScopeDodge(bundle.checkSource, patchSource, { locations: runConfig?.locations, declaredEnvKeys: declared });
+  const provided = { ...(opts.env ?? {}) };
+  const regionalKeys = regionalUserKeys(patchSource, { locations: runConfig?.locations, declaredEnvKeys: declared });
+  if (!envDodge && regionalKeys) {
+    const values = regionalKeys.map((key) => provided[key]).filter((value): value is string => Boolean(value));
+    if (values.length === regionalKeys.length && new Set(values).size !== values.length) {
+      envDodge = "regional test-user variables resolve to the same value — overlapping locations still share one account";
+    }
+  }
+  const ctx: RunContext = { config: runConfig, files: { ...bundle.files, ...patch.files }, phase: "candidate" };
   const envCheck = checkEnv(patchSource, provided, declared);
   const added = newFiles(bundle, patch);
 
@@ -86,16 +97,31 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     envCheck.missing.length > 0
       ? `the check reads ${envCheck.missing.map((m) => `${m.form === "handlebars" ? "{{" + m.name + "}}" : "process.env." + m.name} (line ${m.line})`).join(", ")} and no value was provided — pass --env-file; a run with an empty variable would not be the customer's check`
       : null;
-  for (const s of bundle.scenes) {
-    if (missingEnvReason) {
-      observations.set(s.sceneId, { sceneId: s.sceneId, observed: "uncertain", repetitions: 0, trace: [], source: executor.kind === "checkly" ? "checkly" : "scene", reason: missingEnvReason, environment: s.environment ?? "target" });
-      continue;
+  const undeclaredEnvReason = envCheck.undeclared.length > 0
+    ? `the patch reads undeclared environment variable(s): ${envCheck.undeclared.join(", ")}`
+    : null;
+  const preflightRejected = staticallyRejected(bundle, patchSource) ?? envDodge ?? configPolicy.rejected ?? undeclaredEnvReason;
+  if (preflightRejected) {
+    if (verbose) console.error(`[verify] static rejection before execution: ${preflightRejected}`);
+  } else if (missingEnvReason) {
+    for (const s of bundle.scenes) {
+      observations.set(s.sceneId, { sceneId: s.sceneId, observed: "uncertain", repetitions: 0, trace: [], source: s.type === "HEALTHY" || s.type === "REGRESSION" ? "checkly" : "scene", reason: missingEnvReason, environment: s.environment ?? "target" });
     }
-    observations.set(s.sceneId, await executor.runScene(bundle, patchSource, s, ctx));
+  } else {
+    const rank: Record<Scene["type"], number> = { REPRODUCTION: 0, DETECTION: 1, HEALTHY: 2, REGRESSION: 3, MUTATION: 4 };
+    const ordered = [...bundle.scenes].sort((a, b) => rank[a.type] - rank[b.type]);
+    for (const s of ordered) {
+      const observation = await executor.runScene(bundle, patchSource, s, ctx);
+      observations.set(s.sceneId, observation);
+      const expected = s.verdict.mustFail ? "fail" : "pass";
+      // A conclusive mismatch already fixes the verdict at FAILED. Missing
+      // evidence already fixes it at UNCERTAIN. Do not buy later cloud runs.
+      if (observation.observed === "uncertain" || observation.observed !== expected) break;
+    }
   }
   // Determinism evidence is about the CANDIDATE's own repetitions; snapshot it
   // before the mutation phase runs weakened variants through the same executor.
-  const nonDet = scene ? [...new Set(scene.nondeterministicScenes)] : [];
+  const nonDet = [...new Set(executor.nondeterministicScenes)];
 
   // Mutation phase: few, directed weak variants of the CANDIDATE patch.
   // Killed = the verifier caught it: either the contract engine rejects the
@@ -109,7 +135,12 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   const mutantResults: MutantResult[] = [];
   const detectionScene = bundle.scenes.find((s) => s.type === "DETECTION");
   const healthyScene = bundle.scenes.find((s) => s.type === "HEALTHY");
-  for (const m of seedMutants(patchSource, bundle.check.file)) {
+  const candidateScenesMatched = bundle.scenes.every((s) => {
+    const observed = observations.get(s.sceneId)?.observed;
+    return observed !== undefined && observed !== "uncertain" && observed === (s.verdict.mustFail ? "fail" : "pass");
+  });
+  const mutationCtx: RunContext = { ...ctx, phase: "mutation" };
+  for (const m of candidateScenesMatched ? seedMutants(patchSource, bundle.check.file) : []) {
     const staticKill = staticallyRejected(bundle, m.source);
     let detObs: SceneObservation | null = null;
     let healthyObs: SceneObservation | null = null;
@@ -119,9 +150,10 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     } else if (missingEnvReason) {
       survived = true; // nothing could be observed; the verifier cannot claim a catch
     } else {
-      detObs = detectionScene ? await executor.runScene(bundle, m.source, detectionScene, ctx) : null;
-      healthyObs = healthyScene ? await executor.runScene(bundle, m.source, healthyScene, ctx) : null;
+      detObs = detectionScene ? await executor.runScene(bundle, m.source, detectionScene, mutationCtx) : null;
       const detCaught = detObs?.observed === "pass"; // masked a must-fail → caught
+      // A detection kill is conclusive. Avoid a paid remote healthy run.
+      healthyObs = !detCaught && healthyScene ? await executor.runScene(bundle, m.source, healthyScene, mutationCtx) : null;
       const healthyCaught = healthyObs?.observed === "fail"; // broke healthy → caught
       survived = !(detCaught || healthyCaught);
     }
@@ -162,13 +194,24 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   for (const n of configPolicy.notes) decision.reasons.push(`config: ${n}`);
   if (envCheck.undeclared.length > 0) {
     decision.reasons.push(`env: the patch reads ${envCheck.undeclared.join(", ")} — not declared on the check; it must be added to the check's environment variables in Checkly (values never enter the bundle)`);
+    decision.verdict = "FAILED";
+    decision.exitCode = 1;
   }
   for (const d of envCheck.defaulted) decision.reasons.push(`env: ${d.name} not provided; the check ran on its own fallback (line ${d.line})`);
   if (added.length > 0) decision.reasons.push(`patch adds files not in the bundle: ${added.join(", ")} (copied into the candidate check tree)`);
 
-  if (scene) await scene.close();
+  await executor.close?.();
 
-  const report = buildReport(contract, decision, observations);
+  const cost = executor.costReport();
+  cost.runs = cost.checklyCloudRuns + cost.localRuns;
+  cost.wallTimeMs = Date.now() - verifyStartedAt;
+  const report = buildReport(contract, decision, observations, {
+    cost,
+    target: opts.target ?? null,
+    targetRevision: opts.targetRevision ?? null,
+    candidateProject: opts.candidateProject ?? null,
+    candidate: patch.path ?? patch.kind,
+  });
   return {
     contract,
     observations,
@@ -179,7 +222,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     configPolicy,
     envCheck,
     patchedConfig: runConfig,
-    cost: executor.costReport(),
+    cost,
   };
 }
 

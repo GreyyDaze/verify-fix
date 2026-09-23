@@ -1020,7 +1020,8 @@ persistent `live` drift incident needs the original stale check to fail 100%;
 it does not need a meaningless overlap number.
 
 **Real results.** `fixtures/patches/slots-booking-overlap/` contains the 13
-Playwright candidates. `runParallel:false` and one location PASS. Candidates
+Phase 4 candidates plus the Phase 5 per-location-user candidate.
+`runParallel:false`, one location, and per-location users PASS. Candidates
 02–10 and 13 FAILED. Candidate 11 produced mixed repetitions and was
 UNCERTAIN, never PASS. `fixtures/patches/slots-booking-drift/` contains the
 correct rename plus four fakes. The rename PASSed. All four fakes FAILED.
@@ -1028,14 +1029,83 @@ These were run with Chromium against the local `next start` app. A real
 Playwright replay also passed with recorded API responses plus local page
 assets. Vercel was not contacted.
 
+## 9e. The live gate — Phase 5
+
+**Hybrid execution.** `src/executor/hybrid.ts` routes REPRODUCTION and
+DETECTION to the Phase 4 scene proxy. It routes HEALTHY and REGRESSION to
+`src/executor/checkly-cli.ts`. The remote executor builds a clean temporary
+project from dependency metadata plus candidate monitoring files. It invokes
+the customer's own `node_modules/.bin/checkly`. It runs
+`checkly test --record --reporter json --retries 0` once per required
+repetition and configured location. It never changes a deployed monitor. The
+old direct-API executor cannot be selected by
+the `verify` command.
+
+**Remote evidence.** Current Checkly JSON output is a file with
+`testSessionId`, `numChecks`, `runLocation`, and `checks[]`. A completed Pass or
+Fail is evidence. No session id, zero checks, an incomplete report, an unknown
+status, a CLI crash, or any retry is UNCERTAIN. Reports keep every session id
+and result id. Runtime values go only to the CLI child process and a mode-0600
+temporary dotenv file outside the copied project. The file is deleted with the
+sandbox.
+
+**Cheap evidence first.** Static rejection runs before any browser. Candidate
+scenes then run in this order: reproduction, detection, healthy, regression. A
+local mismatch fixes the verdict at FAILED. Missing local evidence fixes it at
+UNCERTAIN. In either case the verifier skips paid cloud work. A mutation that
+is killed by detection also skips its remote healthy run. The decision table
+is unchanged.
+
+**Candidate project.** `--candidate-project <dir>` reads only paths captured in
+the bundle and their relative imports. It does not scan application files,
+`node_modules`, `.next`, dotenv files, or Vercel state. The app source is tested
+through the exact preview named by `--target`. Hybrid mode also requires
+`--target-revision`. It records the commit in both reports. Fixture tests can
+still use `--patch`.
+
+**Regional users.** Local concurrent runs receive the candidate config's
+`CHECKLY_REGION` values. A code repair may map every configured region to one
+stable declared `TEST_USER_<REGION>` variable. Partial mappings, duplicate
+runtime values, hard-coded replacement users, and random users remain failures.
+The values come only from `--env-file` or Checkly.
+
+**CI.** `.github/workflows/gate.yml` starts on a successful Vercel
+`deployment_status`. The preview job accepts only a same-repository PR. It
+checks out the deployment SHA, waits for that exact URL, builds a temporary
+runtime file, then requires hybrid verification exit 0. JSON and Markdown
+reports are uploaded. Protected previews can use Vercel's automation bypass
+secret through a browser header. A protected GitHub environment must approve
+access to account credentials.
+
+The production job accepts only the current `main` commit. It verifies the
+production deployment first. Only then does the workflow run `npx checkly
+deploy --force`. The verify-fix process itself never deploys or provisions
+anything.
+
+**Cost.** Each report contains candidate identity, verdict, Checkly test
+sessions, cloud check runs, local runs, browser processes, mutation runs, total
+runs, per-scene wall time, and total wall time.
+`verify-fix cost-report --reports <dir>` builds a candidate table and totals
+grouped by PASS, FAILED, and UNCERTAIN. It does not guess money because account
+pricing is not captured evidence.
+
+**Local Phase 5 results.** The source check now uses `booking-status`. Real
+Chromium against `next start` gave PASS for the drift repair with 15 browser
+runs. The `runParallel:false` config repair gave PASS with 15 browser runs. The
+strict per-location user repair gave PASS with 20 browser runs after its final
+source change. The Upstash-compatible session-lease app candidate gave PASS
+with 20 browser runs. Candidates 02–10 and 13 all returned FAILED.
+Candidate 11 returned UNCERTAIN. The suite has 114 tests. All pass.
+
 ---
 
 ## 10. Current state
 
-Phases 0–4 are implemented. The tool can capture a real Checkly incident,
-load the generated bundle, run DSL or Playwright checks against a chosen real
-target, shape the four scene modes at the network boundary, grade code and
-config patches, and return PASS/FAILED/UNCERTAIN with exit 0/1/2.
+Phases 0–4 are complete. Phase 5 is implemented and validated locally. The
+tool can capture a real Checkly incident, load the generated bundle, run DSL or
+Playwright checks against a chosen target, split scenes between the local proxy
+and Checkly's cloud CLI, grade code/config/app-preview repairs, and return
+PASS/FAILED/UNCERTAIN with exit 0/1/2.
 
 The repository has two real captured Playwright incidents. The overlap bundle
 has a 20/20 one-at-a-time API baseline and reproduces its 401 in 20/20 browser
@@ -1043,13 +1113,17 @@ pairs. The drift bundle reproduces its stale locator in 20/20 runs. Their
 manifests say `method: local-runner`, so the determinism gate is open without
 pretending the numbers came from Checkly's cloud.
 
-The automated suite has 103 tests. It uses the real local app for the DSL
-suite and a fake project-local Playwright CLI for the browser process boundary.
-The full candidate matrix was also run manually through real Chromium against
-the local app. No production or Vercel request was made in Phase 4.
+The automated suite has 114 tests. It uses the real local app for the DSL
+suite. It uses fake project-local Playwright and Checkly CLIs for process
+boundaries. The Phase 5 candidates were also run manually through real
+Chromium against the local app.
 
-The next work is Phase 5. It adds the live preview/CI loop around the existing
-verdict command. It does not change the decision law.
+The live checkpoint is still open. The user must configure GitHub environment
+approval plus Checkly/Vercel secrets. The corrected drift monitor must then be
+deployed. A fresh overlap incident must be captured after it is green. The
+three real alternatives plus ten fakes must then run through Checkly and
+Vercel. Those actions send real logins and bookings, so they are not run from
+this sandbox.
 
 ---
 

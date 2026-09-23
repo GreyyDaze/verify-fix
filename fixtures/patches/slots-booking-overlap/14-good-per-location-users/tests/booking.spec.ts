@@ -13,7 +13,15 @@ import { test, expect } from '@playwright/test'
 
 // Set by Checkly (check-level environment variable), by `checkly test -e`,
 // or by the shell when running locally. Never hard-code accounts.
-const TEST_USER = process.env.TEST_USER ?? 'demo'
+// GOOD FIX: each stable Checkly location reads its own declared account.
+// No account is generated during a run.
+const TEST_USERS_BY_REGION: Record<string, string | undefined> = {
+  'us-east-1': process.env.TEST_USER_US_EAST_1,
+  'eu-west-1': process.env.TEST_USER_EU_WEST_1,
+}
+const TEST_USER = TEST_USERS_BY_REGION[process.env.CHECKLY_REGION ?? '']
+
+if (!TEST_USER) throw new Error(`No declared test user is configured for region ${process.env.CHECKLY_REGION ?? 'unset'}`)
 
 test.describe('slots booking flow', () => {
   test('log in and book the 09:30 slot', async ({ page }) => {

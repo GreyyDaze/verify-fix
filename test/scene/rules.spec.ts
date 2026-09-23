@@ -3,15 +3,17 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseMode, effectiveConcurrency, needsTarget } from "../../src/scene/modes.ts";
 import { parseCheckConfig, diffCheckConfig, applyConfigPolicy } from "../../src/scene/config-diff.ts";
 import { parseEnvFile, referencedEnvVars, checkEnv } from "../../src/scene/env.ts";
 import { loadBundle } from "../../src/bundle.ts";
-import { loadPatch, patchedConfig, patchedCheckSource, newFiles } from "../../src/patch.ts";
+import { loadCandidateProject, loadPatch, patchedConfig, patchedCheckSource, newFiles } from "../../src/patch.ts";
 import { parseInventory, inventoryDiff } from "../../src/assertion/inventory.ts";
 import { buildContract } from "../../src/contract/contract.ts";
-import { SceneExecutor } from "../../src/executor/scene.ts";
+import { detectEnvScopeDodge, regionalUserEnvKey, SceneExecutor } from "../../src/executor/scene.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const INCIDENT_DIR = join(ROOT, "fixtures/slots-booking/bundle/incidents/slots-booking-overlap");
@@ -105,8 +107,19 @@ describe("environment", () => {
     assert.deepEqual(result.missing.map((m) => m.name), ["API_KEY"]);
     assert.deepEqual(result.defaulted.map((m) => m.name), ["ACCOUNT"]);
     assert.deepEqual(result.undeclared, ["API_KEY"]);
-    assert.equal(checkEnv(`fetch(process.env.ENVIRONMENT_URL)`, {}, []).missing.length, 1, "ENVIRONMENT_URL counts as a reference when nothing provides it");
-    assert.deepEqual(checkEnv(`fetch(process.env.ENVIRONMENT_URL)`, {}, []).undeclared, [], "Checkly's own variables are always declared");
+    assert.equal(checkEnv(`fetch(process.env.ENVIRONMENT_URL)`, {}, []).missing.length, 0, "the executor always provides ENVIRONMENT_URL");
+    assert.deepEqual(checkEnv(`fetch(process.env.CHECKLY_REGION)`, {}, []).undeclared, [], "Checkly's built-in variables are always declared");
+  });
+
+  test("a fixed declared user per Checkly region is allowed; random, undeclared, and partial mappings remain dodges", () => {
+    const original = `const TEST_USER = process.env.TEST_USER ?? 'demo'`;
+    const good = `const USERS = {\n  'us-east-1': process.env.TEST_USER_US_EAST_1,\n  'eu-west-1': process.env.TEST_USER_EU_WEST_1,\n}\nconst TEST_USER = USERS[process.env.CHECKLY_REGION ?? '']`;
+    const context = { locations: ["us-east-1", "eu-west-1"], declaredEnvKeys: ["TEST_USER_US_EAST_1", "TEST_USER_EU_WEST_1"] };
+    assert.equal(regionalUserEnvKey("us-east-1"), "TEST_USER_US_EAST_1");
+    assert.equal(detectEnvScopeDodge(original, good, context), null);
+    assert.match(detectEnvScopeDodge(original, `${good} ?? 'hardcoded-user'`, context) ?? "", /constant changed/);
+    assert.match(detectEnvScopeDodge(original, good, { ...context, declaredEnvKeys: ["TEST_USER_US_EAST_1"] }) ?? "", /constant changed/);
+    assert.match(detectEnvScopeDodge(original, `const TEST_USER = Math.random().toString()`, context) ?? "", /generated at runtime/);
   });
 });
 
@@ -184,5 +197,25 @@ describe("patch sets", () => {
 
     const one = loadPatch(join(PATCH_DIR, "12-good-one-location"), bundle);
     assert.deepEqual(patchedConfig(bundle, one)?.locations, ["us-east-1"]);
+  });
+
+  test("candidate-project reads captured monitoring paths but not app output or dependencies", () => {
+    const bundle = loadBundle(join(ROOT, "fixtures/bundles/slots-booking-drift")).bundle;
+    const patch = loadCandidateProject(join(ROOT, "examples/slots-booking/web"), bundle);
+    assert.equal(patch.kind, "candidate-project");
+    assert.match(patchedCheckSource(bundle, patch), /booking-status/);
+    assert.ok(Object.keys(patch.files).includes("checkly.config.ts"));
+    assert.ok(!Object.keys(patch.files).some((path) => path.startsWith("app/") || path.startsWith("node_modules/") || path.startsWith(".next/")));
+  });
+
+  test("candidate-project follows real relative imports but ignores imports inside comments", () => {
+    const root = mkdtempSync(join(tmpdir(), "verify-fix-candidate-"));
+    mkdirSync(join(root, "tests"), { recursive: true });
+    writeFileSync(join(root, "tests", "main.spec.ts"), `// import './missing-secret'\nimport { value } from './helper'\nvoid value\n`);
+    writeFileSync(join(root, "tests", "helper.ts"), "export const value = 1\n");
+    const base = loadBundle(join(ROOT, "fixtures/bundles/slots-booking-drift")).bundle;
+    const bundle = { ...base, check: { ...base.check, file: "tests/main.spec.ts" }, checkSource: "original", files: { "tests/main.spec.ts": "original" }, configFile: null };
+    const patch = loadCandidateProject(root, bundle);
+    assert.deepEqual(Object.keys(patch.files).sort(), ["tests/helper.ts", "tests/main.spec.ts"]);
   });
 });

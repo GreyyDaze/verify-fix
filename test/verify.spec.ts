@@ -303,6 +303,30 @@ describe("scene executor: hitless / exhausted / crashed runs are uncertain, neve
 // ───────────────────────── static engine + heuristics ─────────────────────────
 
 describe("static engine", () => {
+  test("an undeclared environment variable is FAILED before any run", async () => {
+    const { bundle } = loadBundle(INCIDENT_DIR);
+    const source = `${bundle.checkSource}\nconst verifyFixUndeclared = process.env.NOT_DECLARED; void verifyFixUndeclared;`;
+    const result = await verify({ bundle, patch: source, target: app.url, env: { ...ENV, NOT_DECLARED: "value" } });
+    assert.equal(result.decision.verdict, "FAILED");
+    assert.equal(result.decision.exitCode, 1);
+    assert.deepEqual(result.envCheck.undeclared, ["NOT_DECLARED"]);
+    assert.equal(result.cost.runs, 0, "static rejection avoids local and cloud runs");
+  });
+
+  test("duplicate regional user values are FAILED before any run", async () => {
+    const { bundle } = loadBundle(REAL_BUNDLE_DIR);
+    const patch = loadPatch(join(ROOT, "fixtures/patches/slots-booking-overlap/14-good-per-location-users"), bundle);
+    const result = await verify({
+      bundle,
+      patch,
+      target: app.url,
+      env: { TEST_USER: "demo", TEST_USER_US_EAST_1: "same-user", TEST_USER_EU_WEST_1: "same-user" },
+    });
+    assert.equal(result.decision.verdict, "FAILED");
+    assert.match(result.envDodge ?? "", /same value/);
+    assert.equal(result.cost.runs, 0);
+  });
+
   test("env-scope dodge: reusing the same account in more requests is not a dodge; generating one is", () => {
     const { bundle } = loadBundle(INCIDENT_DIR);
     assert.equal(detectEnvScopeDodge(bundle.checkSource, readFileSync(join(PATCH_DIR, "01-good-run-parallel-false", "booking.check.ts"), "utf8")), null);
@@ -401,6 +425,11 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
     }
     assert.ok(a.mutants.length > 0);
     assert.ok(a.mutants.every((m) => !m.survived), "every seeded mutant is killed by the verifier");
+    assert.ok(a.cost.localRuns > 0);
+    assert.equal(a.cost.browserProcesses, 0, "the seeded DSL suite starts no browser process");
+    assert.ok(a.cost.wallTimeMs > 0);
+    assert.match(a.report.markdown, /\*\*Cost:\*\*/);
+    assert.deepEqual(a.report.json.cost, a.cost);
 
     const b = await run("01-good-run-parallel-false");
     assert.deepEqual(b.decision.rows, a.decision.rows, "deterministic scenes: identical evidence on re-run");
@@ -414,7 +443,9 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
     const overlap = r.observations.get("scene-a-overlap")!;
     assert.equal(overlap.observed, "fail");
     assert.ok(overlap.trace.some((t) => t.what === "run 1/2: fetch POST /api/book → 401"));
-    assert.equal(r.observations.get("scene-b-single-run")!.observed, "pass");
+    assert.equal(r.observations.has("scene-b-single-run"), false, "a conclusive reproduction mismatch stops later paid/healthy work");
+    assert.equal(r.cost.localRuns, 6, "three overlap repetitions run two local checks each");
+    assert.equal(r.cost.browserProcesses, 0, "the seeded DSL suite starts no browser process");
   });
 
   for (const seed of SEEDED.filter((s) => s.exit !== 0)) {
@@ -472,6 +503,17 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
     assert.match(result.stdout, /\| experiment \| environment \| oracle \|/);
     assert.match(result.stdout, /\| scene-c-auth-failure \| target 127\.0\.0\.1:\d+ \+ inject POST \/api\/book -> 401 \| [^|]+ \| fail \| fail \| ✓ \|/);
     assert.match(result.stdout, /Live rows ran against 127\.0\.0\.1:\d+/);
+  });
+
+  test("CLI: the retired direct-API executor cannot be selected", async () => {
+    const result = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
+      const child = spawn(process.execPath, ["--no-warnings", join(ROOT, "src/cli.ts"), "verify", "--patch", join(PATCH_DIR, "01-good-run-parallel-false"), "--bundle", INCIDENT_DIR, "--executor", "checkly"], { cwd: ROOT });
+      let stderr = "";
+      child.stderr.on("data", (d) => (stderr += String(d)));
+      child.on("close", (code) => resolve({ code, stderr }));
+    });
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /--executor must be scene or hybrid/);
   });
 
   test("CLI: without --target the verdict is UNCERTAIN (exit 2), never PASS", async () => {

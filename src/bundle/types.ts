@@ -140,6 +140,18 @@ export interface ManifestV3 {
     repairRecommendation: string | null;
     provider: string;
     model: string;
+    /**
+     * Rocky analyzes only the FIRST failure of an error group. Checkly groups
+     * by a cleaned message, so a later, different failure (e.g. "element not
+     * found" after a UI change) can land in an older group and inherit an RCA
+     * that describes another incident. Both fields are arithmetic/string
+     * checks, recorded so the reader knows how much the RCA is worth here.
+     */
+    createdBeforeFailingRun: boolean | null;
+    /** true = the group's first "Received" matches this run's; false = it differs; null = not comparable */
+    groupErrorMatchesFailingRun: boolean | null;
+    /** the RCA this one replaced when `--trigger-rca` requested a fresh analysis */
+    replaced: { id: string; createdAt: string; classification: string } | null;
   } | null;
   errorGroup: { id: string; cleanedErrorMessage: string; firstSeen: string; lastSeen: string } | null;
   reproduction: {

@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { buildBundle, assertNoSecretLeak, collectProjectSources } from "../../src/bundle/build.ts";
 import { loadBundle } from "../../src/bundle.ts";
 import type { ChecklyClient } from "../../src/checkly/client.ts";
-import type { AssetManifest, CheckResult, CheckResultSummary, ErrorGroup } from "../../src/checkly/types.ts";
+import type { AssetManifest, CheckResult, CheckResultSummary, ErrorGroup, RootCauseAnalysis } from "../../src/checkly/types.ts";
 import { fakeTraceZip } from "../helpers/fake-trace.ts";
 import { writeZip } from "../helpers/zip-writer.ts";
 import { CHECK } from "../helpers/fixtures.ts";
@@ -49,7 +49,7 @@ function passingTrace() {
 }
 
 /** A stand-in for ChecklyClient with the same method surface, no network. */
-function fakeClient(opts: { archive?: boolean } = {}) {
+function fakeClient(opts: { archive?: boolean; drift?: boolean } = {}) {
   const downloads: string[] = [];
   const failingZip = failingTrace();
   const passingZip = passingTrace();
@@ -64,7 +64,10 @@ function fakeClient(opts: { archive?: boolean } = {}) {
     },
     async getResult(_checkId: string, id: string): Promise<CheckResult> {
       const s = HISTORY.find((h) => h.id === id)!;
-      return { ...s, playwrightCheckResult: { errors: s.hasFailures ? ["tests/booking.spec.ts:19:3 › slots booking flow › log in and book the 09:30 slot"] : [] } };
+      const msg = opts.drift
+        ? 'Error: expect(locator).toHaveText(expected) failed\n\nLocator:  getByTestId(\'book-status\')\nExpected: "200"\nReceived: <element(s) not found>\nTimeout:  10000ms'
+        : "tests/booking.spec.ts:19:3 › slots booking flow › log in and book the 09:30 slot";
+      return { ...s, playwrightCheckResult: { errors: s.hasFailures ? [msg] : [] } };
     },
     async getAssets(_checkId: string, id: string): Promise<AssetManifest> {
       if (id === "r-fail" && opts.archive) return { assets: [{ type: "trace", name: "booking-trace.zip", url: "https://s3.example/archive.zip?sig=1", source: "playwright", archive: { entryName: "traces/booking-trace.zip" } }] };
@@ -101,11 +104,21 @@ function fakeClient(opts: { archive?: boolean } = {}) {
     async errorGroupsForCheck() {
       return [];
     },
+    triggered: 0,
     async triggerRca() {
+      client.triggered += 1;
       return { id: "rca-x" };
     },
-    async waitForRca() {
-      return null;
+    async waitForRca(id: string): Promise<RootCauseAnalysis | null> {
+      if (!opts.drift) return null;
+      return {
+        id,
+        created_at: "2026-09-21T12:00:30Z",
+        analysis: { classification: "CHECK_ERROR", rootCause: "The element with data-testid book-status no longer exists; the page now renders booking-status.", userImpact: "none", codeFix: "await expect(page.getByTestId('booking-status')).toHaveText('200')", evidence: [], referenceLinks: null, repairRecommendation: "REPAIR" },
+        provider: "openai",
+        model: "gpt",
+        durationMs: 1,
+      };
     },
   };
   return { client: client as unknown as ChecklyClient, downloads };
@@ -190,6 +203,30 @@ test("bundle: --result selects the incident; healthy history yields a baseline b
     const chosen = await buildBundle({ checkId: CHECK.id, outDir: join(out, "b"), resultId: "r-fail" }, { client, accountId: "a" });
     assert.equal(chosen.manifest.results.failing?.id, "r-fail");
     assert.equal(chosen.manifest.results.passing?.id, "r-pass-2", "passing = newest passing run before the incident");
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test("bundle: a stale RCA (group's first failure ≠ this run's) is flagged; --trigger-rca replaces it and keeps both", async () => {
+  const out = mkdtempSync(join(tmpdir(), "vf-bundle-"));
+  try {
+    const { client } = fakeClient({ drift: true });
+    const flagged = await buildBundle({ checkId: CHECK.id, outDir: join(out, "a") }, { client, accountId: "a" });
+    assert.equal(flagged.manifest.rca?.id, "rca-1");
+    assert.equal(flagged.manifest.rca?.groupErrorMatchesFailingRun, false);
+    assert.ok(flagged.warnings.some((w) => /describes the group's first failure, not this run's/.test(w)), flagged.warnings.join("\n"));
+    assert.equal((client as unknown as { triggered: number }).triggered, 0);
+
+    const fresh = await buildBundle({ checkId: CHECK.id, outDir: join(out, "b"), triggerRca: true }, { client, accountId: "a" });
+    assert.equal((client as unknown as { triggered: number }).triggered, 1);
+    assert.equal(fresh.manifest.rca?.id, "rca-x");
+    assert.equal(fresh.manifest.rca?.classification, "CHECK_ERROR");
+    assert.match(fresh.manifest.rca?.codeFix ?? "", /booking-status/);
+    assert.deepEqual(fresh.manifest.rca?.replaced, { id: "rca-1", createdAt: "2026-09-21T10:01:00Z", classification: "Check configuration" });
+    const rcaFile = JSON.parse(readFileSync(join(out, "b/rca.json"), "utf8"));
+    assert.equal(rcaFile.rca.id, "rca-x");
+    assert.equal(rcaFile.replacedRca.id, "rca-1");
   } finally {
     rmSync(out, { recursive: true, force: true });
   }

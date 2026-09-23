@@ -92,6 +92,8 @@ function usage(): string {
     "      Captures an incident from Checkly into a bundle: check config, sources, failing + last passing",
     "      run (traces → HAR), error group, Rocky RCA, scenes with provenance. Credentials: CHECKLY_API_KEY +",
     "      CHECKLY_ACCOUNT_ID, or the login saved by `npx checkly login`. Secrets are never written.",
+    "      --trigger-rca asks Rocky for a fresh analysis when the group has none, or when its RCA describes",
+    "      an earlier, different failure of the same group (Rocky analyzes only a group's first failure).",
     "",
     "  verify-fix verify --patch <file> --bundle <incidents/<id>> [--executor synthetic|checkly] [--dry-run] [--json] [--verbose]",
     "      Grades a candidate fix against a bundle.",

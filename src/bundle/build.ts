@@ -20,7 +20,7 @@ import type { AssetManifestEntry, ChecklyCheck, CheckResult, CheckResultSummary,
 import { isZip, openZip } from "../trace/zip.ts";
 import { mergeHars, traceZipToHar, type BodyPolicy, type TraceExtract } from "../trace/trace-to-har.ts";
 import { sanitizeHar } from "./sanitize.ts";
-import { buildManifest, findOverlappingRuns, type FetchedResult } from "./manifest.ts";
+import { buildManifest, expectedReceived, findOverlappingRuns, groupErrorMatches, resultErrors, type FetchedResult } from "./manifest.ts";
 import { measureDeterminism, type MeasureResult, type Runner } from "./measure.ts";
 import type { ManifestV3 } from "./types.ts";
 
@@ -354,6 +354,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   // 4. error group + RCA
   let errorGroup: ErrorGroup | null = null;
   let rca: RootCauseAnalysis | null = null;
+  let replacedRca: RootCauseAnalysis | null = null;
   if (failing) {
     const ids = failing.summary.errorGroupIds ?? failing.detail?.errorGroupIds ?? [];
     try {
@@ -369,20 +370,32 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     if (errorGroup) {
       const analyses = [...(errorGroup.rootCauseAnalyses ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at));
       rca = analyses[0] ?? null;
-      if (!rca && opts.triggerRca) {
+      // Rocky analyzes only the first failure of a group. When the captured
+      // run's "Received" differs from the group's first failure, the existing
+      // RCA is about another incident (seen live: a UI rename landed in the
+      // 401 group). Then --trigger-rca asks for a fresh analysis.
+      const matches = groupErrorMatches(errorGroup.cleanedErrorMessage, resultErrors(failing.detail));
+      const stale = rca !== null && matches === false;
+      if (stale) log(`[bundle] RCA ${rca!.id} predates a different failure in this group (group first received ${expectedReceived(errorGroup.cleanedErrorMessage).received}, this run received ${expectedReceived(resultErrors(failing.detail).find((e) => /Received/i.test(e)) ?? null).received})`);
+      if ((!rca || stale) && opts.triggerRca) {
         try {
           log(`[bundle] triggering Rocky RCA for error group ${errorGroup.id} …`);
           const { id } = await client.triggerRca(errorGroup.id);
-          rca = await client.waitForRca(id);
-          if (!rca) warnings.push(`RCA ${id} did not finish within the wait window; re-run bundle later to include it`);
+          const fresh = await client.waitForRca(id);
+          if (fresh) {
+            if (rca) replacedRca = rca;
+            rca = fresh;
+          } else warnings.push(`RCA ${id} did not finish within the wait window; re-run bundle later to include it`);
         } catch (err) {
           warnings.push(`RCA trigger failed (${(err as Error).message})`);
         }
       } else if (!rca) {
         warnings.push("no Rocky RCA on this error group yet (enable Auto Analysis in Checkly, or pass --trigger-rca)");
+      } else if (stale) {
+        warnings.push(`RCA ${rca.id} describes the group's first failure, not this run's — pass --trigger-rca to request a fresh analysis`);
       }
     }
-    log(`[bundle] errorGroup=${errorGroup?.id ?? "none"} rca=${rca?.id ?? "none"}${rca ? ` (${rca.analysis.classification})` : ""}`);
+    log(`[bundle] errorGroup=${errorGroup?.id ?? "none"} rca=${rca?.id ?? "none"}${rca ? ` (${rca.analysis.classification})` : ""}${replacedRca ? ` replaces ${replacedRca.id} (${replacedRca.analysis.classification})` : ""}`);
   }
 
   // 5. sources
@@ -416,6 +429,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     check,
     failing,
     passing,
+    replacedRca,
     errorGroup,
     rca,
     history,
@@ -442,7 +456,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   if (passing?.extract) files.push({ file: "recordings/passing.actions.json", text: JSON.stringify(passing.extract.actions.map(({ params: _p, ...a }) => a), null, 1) + "\n" });
   if (failing) files.push({ file: "results/failing.json", text: JSON.stringify(trimmedResult(failing.detail) ?? failing.summary, null, 2) + "\n" });
   if (passing) files.push({ file: "results/passing.json", text: JSON.stringify(trimmedResult(passing.detail) ?? passing.summary, null, 2) + "\n" });
-  if (rca || errorGroup) files.push({ file: "rca.json", text: JSON.stringify({ errorGroup: manifest.errorGroup, rca }, null, 2) + "\n" });
+  if (rca || errorGroup) files.push({ file: "rca.json", text: JSON.stringify({ errorGroup: manifest.errorGroup, rca, ...(replacedRca ? { replacedRca } : {}) }, null, 2) + "\n" });
   // the result window the decisions were made from (ids + timestamps only), so
   // the overlap evidence and the pass rate can be re-checked offline
   files.push({

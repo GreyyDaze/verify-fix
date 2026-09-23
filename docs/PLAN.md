@@ -46,6 +46,16 @@ When the RCA text and the timestamps disagree, the manifest says so in
 `notes` and follows the timestamps. Rocky's classification and
 `repairRecommendation` are recorded, never followed blindly.
 
+Is the RCA even about this failure? Seen live on 2026-09-23: after the UI
+rename, the `element(s) not found` failures were attributed to the existing
+401 error group (Checkly's grouping drops the Expected/Received values), so no
+new error group appeared, no automatic RCA ran, and the drift inherited
+`INFRASTRUCTURE_ERROR / DO_NOT_REPAIR` from two days earlier. The bundle now
+records `rca.createdBeforeFailingRun` and `rca.groupErrorMatchesFailingRun`
+(the group's first "Received" vs this run's), warns when they disagree, and
+`--trigger-rca` then requests a fresh analysis and keeps the old one as
+`rca.replaced` / `rca.json#replacedRca`.
+
 Rules that do not change between phases (see BRAINSTORM.md Part 7, D1–D9):
 no LLM in the decision path; the decision table is law; credentials only via
 the customer's environment; the tool never provisions environments and never

@@ -146,6 +146,10 @@ test("golden (real bundle): the captured incident is the booking 401 at spec lin
   // Rocky's verdict is recorded, never followed blindly
   assert.equal(m.rca?.classification, "INFRASTRUCTURE_ERROR");
   assert.equal(m.rca?.repairRecommendation, "DO_NOT_REPAIR");
+  // the group's first failure and this run both received "401" → the RCA is about this failure
+  assert.equal(m.rca?.groupErrorMatchesFailingRun, true);
+  assert.equal(m.rca?.createdBeforeFailingRun, true, "Rocky analyzed the first 401 two days before this run");
+  assert.equal(m.notes.some((n) => /merges different failures/.test(n)), false);
   assert.equal(resultErrors(passingResult).length, 0);
 });
 

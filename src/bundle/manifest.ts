@@ -25,6 +25,8 @@ export interface ManifestInputs {
   passing: FetchedResult | null;
   errorGroup: ErrorGroup | null;
   rca: RootCauseAnalysis | null;
+  /** the group's earlier RCA when `--trigger-rca` replaced it with a fresh one */
+  replacedRca?: RootCauseAnalysis | null;
   history: CheckResultSummary[];
   sources: Array<{ path: string; content: string }>;
   mainSource: string | null;
@@ -199,6 +201,35 @@ export function detectFailurePoint(
   }
   if (!action && !request) return null;
   return { action, request, assertion };
+}
+
+/**
+ * "Expected: X" / "Received: Y" as written by Playwright's expect (and by
+ * Checkly's cleaned copy, which reads "Expected string: X"). Used to tell
+ * whether an error group's first failure is the same failure as the captured
+ * run — Checkly's grouping drops these values, so two different failures of
+ * one assertion share a group.
+ */
+export function expectedReceived(text: string | null | undefined): { expected: string | null; received: string | null } {
+  if (!text) return { expected: null, received: null };
+  // Playwright prints one label per line; Checkly's cleaned copy joins the
+  // lines with spaces. The value ends at the next label or at the line end.
+  const value = (label: string): string | null => {
+    const re = new RegExp(`(?:^|\\s)${label}(?: string| pattern| substring)?:\\s*([\\s\\S]*?)(?=\\s+(?:Expected|Received|Timeout|Locator|Call log|Error)(?: string| pattern| substring)?:|\\r?\\n|$)`, "i");
+    const m = text.match(re);
+    if (!m) return null;
+    const v = m[1].trim().replace(/\s+/g, " ");
+    return v.length ? v : null;
+  };
+  return { expected: value("Expected"), received: value("Received") };
+}
+
+/** Does the error group's first failure look like this run's failure? null when either side has no "Received". */
+export function groupErrorMatches(groupMessage: string | null | undefined, runErrors: string[]): boolean | null {
+  const g = expectedReceived(groupMessage);
+  const r = expectedReceived(runErrors.find((e) => /Received/i.test(e)) ?? null);
+  if (g.received === null || r.received === null) return null;
+  return g.received === r.received && (g.expected === null || r.expected === null || g.expected === r.expected);
 }
 
 /**
@@ -414,6 +445,23 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
     });
   }
 
+  // ---- is the RCA about THIS failure? ----
+  const failingErrorsForRca = resultErrors(failing?.detail ?? null);
+  const rcaCreatedBefore = rca && failing ? Date.parse(rca.created_at) < Date.parse(failing.summary.startedAt) : null;
+  const groupMatches = errorGroup && failing ? groupErrorMatches(errorGroup.cleanedErrorMessage, failingErrorsForRca) : null;
+  if (rca && errorGroup && failing && groupMatches === false) {
+    const g = expectedReceived(errorGroup.cleanedErrorMessage);
+    const r = expectedReceived(failingErrorsForRca.find((e) => /Received/i.test(e)) ?? null);
+    notes.push(
+      `error group ${errorGroup.id} merges different failures: its first failure received ${g.received}, the captured run received ${r.received}. ` +
+        `Rocky analyzes only the first failure of a group, so RCA ${rca.id} (${rca.created_at}${rcaCreatedBefore ? ", before this run" : ""}) describes the earlier failure, not this one` +
+        (input.replacedRca ? "" : " — pass --trigger-rca to request a fresh analysis"),
+    );
+  }
+  if (input.replacedRca && rca) {
+    notes.push(`RCA ${rca.id} was requested by verify-fix bundle (--trigger-rca) because the group's earlier RCA ${input.replacedRca.id} (${input.replacedRca.analysis.classification}) described a different failure; both are kept in rca.json`);
+  }
+
   // ---- scenes ----
   const scenes: SceneV3[] = [];
   const failingId = failing?.summary.id ?? null;
@@ -584,6 +632,9 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
       ? {
           id: rca.id,
           createdAt: rca.created_at,
+          createdBeforeFailingRun: rcaCreatedBefore,
+          groupErrorMatchesFailingRun: groupMatches,
+          replaced: input.replacedRca ? { id: input.replacedRca.id, createdAt: input.replacedRca.created_at, classification: input.replacedRca.analysis.classification } : null,
           classification: rca.analysis.classification,
           rootCause: rca.analysis.rootCause,
           userImpact: rca.analysis.userImpact,

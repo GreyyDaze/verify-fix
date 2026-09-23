@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { buildManifest, detectFailurePoint, detectTargetResolution, findOverlappingRuns, resultErrors, summarizeErrorMessage, specLocation, type ManifestInputs } from "../../src/bundle/manifest.ts";
+import { buildManifest, detectFailurePoint, detectTargetResolution, expectedReceived, findOverlappingRuns, groupErrorMatches, resultErrors, summarizeErrorMessage, specLocation, type ManifestInputs } from "../../src/bundle/manifest.ts";
 import { classifyRca } from "../../src/bundle/rca-mode.ts";
 import { traceZipToHar } from "../../src/trace/trace-to-har.ts";
 import { fakeTraceZip } from "../helpers/fake-trace.ts";
@@ -290,6 +290,52 @@ test("manifest: Rocky guardrails (intent, aiAutoRepairEnabled) are recorded as e
   });
   // still no env var value anywhere
   assert.equal(JSON.stringify(m).includes("demo-account-value"), false);
+});
+
+const DRIFT_MESSAGE = REAL_MESSAGE.replace('Received: "401"', "Received: <element(s) not found>");
+const DRIFT_RESULT_ERROR = { ...REAL_RESULT_ERROR, error: { message: DRIFT_MESSAGE, stack: DRIFT_MESSAGE } };
+
+test("expected/received: Playwright and Checkly-cleaned shapes parse; a group matches a run only when Received agrees", () => {
+  assert.deepEqual(expectedReceived(REAL_MESSAGE), { expected: '"200"', received: '"401"' });
+  assert.deepEqual(expectedReceived(DRIFT_MESSAGE), { expected: '"200"', received: "<element(s) not found>" });
+  assert.deepEqual(expectedReceived(ERROR_GROUP.cleanedErrorMessage), { expected: '"200"', received: '"401"' });
+  assert.deepEqual(expectedReceived("Error: page.goto: net::ERR_NAME_NOT_RESOLVED"), { expected: null, received: null });
+  // Checkly's cleaned message is one line: the value must stop at the next label
+  const ONE_LINE = `Error: expect(locator).toHaveText(expected) failed Locator: getByTestId('book-status') Expected: "200" Received: "401" Timeout: 10000ms Call log: - Expect "toHaveText"`;
+  assert.deepEqual(expectedReceived(ONE_LINE), { expected: '"200"', received: '"401"' });
+  assert.equal(groupErrorMatches(ONE_LINE, [REAL_MESSAGE]), true);
+  assert.equal(groupErrorMatches(ONE_LINE, [DRIFT_MESSAGE]), false);
+  assert.equal(groupErrorMatches(ERROR_GROUP.cleanedErrorMessage, [REAL_MESSAGE]), true);
+  assert.equal(groupErrorMatches(ERROR_GROUP.cleanedErrorMessage, [DRIFT_MESSAGE]), false);
+  assert.equal(groupErrorMatches("Error: timeout", [DRIFT_MESSAGE]), null, "no Received on the group side → not comparable");
+  assert.equal(groupErrorMatches(ERROR_GROUP.cleanedErrorMessage, ["tests/booking.spec.ts:19:3 › suite › test"]), null);
+});
+
+test("manifest: an RCA that predates a different failure in the same group is flagged, not trusted", () => {
+  // Seen live on 2026-09-23: the UI rename ("element(s) not found") was grouped
+  // with the 401 incident, so no new RCA ran and the drift inherited
+  // INFRASTRUCTURE_ERROR / DO_NOT_REPAIR from two days earlier.
+  const history = [
+    summary("d-fail", false, "2026-09-23T13:40:00Z", "eu-west-1", "2026-09-23T13:40:18Z"),
+    summary("d-pass", true, "2026-09-23T13:35:00Z", "eu-west-1", "2026-09-23T13:35:10Z"),
+  ];
+  const oldRca: RootCauseAnalysis = { ...RCA_RACE, id: "rca-old", created_at: "2026-09-21T16:20:00Z", analysis: { ...RCA_RACE.analysis, classification: "INFRASTRUCTURE_ERROR", repairRecommendation: "DO_NOT_REPAIR" } };
+  const m = buildManifest(inputs({ history, rca: oldRca, failing: { summary: history[0], detail: { ...history[0], errors: [DRIFT_RESULT_ERROR] }, extract: failingExtract() }, passing: { summary: history[1], detail: null, extract: passingExtract() } }));
+  assert.equal(m.rca?.createdBeforeFailingRun, true);
+  assert.equal(m.rca?.groupErrorMatchesFailingRun, false);
+  assert.equal(m.rca?.replaced, null);
+  assert.ok(m.notes.some((n) => /merges different failures/.test(n) && /received "401"/.test(n) && /received <element\(s\) not found>/.test(n) && /--trigger-rca/.test(n)), m.notes.join("\n"));
+  // the same run in a group whose first failure IS this failure → fine
+  const same = buildManifest(inputs({ history, rca: oldRca, failing: { summary: history[0], detail: { ...history[0], errors: [REAL_RESULT_ERROR] }, extract: failingExtract() }, passing: { summary: history[1], detail: null, extract: passingExtract() } }));
+  assert.equal(same.rca?.groupErrorMatchesFailingRun, true);
+  assert.equal(same.notes.some((n) => /merges different failures/.test(n)), false);
+  // a fresh RCA that replaced the old one is recorded with its predecessor
+  const fresh: RootCauseAnalysis = { ...oldRca, id: "rca-fresh", created_at: "2026-09-23T13:45:00Z", analysis: { ...oldRca.analysis, classification: "CHECK_ERROR", codeFix: "page.getByTestId('booking-status')", repairRecommendation: "REPAIR" } };
+  const replaced = buildManifest(inputs({ history, rca: fresh, replacedRca: oldRca, failing: { summary: history[0], detail: { ...history[0], errors: [DRIFT_RESULT_ERROR] }, extract: failingExtract() }, passing: { summary: history[1], detail: null, extract: passingExtract() } }));
+  assert.deepEqual(replaced.rca?.replaced, { id: "rca-old", createdAt: "2026-09-21T16:20:00Z", classification: "INFRASTRUCTURE_ERROR" });
+  assert.equal(replaced.rca?.createdBeforeFailingRun, false);
+  assert.equal(replaced.rca?.codeFix, "page.getByTestId('booking-status')");
+  assert.ok(replaced.notes.some((n) => /requested by verify-fix bundle \(--trigger-rca\)/.test(n) && /rca-old/.test(n)), replaced.notes.join("\n"));
 });
 
 test("manifest: real Playwright result shape → error text, failing test, spec line, assertion id, readable title", () => {

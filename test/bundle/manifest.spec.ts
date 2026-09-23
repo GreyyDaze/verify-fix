@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { buildManifest, detectFailurePoint, detectTargetResolution, expectedReceived, findOverlappingRuns, groupErrorMatches, rcaIsStale, rcaMentionsReceived, resultErrors, summarizeErrorMessage, specLocation, type ManifestInputs } from "../../src/bundle/manifest.ts";
+import { buildManifest, detectFailurePoint, detectTargetResolution, expectedReceived, failingTestOf, findOverlappingRuns, groupErrorMatches, rcaIsStale, rcaMentionsReceived, resultErrors, runOutcome, summarizeErrorMessage, specLocation, type ManifestInputs } from "../../src/bundle/manifest.ts";
 import { classifyRca } from "../../src/bundle/rca-mode.ts";
 import { traceZipToHar } from "../../src/trace/trace-to-har.ts";
 import { fakeTraceZip } from "../helpers/fake-trace.ts";
@@ -292,17 +292,25 @@ test("manifest: Rocky guardrails (intent, aiAutoRepairEnabled) are recorded as e
   assert.equal(JSON.stringify(m).includes("demo-account-value"), false);
 });
 
-const DRIFT_MESSAGE = REAL_MESSAGE.replace('Received: "401"', "Received: <element(s) not found>");
+// Playwright 1.63, locator matched nothing: no "Received:" line at all — the outcome is an "Error:" line under Timeout (copied from the live drift capture)
+const DRIFT_MESSAGE = REAL_MESSAGE.replace('Received: "401"\nTimeout:  10000ms', 'Timeout: 10000ms\nError: element(s) not found');
+// older Playwright wording, kept so both shapes parse
+const DRIFT_MESSAGE_LEGACY = REAL_MESSAGE.replace('Received: "401"', "Received: <element(s) not found>");
 const DRIFT_RESULT_ERROR = { ...REAL_RESULT_ERROR, error: { message: DRIFT_MESSAGE, stack: DRIFT_MESSAGE } };
 
 test("expected/received: Playwright and Checkly-cleaned shapes parse; a group matches a run only when Received agrees", () => {
   assert.deepEqual(expectedReceived(REAL_MESSAGE), { expected: '"200"', received: '"401"' });
-  assert.deepEqual(expectedReceived(DRIFT_MESSAGE), { expected: '"200"', received: "<element(s) not found>" });
+  assert.ok(/Timeout: 10000ms\nError: element\(s\) not found/.test(DRIFT_MESSAGE), "fixture message has the live shape");
+  assert.deepEqual(expectedReceived(DRIFT_MESSAGE), { expected: '"200"', received: "element(s) not found" });
+  assert.deepEqual(expectedReceived(DRIFT_MESSAGE_LEGACY), { expected: '"200"', received: "<element(s) not found>" });
+  assert.deepEqual(runOutcome(["tests/booking.spec.ts:19:3 › suite › test", DRIFT_MESSAGE]), { expected: '"200"', received: "element(s) not found" });
   assert.deepEqual(expectedReceived(ERROR_GROUP.cleanedErrorMessage), { expected: '"200"', received: '"401"' });
   assert.deepEqual(expectedReceived("Error: page.goto: net::ERR_NAME_NOT_RESOLVED"), { expected: null, received: null });
   // Checkly's cleaned message is one line: the value must stop at the next label
   const ONE_LINE = `Error: expect(locator).toHaveText(expected) failed Locator: getByTestId('book-status') Expected: "200" Received: "401" Timeout: 10000ms Call log: - Expect "toHaveText"`;
   assert.deepEqual(expectedReceived(ONE_LINE), { expected: '"200"', received: '"401"' });
+  const ONE_LINE_DRIFT = `Error: expect(locator).toHaveText(expected) failed Locator: getByTestId('book-status') Expected: "200" Timeout: 10000ms Error: element(s) not found Call log: - Expect "toHaveText"`;
+  assert.deepEqual(expectedReceived(ONE_LINE_DRIFT), { expected: '"200"', received: "element(s) not found" });
   assert.equal(groupErrorMatches(ONE_LINE, [REAL_MESSAGE]), true);
   assert.equal(groupErrorMatches(ONE_LINE, [DRIFT_MESSAGE]), false);
   assert.equal(groupErrorMatches(ERROR_GROUP.cleanedErrorMessage, [REAL_MESSAGE]), true);
@@ -345,14 +353,14 @@ test("manifest: an RCA that predates a different failure in the same group is fl
   assert.equal(m.rca?.createdBeforeFailingRun, true);
   assert.equal(m.rca?.groupErrorMatchesFailingRun, false);
   assert.equal(m.rca?.replaced, null);
-  assert.ok(m.notes.some((n) => /merges different failures/.test(n) && /received "401"/.test(n) && /received <element\(s\) not found>/.test(n) && /--trigger-rca/.test(n)), m.notes.join("\n"));
+  assert.ok(m.notes.some((n) => /merges different failures/.test(n) && /received "401"/.test(n) && /received element\(s\) not found/.test(n) && /--trigger-rca/.test(n)), m.notes.join("\n"));
   assert.equal(m.rca?.describesFailingRun, false);
   // the two incidents must not share an incident id even though Checkly gave them one group
   const overlapId = buildManifest(inputs({ history, rca: oldRca, failing: { summary: history[0], detail: { ...history[0], errors: [REAL_RESULT_ERROR] }, extract: failingExtract() }, passing: { summary: history[1], detail: null, extract: passingExtract() } })).incidentId;
   assert.notEqual(m.incidentId, overlapId);
   assert.match(m.incidentId, /^slots-booking-monitoring-[0-9a-f]{6}$/);
   // same group, but Checkly updated the group message to the new failure → signal 2 (old RCA never mentions "element(s) not found") still flags it
-  const updatedGroup = { ...ERROR_GROUP, cleanedErrorMessage: ERROR_GROUP.cleanedErrorMessage.replace('Received string: "401"', "Received string: <element(s) not found>") };
+  const updatedGroup = { ...ERROR_GROUP, cleanedErrorMessage: ERROR_GROUP.cleanedErrorMessage.replace('Received string: "401"', "Timeout: 10000ms\nError: element(s) not found") };
   const viaText = buildManifest(inputs({ history, rca: oldRca, errorGroup: updatedGroup, failing: { summary: history[0], detail: { ...history[0], errors: [DRIFT_RESULT_ERROR] }, extract: failingExtract() }, passing: { summary: history[1], detail: null, extract: passingExtract() } }));
   assert.equal(viaText.rca?.groupErrorMatchesFailingRun, true);
   assert.equal(viaText.rca?.mentionsFailingRunReceived, false);
@@ -370,6 +378,15 @@ test("manifest: an RCA that predates a different failure in the same group is fl
   assert.equal(replaced.rca?.createdBeforeFailingRun, false);
   assert.equal(replaced.rca?.codeFix, "page.getByTestId('booking-status')");
   assert.ok(replaced.notes.some((n) => /requested by verify-fix bundle \(--trigger-rca\)/.test(n) && /rca-old/.test(n)), replaced.notes.join("\n"));
+});
+
+test("live result shape: errors nested under playwrightCheckResult still yield failingTest, outcome and a readable title", () => {
+  // Captured live: the API nests errors; the bundle's results/*.json lifts them. The first two
+  // real captures wrote failingTest: null because only the lifted shape was read.
+  const live = { id: "r", runLocation: "eu-west-1", startedAt: "2026-09-23T16:23:56Z", hasFailures: true, hasErrors: false, playwrightCheckResult: { errors: [DRIFT_RESULT_ERROR] } } as unknown as Parameters<typeof failingTestOf>[0];
+  assert.deepEqual(failingTestOf(live), { file: "tests/booking.spec.ts", title: "log in and book the 09:30 slot", project: "booking", line: 36, column: 51 });
+  assert.equal(summarizeErrorMessage(DRIFT_MESSAGE), `expect(locator).toHaveText(expected) failed — on getByTestId('book-status'), expected "200", element(s) not found`);
+  assert.equal(summarizeErrorMessage(REAL_MESSAGE), `expect(locator).toHaveText(expected) failed — on getByTestId('book-status'), expected "200", received "401"`);
 });
 
 test("manifest: real Playwright result shape → error text, failing test, spec line, assertion id, readable title", () => {

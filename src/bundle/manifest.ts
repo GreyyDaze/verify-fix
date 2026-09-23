@@ -76,8 +76,12 @@ export function specLocation(message: string, testFile: string | null): { file: 
 }
 
 export function failingTestOf(detail: CheckResult | null): ResultRef["failingTest"] {
-  const first = Array.isArray(detail?.errors) ? detail!.errors.find((e) => e && typeof e === "object") : undefined;
-  if (!first || typeof first !== "object") return null;
+  // Live API: errors sit under playwrightCheckResult (browser/multistep alike);
+  // the bundle's trimmed results/*.json lifts them to the top level. Read both.
+  const nested = (detail?.playwrightCheckResult ?? detail?.browserCheckResult ?? detail?.multiStepCheckResult)?.errors;
+  const pool = [...(Array.isArray(detail?.errors) ? detail!.errors : []), ...(Array.isArray(nested) ? nested : [])];
+  const first = pool.find((e): e is PlaywrightResultError => !!e && typeof e === "object");
+  if (!first) return null;
   const loc = specLocation(first.error?.message ?? "", first.testFile ?? null);
   return { file: first.testFile ?? null, title: first.testTitle ?? null, project: first.projectName ?? null, line: loc.line, column: loc.column };
 }
@@ -93,7 +97,8 @@ export function summarizeErrorMessage(message: string): string {
   const locator = pick("Locator");
   const expected = pick("Expected");
   const received = pick("Received");
-  const bits = [locator ? `on ${locator}` : null, expected ? `expected ${expected}` : null, received ? `received ${received}` : null].filter(Boolean);
+  const reason = received ? null : lines.slice(1).map((l) => /^Error:\s*(.+)$/.exec(l)?.[1]).find((v) => v && !/^expect\(/.test(v)) ?? null;
+  const bits = [locator ? `on ${locator}` : null, expected ? `expected ${expected}` : null, received ? `received ${received}` : reason ? reason : null].filter(Boolean);
   const out = bits.length ? `${head} — ${bits.join(", ")}` : head;
   return out.length > 160 ? out.slice(0, 159) + "…" : out;
 }
@@ -221,7 +226,23 @@ export function expectedReceived(text: string | null | undefined): { expected: s
     const v = m[1].trim().replace(/\s+/g, " ");
     return v.length ? v : null;
   };
-  return { expected: value("Expected"), received: value("Received") };
+  // No "Received:" when the locator matched nothing: Playwright prints
+  // "Error: element(s) not found" (or "strict mode violation …") below Timeout.
+  // That line is what the run received; the first "Error: expect(...) failed" is the header.
+  const errorLines = [...text.matchAll(/(?:^|\s)Error:\s*([^\n]*?)(?=\s+(?:Expected|Received|Timeout|Locator|Call log|Error)(?: string| pattern| substring)?:|\r?\n|$)/gi)]
+    .filter((m) => (m.index ?? 0) > 0) // the first line is the header ("Error: expect(...) failed", "Error: page.goto: …"), not the outcome
+    .map((m) => m[1].trim().replace(/\s+/g, " "))
+    .filter((v) => v.length && !/^expect\(/.test(v));
+  return { expected: value("Expected"), received: value("Received") ?? errorLines[0] ?? null };
+}
+
+/** What the failing run received, from the first error that says so (Received: … or Error: element(s) not found). */
+export function runOutcome(runErrors: string[]): { expected: string | null; received: string | null } {
+  for (const e of runErrors) {
+    const x = expectedReceived(e);
+    if (x.received !== null) return x;
+  }
+  return { expected: expectedReceived(runErrors[0]).expected, received: null };
 }
 
 /** Everything Rocky wrote, as one string (root cause, impact, evidence, reconstructed step errors). */
@@ -238,7 +259,7 @@ export function rcaText(rca: RootCauseAnalysis | null | undefined): string {
  * null when the run has no "Received" line.
  */
 export function rcaMentionsReceived(rca: RootCauseAnalysis | null | undefined, runErrors: string[]): boolean | null {
-  const r = expectedReceived(runErrors.find((e) => /Received/i.test(e)) ?? null);
+  const r = runOutcome(runErrors);
   if (!rca || r.received === null) return null;
   const needle = r.received.replace(/^["'<]+|[">']+$/g, "").trim().toLowerCase();
   if (!needle) return null;
@@ -260,7 +281,7 @@ export function rcaIsStale(x: { rca: RootCauseAnalysis | null; createdBefore: bo
 /** Does the error group's first failure look like this run's failure? null when either side has no "Received". */
 export function groupErrorMatches(groupMessage: string | null | undefined, runErrors: string[]): boolean | null {
   const g = expectedReceived(groupMessage);
-  const r = expectedReceived(runErrors.find((e) => /Received/i.test(e)) ?? null);
+  const r = runOutcome(runErrors);
   if (g.received === null || r.received === null) return null;
   return g.received === r.received && (g.expected === null || r.expected === null || g.expected === r.expected);
 }
@@ -414,7 +435,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
     reproductionReason = rca
       ? textCls.matchedRule
         ? `RCA text matched rule "${textCls.matchedRule}" ("${textCls.matchedText}") → ${textCls.mode}`
-        : "RCA text matched no rule and no overlapping run was found → both modes; the scene is UNCERTAIN if neither reproduces"
+        : `RCA text matched no rule and no passing overlapping run was found${failedSiblings.length ? " (the overlapping run failed too)" : ""} → both modes; the scene is UNCERTAIN if neither reproduces`
       : errorGroup
         ? textCls.matchedRule
           ? `no RCA; error-group message matched rule "${textCls.matchedRule}" → ${textCls.mode}`
@@ -486,7 +507,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   const rcaStale = rcaIsStale({ rca, createdBefore: rcaCreatedBefore, groupMatches, mentions: rcaMentions });
   if (rca && failing && rcaStale) {
     const g = expectedReceived(errorGroup?.cleanedErrorMessage);
-    const r = expectedReceived(failingErrorsForRca.find((e) => /Received/i.test(e)) ?? null);
+    const r = runOutcome(failingErrorsForRca);
     const why =
       groupMatches === false
         ? `error group ${errorGroup!.id} merges different failures: its first failure received ${g.received}, the captured run received ${r.received}`
@@ -595,7 +616,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   // Stable across re-captures of the same failure. When Checkly filed a
   // different failure under an existing group (its Received differs), the
   // run's Received joins the key so the two incidents do not share an id.
-  const runReceived = expectedReceived(resultErrors(failing?.detail ?? null).find((e) => /Received/i.test(e)) ?? null).received;
+  const runReceived = runOutcome(resultErrors(failing?.detail ?? null)).received;
   const groupKey = errorGroup ? (groupErrorMatches(errorGroup.cleanedErrorMessage, resultErrors(failing?.detail ?? null)) === false && runReceived ? `${errorGroup.id}|${runReceived}` : errorGroup.id) : null;
   const incidentId = failingId ? `${incidentSlug}-${fnv1a(groupKey ?? failingId).slice(0, 6)}` : `${incidentSlug}-baseline`;
 

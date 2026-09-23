@@ -64,10 +64,14 @@ function fakeClient(opts: { archive?: boolean; drift?: boolean } = {}) {
     },
     async getResult(_checkId: string, id: string): Promise<CheckResult> {
       const s = HISTORY.find((h) => h.id === id)!;
-      const msg = opts.drift
-        ? 'Error: expect(locator).toHaveText(expected) failed\n\nLocator:  getByTestId(\'book-status\')\nExpected: "200"\nReceived: <element(s) not found>\nTimeout:  10000ms'
-        : "tests/booking.spec.ts:19:3 › slots booking flow › log in and book the 09:30 slot";
-      return { ...s, playwrightCheckResult: { errors: s.hasFailures ? [msg] : [] } };
+      // live shape: object errors nested under playwrightCheckResult
+      const driftMsg = 'Error: expect(locator).toHaveText(expected) failed\n\nLocator: getByTestId(\'book-status\')\nExpected: "200"\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n  - waiting for getByTestId(\'book-status\')\n\n    at /tmp/playwright-x/user/tests/booking.spec.ts:36:51';
+      const errors = !s.hasFailures
+        ? []
+        : opts.drift
+          ? [{ error: { message: driftMsg, stack: driftMsg }, specId: "spec-1", testFile: "booking.spec.ts", suitePath: ["booking.spec.ts", "slots booking flow"], testTitle: "log in and book the 09:30 slot", projectName: "booking" }]
+          : ["tests/booking.spec.ts:19:3 › slots booking flow › log in and book the 09:30 slot"];
+      return { ...s, playwrightCheckResult: { errors } } as CheckResult;
     },
     async getAssets(_checkId: string, id: string): Promise<AssetManifest> {
       if (id === "r-fail" && opts.archive) return { assets: [{ type: "trace", name: "booking-trace.zip", url: "https://s3.example/archive.zip?sig=1", source: "playwright", archive: { entryName: "traces/booking-trace.zip" } }] };
@@ -215,6 +219,9 @@ test("bundle: a stale RCA (group's first failure ≠ this run's) is flagged; --t
     const flagged = await buildBundle({ checkId: CHECK.id, outDir: join(out, "a") }, { client, accountId: "a" });
     assert.equal(flagged.manifest.rca?.id, "rca-1");
     assert.equal(flagged.manifest.rca?.groupErrorMatchesFailingRun, false);
+    assert.equal(flagged.manifest.rca?.describesFailingRun, false);
+    assert.deepEqual(flagged.manifest.results.failing?.failingTest?.line, 36, "failingTest is read from the nested live shape");
+    assert.match(flagged.manifest.incident.title, /element\(s\) not found/);
     assert.ok(flagged.warnings.some((w) => /describes the group's first failure, not this run's/.test(w)), flagged.warnings.join("\n"));
     assert.equal((client as unknown as { triggered: number }).triggered, 0);
 

@@ -20,7 +20,7 @@ import type { AssetManifestEntry, ChecklyCheck, CheckResult, CheckResultSummary,
 import { isZip, openZip } from "../trace/zip.ts";
 import { mergeHars, traceZipToHar, type BodyPolicy, type TraceExtract } from "../trace/trace-to-har.ts";
 import { sanitizeHar } from "./sanitize.ts";
-import { buildManifest, expectedReceived, findOverlappingRuns, groupErrorMatches, rcaIsStale, rcaMentionsReceived, resultErrors, type FetchedResult } from "./manifest.ts";
+import { buildManifest, expectedReceived, findOverlappingRuns, groupErrorMatches, rcaIsStale, rcaMentionsReceived, resultErrors, runOutcome, type FetchedResult } from "./manifest.ts";
 import { measureDeterminism, type MeasureResult, type Runner } from "./measure.ts";
 import type { ManifestV3 } from "./types.ts";
 
@@ -381,7 +381,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
       const stale = rcaIsStale({ rca, createdBefore, groupMatches: matches, mentions });
       if (rca) {
         log(
-          `[bundle] RCA fit: group first received ${expectedReceived(errorGroup.cleanedErrorMessage).received ?? "?"}, this run received ${expectedReceived(runErrors.find((e) => /Received/i.test(e)) ?? null).received ?? "?"}; ` +
+          `[bundle] RCA fit: group first received ${expectedReceived(errorGroup.cleanedErrorMessage).received ?? "?"}, this run received ${runOutcome(runErrors).received ?? "?"}; ` +
             `RCA created ${createdBefore ? "before" : "after"} this run, mentions the run's received value: ${mentions ?? "n/a"} → ${stale ? "STALE (about an earlier failure)" : "describes this run"}`,
         );
       }

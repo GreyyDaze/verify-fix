@@ -1,0 +1,196 @@
+[
+ {
+  "callId": "pw:api@31",
+  "apiName": "Launch browser",
+  "title": "Launch browser",
+  "category": "pw:api",
+  "startTime": 2488.356,
+  "endTime": 2660.241,
+  "error": null,
+  "location": null
+ },
+ {
+  "callId": "pw:api@35",
+  "apiName": "Create context",
+  "title": "Create context",
+  "category": "pw:api",
+  "startTime": 2666.266,
+  "endTime": 2679.429,
+  "error": null,
+  "location": null
+ },
+ {
+  "callId": "pw:api@37",
+  "apiName": "Expose binding",
+  "title": "Expose binding",
+  "category": "pw:api",
+  "startTime": 2692.902,
+  "endTime": 2696.866,
+  "error": null,
+  "location": {
+   "file": "/checkly/node_modules/.pnpm/@checkly+playwright-reporter@file+packages+playwright-reporter_@playwright+test@1.60.0_debug@4.4.3/node_modules/@checkly/playwright-reporter/dist/setup.js",
+   "line": 1,
+   "column": 3486
+  }
+ },
+ {
+  "callId": "pw:api@38",
+  "apiName": "Add init script",
+  "title": "Add init script",
+  "category": "pw:api",
+  "startTime": 2698.702,
+  "endTime": 2700.217,
+  "error": null,
+  "location": {
+   "file": "/checkly/node_modules/.pnpm/@checkly+playwright-reporter@file+packages+playwright-reporter_@playwright+test@1.60.0_debug@4.4.3/node_modules/@checkly/playwright-reporter/dist/setup.js",
+   "line": 1,
+   "column": 3637
+  }
+ },
+ {
+  "callId": "pw:api@40",
+  "apiName": "Create page",
+  "title": "Create page",
+  "category": "pw:api",
+  "startTime": 2702.379,
+  "endTime": 2756.21,
+  "error": null,
+  "location": null
+ },
+ {
+  "callId": "pw:api@41",
+  "apiName": "Navigate",
+  "title": "Navigate url=\"/\"",
+  "category": "pw:api",
+  "startTime": 2758.287,
+  "endTime": 3124.137,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-9YGhOO/user/tests/booking.spec.ts",
+   "line": 21,
+   "column": 16
+  }
+ },
+ {
+  "callId": "pw:api@42",
+  "apiName": "Fill \"demo\"",
+  "title": "Fill \"demo\" value=\"demo\"",
+  "category": "pw:api",
+  "startTime": 3127.593,
+  "endTime": 3207.13,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-9YGhOO/user/tests/booking.spec.ts",
+   "line": 23,
+   "column": 38
+  }
+ },
+ {
+  "callId": "pw:api@43",
+  "apiName": "Click",
+  "title": "Click",
+  "category": "pw:api",
+  "startTime": 3209.803,
+  "endTime": 3340.43,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-9YGhOO/user/tests/booking.spec.ts",
+   "line": 24,
+   "column": 56
+  }
+ },
+ {
+  "callId": "expect@44",
+  "apiName": "Expect \"toHaveText\"",
+  "title": "Expect \"toHaveText\" expected=\"200\"",
+  "category": "expect",
+  "startTime": 3350.622,
+  "endTime": 3606.798,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-9YGhOO/user/tests/booking.spec.ts",
+   "line": 27,
+   "column": 52
+  }
+ },
+ {
+  "callId": "expect@45",
+  "apiName": "Expect \"toHaveURL\"",
+  "title": "Expect \"toHaveURL\" expected=\"Object\"",
+  "category": "expect",
+  "startTime": 3607.54,
+  "endTime": 3623.398,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-9YGhOO/user/tests/booking.spec.ts",
+   "line": 30,
+   "column": 24
+  }
+ },
+ {
+  "callId": "expect@46",
+  "apiName": "Expect \"toBeVisible\"",
+  "title": "Expect \"toBeVisible\"",
+  "category": "expect",
+  "startTime": 3625.178,
+  "endTime": 3633.04,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-9YGhOO/user/tests/booking.spec.ts",
+   "line": 31,
+   "column": 70
+  }
+ },
+ {
+  "callId": "pw:api@47",
+  "apiName": "Click",
+  "title": "Click",
+  "category": "pw:api",
+  "startTime": 3634.229,
+  "endTime": 5490.841,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-9YGhOO/user/tests/booking.spec.ts",
+   "line": 33,
+   "column": 60
+  }
+ },
+ {
+  "callId": "expect@48",
+  "apiName": "Expect \"toHaveText\"",
+  "title": "Expect \"toHaveText\" expected=\"200\"",
+  "category": "expect",
+  "startTime": 5491.549,
+  "endTime": 15508.959,
+  "error": "Error: expect(locator).toHaveText(expected) failed\n\nLocator: getByTestId('book-status')\nExpected: \"200\"\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms\n  - waiting for getByTestId('book-status')\n",
+  "location": {
+   "file": "/tmp/playwright-9YGhOO/user/tests/booking.spec.ts",
+   "line": 36,
+   "column": 51
+  }
+ },
+ {
+  "callId": "pw:api@52",
+  "apiName": "Evaluate",
+  "title": "Evaluate expression=\"(() => { const flush = globalThis.__checklyFlushVitals__; return typeof flush === \\\"function\\\" ? flush() : undefined })()\"",
+  "category": "pw:api",
+  "startTime": 15576.401,
+  "endTime": 15588.313,
+  "error": null,
+  "location": {
+   "file": "/checkly/node_modules/.pnpm/@checkly+playwright-reporter@file+packages+playwright-reporter_@playwright+test@1.60.0_debug@4.4.3/node_modules/@checkly/playwright-reporter/dist/setup.js",
+   "line": 1,
+   "column": 4014
+  }
+ },
+ {
+  "callId": "pw:api@55",
+  "apiName": "Close context",
+  "title": "Close context",
+  "category": "pw:api",
+  "startTime": 15657.682,
+  "endTime": 15678.36,
+  "error": null,
+  "location": null
+ }
+]

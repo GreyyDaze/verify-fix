@@ -4,8 +4,8 @@
   "apiName": "Launch browser",
   "title": "Launch browser",
   "category": "pw:api",
-  "startTime": 1634.507,
-  "endTime": 1803.448,
+  "startTime": 2192.76,
+  "endTime": 2325.706,
   "error": null,
   "location": null
  },
@@ -14,8 +14,8 @@
   "apiName": "Create context",
   "title": "Create context",
   "category": "pw:api",
-  "startTime": 1806.5,
-  "endTime": 1812.135,
+  "startTime": 2329.854,
+  "endTime": 2337.952,
   "error": null,
   "location": null
  },
@@ -24,13 +24,13 @@
   "apiName": "Expose binding",
   "title": "Expose binding",
   "category": "pw:api",
-  "startTime": 1818.681,
-  "endTime": 1820.946,
+  "startTime": 2349.085,
+  "endTime": 2352.493,
   "error": null,
   "location": {
    "file": "/checkly/node_modules/.pnpm/@checkly+playwright-reporter@file+packages+playwright-reporter_@playwright+test@1.60.0_debug@4.4.3/node_modules/@checkly/playwright-reporter/dist/setup.js",
    "line": 1,
-   "column": 4587
+   "column": 3486
   }
  },
  {
@@ -38,13 +38,13 @@
   "apiName": "Add init script",
   "title": "Add init script",
   "category": "pw:api",
-  "startTime": 1821.376,
-  "endTime": 1822.238,
+  "startTime": 2353.23,
+  "endTime": 2354.696,
   "error": null,
   "location": {
    "file": "/checkly/node_modules/.pnpm/@checkly+playwright-reporter@file+packages+playwright-reporter_@playwright+test@1.60.0_debug@4.4.3/node_modules/@checkly/playwright-reporter/dist/setup.js",
    "line": 1,
-   "column": 4738
+   "column": 3637
   }
  },
  {
@@ -52,8 +52,8 @@
   "apiName": "Create page",
   "title": "Create page",
   "category": "pw:api",
-  "startTime": 1823.211,
-  "endTime": 1893.718,
+  "startTime": 2356.625,
+  "endTime": 2394.328,
   "error": null,
   "location": null
  },
@@ -62,11 +62,11 @@
   "apiName": "Navigate",
   "title": "Navigate url=\"/\"",
   "category": "pw:api",
-  "startTime": 1895.54,
-  "endTime": 2079.9,
+  "startTime": 2396.28,
+  "endTime": 2809.195,
   "error": null,
   "location": {
-   "file": "/tmp/playwright-Sii8Yv/user/tests/booking.spec.ts",
+   "file": "/tmp/playwright-ConAB2/user/tests/booking.spec.ts",
    "line": 21,
    "column": 16
   }
@@ -76,11 +76,11 @@
   "apiName": "Fill \"demo\"",
   "title": "Fill \"demo\" value=\"demo\"",
   "category": "pw:api",
-  "startTime": 2082.232,
-  "endTime": 2119.142,
+  "startTime": 2812.184,
+  "endTime": 2858.516,
   "error": null,
   "location": {
-   "file": "/tmp/playwright-Sii8Yv/user/tests/booking.spec.ts",
+   "file": "/tmp/playwright-ConAB2/user/tests/booking.spec.ts",
    "line": 23,
    "column": 38
   }
@@ -90,11 +90,11 @@
   "apiName": "Click",
   "title": "Click",
   "category": "pw:api",
-  "startTime": 2120.856,
-  "endTime": 2160.176,
+  "startTime": 2860.63,
+  "endTime": 2914.083,
   "error": null,
   "location": {
-   "file": "/tmp/playwright-Sii8Yv/user/tests/booking.spec.ts",
+   "file": "/tmp/playwright-ConAB2/user/tests/booking.spec.ts",
    "line": 24,
    "column": 56
   }
@@ -104,11 +104,11 @@
   "apiName": "Expect \"toHaveText\"",
   "title": "Expect \"toHaveText\" expected=\"200\"",
   "category": "expect",
-  "startTime": 2163.257,
-  "endTime": 2258.309,
+  "startTime": 2917.828,
+  "endTime": 3115.703,
   "error": null,
   "location": {
-   "file": "/tmp/playwright-Sii8Yv/user/tests/booking.spec.ts",
+   "file": "/tmp/playwright-ConAB2/user/tests/booking.spec.ts",
    "line": 27,
    "column": 52
   }
@@ -118,11 +118,11 @@
   "apiName": "Expect \"toHaveURL\"",
   "title": "Expect \"toHaveURL\" expected=\"Object\"",
   "category": "expect",
-  "startTime": 2258.824,
-  "endTime": 2264.655,
+  "startTime": 3116.365,
+  "endTime": 3125.646,
   "error": null,
   "location": {
-   "file": "/tmp/playwright-Sii8Yv/user/tests/booking.spec.ts",
+   "file": "/tmp/playwright-ConAB2/user/tests/booking.spec.ts",
    "line": 30,
    "column": 24
   }
@@ -132,11 +132,11 @@
   "apiName": "Expect \"toBeVisible\"",
   "title": "Expect \"toBeVisible\"",
   "category": "expect",
-  "startTime": 2265.17,
-  "endTime": 2268.626,
+  "startTime": 3126.626,
+  "endTime": 3133.704,
   "error": null,
   "location": {
-   "file": "/tmp/playwright-Sii8Yv/user/tests/booking.spec.ts",
+   "file": "/tmp/playwright-ConAB2/user/tests/booking.spec.ts",
    "line": 31,
    "column": 70
   }
@@ -146,11 +146,11 @@
   "apiName": "Click",
   "title": "Click",
   "category": "pw:api",
-  "startTime": 2269.318,
-  "endTime": 4074.2,
+  "startTime": 3134.847,
+  "endTime": 4961.396,
   "error": null,
   "location": {
-   "file": "/tmp/playwright-Sii8Yv/user/tests/booking.spec.ts",
+   "file": "/tmp/playwright-ConAB2/user/tests/booking.spec.ts",
    "line": 33,
    "column": 60
   }
@@ -160,11 +160,11 @@
   "apiName": "Expect \"toHaveText\"",
   "title": "Expect \"toHaveText\" expected=\"200\"",
   "category": "expect",
-  "startTime": 4074.877,
-  "endTime": 14083.166,
+  "startTime": 4962.073,
+  "endTime": 14970.943,
   "error": "Error: expect(locator).toHaveText(expected) failed\n\nLocator: getByTestId('book-status')\nExpected: \"200\"\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms\n  - waiting for getByTestId('book-status')\n",
   "location": {
-   "file": "/tmp/playwright-Sii8Yv/user/tests/booking.spec.ts",
+   "file": "/tmp/playwright-ConAB2/user/tests/booking.spec.ts",
    "line": 36,
    "column": 51
   }
@@ -174,13 +174,13 @@
   "apiName": "Evaluate",
   "title": "Evaluate expression=\"(() => { const flush = globalThis.__checklyFlushVitals__; return typeof flush === \\\"function\\\" ? flush() : undefined })()\"",
   "category": "pw:api",
-  "startTime": 14114.446,
-  "endTime": 14118.291,
+  "startTime": 15012.005,
+  "endTime": 15037.856,
   "error": null,
   "location": {
    "file": "/checkly/node_modules/.pnpm/@checkly+playwright-reporter@file+packages+playwright-reporter_@playwright+test@1.60.0_debug@4.4.3/node_modules/@checkly/playwright-reporter/dist/setup.js",
    "line": 1,
-   "column": 5115
+   "column": 4014
   }
  },
  {
@@ -188,8 +188,8 @@
   "apiName": "Close context",
   "title": "Close context",
   "category": "pw:api",
-  "startTime": 14155.769,
-  "endTime": 14163.667,
+  "startTime": 15120.384,
+  "endTime": 15126.191,
   "error": null,
   "location": null
  }

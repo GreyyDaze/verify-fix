@@ -3,24 +3,86 @@
     "id": "6f3223de-350b-4f44-b660-620a60501d27",
     "cleanedErrorMessage": "Error: expect(locator).toHaveText(expected) failed Locator: getByTestId('book-status') Expected: \"200\" Received: \"401\" Timeout: 10000ms Call log: - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms - waiting for getByTestId('book-status'",
     "firstSeen": "2026-09-21T23:14:13.372Z",
-    "lastSeen": "2026-09-23T16:39:14.599Z"
+    "lastSeen": "2026-09-23T16:49:14.208Z"
   },
   "rca": {
-    "id": "6bd1f5a6-3b67-43e0-afbf-68c6b2840d94",
-    "created_at": "2026-09-21T23:14:13.456Z",
+    "id": "95755aa2-1856-433d-a64b-35786a370d39",
+    "checkType": "PLAYWRIGHT",
+    "checkId": "72409245-a334-4a09-ac0d-9a28faff1377",
+    "analysis": {
+      "codeFix": null,
+      "evidence": [
+        {
+          "artifacts": [
+            {
+              "name": "ERROR",
+              "type": "ERROR"
+            }
+          ],
+          "description": "The error log shows a `toHaveText` expectation on `getByTestId('book-status')` failing with `element(s) not found` after 10s, pinpointing the symptom: the `book-status` element did not exist in the DOM when expected."
+        },
+        {
+          "artifacts": [
+            {
+              "name": "PLAYWRIGHT_TRACE",
+              "type": "PLAYWRIGHT_TRACE"
+            }
+          ],
+          "description": "The trace file cannot be analyzed because it was recorded with a newer Playwright version than the available viewer, so we cannot see DOM snapshots, network calls, or near-miss locators to distinguish between a locator drift vs. UI/backend failure."
+        },
+        {
+          "artifacts": [
+            {
+              "name": "LAST_PASSING_RESULT",
+              "type": "COMPARISON"
+            }
+          ],
+          "description": "The last passing run from a few hours earlier in `us-east-1` confirms that the same check can succeed, but detailed step data is no longer retained, so we cannot directly compare the DOM or network behavior at the `book-status` step."
+        }
+      ],
+      "rootCause": "The check failed because the assertion `expect(page.getByTestId('book-status')).toHaveText('200')` timed out after 10 seconds without ever finding an element with `data-testid=\"book-status\"`, but the available trace cannot be inspected due to a Playwright version mismatch, so it is unclear whether this is caused by a test locator issue or by the application not rendering the element. The flow passed earlier the same day from another region, indicating a recent or intermittent change in either the UI behavior or environment that prevents the `book-status` element from appearing in this run.",
+      "userImpact": "Users attempting to book a slot may not see the booking status update to a success code, and the booking confirmation step may not complete as expected. This could manifest as bookings appearing stuck or unconfirmed after submission.",
+      "classification": "UNKNOWN_ERROR",
+      "referenceLinks": [
+        {
+          "url": "https://playwright.dev/docs/api/class-locatorassertions#locator-assertions-to-have-text",
+          "title": "Playwright expect(locator).toHaveText docs"
+        },
+        {
+          "url": "https://playwright.dev/docs/trace-viewer",
+          "title": "Playwright Trace Viewer docs"
+        }
+      ]
+    },
+    "provider": "openai",
+    "model": "gpt-5.1",
+    "created_at": "2026-09-23T16:53:53.017Z",
+    "errorGroupId": "6f3223de-350b-4f44-b660-620a60501d27",
+    "durationMs": 9838,
+    "status": "COMPLETED"
+  },
+  "replacedRca": {
+    "id": "22bb2081-9c74-4495-ac79-1e80e6f5ea7d",
+    "created_at": "2026-09-23T16:40:46.893Z",
     "analysis": {
       "steps": [
         {
-          "name": "Execute the slots booking flow scenario including logging in and attempting to book the 09:30 slot.",
+          "name": "Navigate through the slots booking flow and log in.",
+          "errors": null
+        },
+        {
+          "name": "Attempt to book the 09:30 slot.",
+          "errors": null
+        },
+        {
+          "name": "Verify that the booking status element displays HTTP status 200.",
           "errors": [
-            "Booking status element reported 401 instead of the expected 200."
+            "Timeout waiting for getByTestId('book-status') element to appear with text \"200\"."
           ]
         },
         {
-          "name": "Validate that the booking status indicator shows a successful status code of 200.",
-          "errors": [
-            "Assertion failed because the booking status text remained 401 throughout the timeout period."
-          ]
+          "name": "(Not reached) Verify that the booking result shows as CONFIRMED.",
+          "errors": null
         }
       ],
       "codeFix": null,
@@ -32,16 +94,7 @@
               "type": "ERROR"
             }
           ],
-          "description": "The assertion expects `getByTestId('book-status')` to have text `\"200\"`, but the DOM repeatedly shows `<span data-testid=\"book-status\">401</span>`, indicating the application is consistently reporting a 401 status for the booking attempt."
-        },
-        {
-          "artifacts": [
-            {
-              "name": "LAST_PASSING_RESULT",
-              "type": "COMPARISON"
-            }
-          ],
-          "description": "The same check passed in a different region (eu-west-1) one second earlier, suggesting the test code is correct and that the failure is due to a transient or region-specific backend/authentication issue rather than a locator or assertion mistake."
+          "description": "The error shows an `expect(...).toHaveText('200')` on `page.getByTestId('book-status')` timing out with `element(s) not found`, indicating the booking status element never rendered or used a different test ID/text."
         },
         {
           "artifacts": [
@@ -50,23 +103,36 @@
               "type": "PLAYWRIGHT_TRACE"
             }
           ],
-          "description": "The trace cannot be opened due to a Playwright version mismatch, so no additional client-side or network console errors can be inspected; this absence of extra evidence supports focusing on the clear 401 vs expected 200 status difference already surfaced in the error log."
+          "description": "The trace cannot be opened by the analyzer because it was created by a newer Playwright version, so DOM snapshots, network calls, and browser errors for the failing step are unavailable."
+        },
+        {
+          "artifacts": [
+            {
+              "name": "LAST_PASSING_RESULT",
+              "type": "COMPARISON"
+            }
+          ],
+          "description": "The last passing run is from three hours earlier in the same region with no retained step or DOM details, so we know the flow worked recently but cannot see what differed at the `book-status` step."
         }
       ],
-      "rootCause": "The booking flow returned an HTTP 401 (unauthorized) status where the test and application logic expect a successful booking status of 200, indicating that authentication or authorization for the booking request failed on the backend. This is likely due to an environment or credential/configuration issue rather than a problem in the Playwright test code, which has not changed since the last passing run one second earlier.",
-      "userImpact": "Users attempting to book a slot are receiving an unauthorized (401) response instead of a successful booking, preventing the booking from being completed. This blocks confirmation of bookings for the slots-booking flow in at least some environments or regions.",
-      "classification": "INFRASTRUCTURE_ERROR",
+      "rootCause": "The assertion waiting for `getByTestId('book-status')` to have text `\"200\"` failed because the element never appeared in the DOM within 10 seconds, but the available tooling cannot show whether this is due to a changed UI, a backend/flow failure, or a test bug. Without a readable trace or retained details from the last passing run, the underlying cause (application vs. test code) cannot be determined confidently.",
+      "userImpact": "Some users attempting to book the 09:30 slot in the slots-booking flow may not see the booking status update or confirmation as expected, and the booking may appear to hang or fail at the status step. It is unclear from the available data whether bookings are actually failing or only the status indicator is missing in the UI.",
+      "classification": "UNKNOWN_ERROR",
       "referenceLinks": [
         {
-          "url": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401",
-          "title": "HTTP 401 Unauthorized - MDN"
+          "url": "https://playwright.dev/docs/api/class-locatorassertions#locator-assertions-to-have-text",
+          "title": "Playwright expect.toHaveText docs"
+        },
+        {
+          "url": "https://playwright.dev/docs/test-assertions#locate-by-test-id",
+          "title": "Playwright test-id best practices"
         }
       ],
-      "repairRecommendation": "DO_NOT_REPAIR"
+      "repairRecommendation": "REVIEW"
     },
     "provider": "openai",
     "model": "gpt-5.1",
-    "durationMs": 8719,
+    "durationMs": 10315,
     "userContext": [
       {
         "text": "slots-booking",

@@ -12,7 +12,7 @@
     ],
     "logicalId": "slots-booking-monitoring",
     "deployedId": "72409245-a334-4a09-ac0d-9a28faff1377",
-    "projectCommit": "6c641f5635a2bcd1868223948125a536d52a170a"
+    "projectCommit": "f87c298d12447b858baaba22309f2455ac7ab8eb"
   },
   "config": {
     "frequencyMinutes": 5,

@@ -120,7 +120,7 @@ export default function BookPage() {
       {booking.state === 'done' && (
         <div className="status">
           <div>
-            HTTP <span data-testid="book-status">{booking.status}</span>
+            HTTP <span data-testid="booking-status">{booking.status}</span>
           </div>
           <div className={booking.status === 200 ? 'ok' : 'bad'}>
             <span data-testid="booking-result">{booking.result}</span>

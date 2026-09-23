@@ -330,7 +330,10 @@ test("rca fit: Rocky's paraphrased text is searched for what the run received; o
   assert.equal(rcaMentionsReceived(null, [DRIFT_MESSAGE]), null);
   // an RCA written BEFORE the run is stale when the group merges different failures…
   assert.deepEqual(rcaFit({ rca: rca401, createdBefore: true, groupMatches: false, mentions: false }), { stale: true, describes: false });
-  assert.deepEqual(rcaFit({ rca: rca401, createdBefore: true, groupMatches: false, mentions: true }), { stale: true, describes: false }, "group mismatch wins: the text may mention the value for other reasons");
+  // …but a text that names this run's outcome settles it, whatever the group message says. Seen live
+  // (third drift capture): the RCA requested at 16:40 was about "element(s) not found"; the next
+  // failing run at 16:48 was younger than it, and the tool wrongly requested another one.
+  assert.deepEqual(rcaFit({ rca: rca401, createdBefore: true, groupMatches: false, mentions: true }), { stale: false, describes: true }, "recurring failure: every new run is younger than the RCA");
   // …or when it never mentions what the run received, even if the group message is not comparable
   assert.deepEqual(rcaFit({ rca: rca401, createdBefore: true, groupMatches: null, mentions: false }), { stale: true, describes: false });
   assert.deepEqual(rcaFit({ rca: rca401, createdBefore: true, groupMatches: true, mentions: false }), { stale: true, describes: false });

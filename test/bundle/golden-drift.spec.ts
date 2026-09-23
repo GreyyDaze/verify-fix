@@ -68,12 +68,29 @@ test("golden (drift): the RCA Checkly attached is judged against THIS run, not t
     // a fresh analysis exists (requested with --trigger-rca, by hand, or by Checkly after the capture)
     assert.notEqual(m.rca!.id, overlap.rcaDoc.rca!.id);
     assert.equal(m.rca!.groupErrorMatchesFailingRun, false, "the group message never updates: still the 401");
+    // Live facts (2026-09-23): the on-demand RCA analyzed the LATEST failure of the group, and Rocky
+    // could not open the Playwright 1.63 trace, so it stopped at UNKNOWN_ERROR with no code fix.
+    const text = `${m.rca!.rootCause}\n${m.rca!.evidence.map((e) => e.description).join("\n")}`;
+    assert.match(text, /book-status/);
+    assert.match(text, /element\(s\) not found/);
+    assert.doesNotMatch(text, /401/);
+    assert.equal(m.rca!.classification, "UNKNOWN_ERROR");
+    assert.equal(m.rca!.codeFix, null);
+    assert.match(text, /Playwright version/i);
     assert.notEqual(m.rca!.describesFailingRun, false, "an RCA created after the run is never called stale");
     if (m.rca!.describesFailingRun === null) assert.ok(m.notes.some((n) => /read it before trusting it/.test(n)), m.notes.join("\n"));
     if (rcaDoc.replacedRca) {
       assert.equal(m.rca!.replaced?.id, rcaDoc.replacedRca.id);
-      assert.equal(rcaDoc.replacedRca.id, overlap.rcaDoc.rca!.id, "the inherited 401 analysis is what got replaced");
       assert.ok(m.notes.some((n) => /requested by verify-fix bundle \(--trigger-rca\)/.test(n)), m.notes.join("\n"));
+      // Third capture (5f350e3): the replaced RCA 22bb2081 (16:40) was already about this failure; the
+      // failing run picked (16:48) was younger, and the old rule requested one RCA too many. Re-judging
+      // the replaced RCA against this run must now say: describes it, not stale.
+      const rejudged = buildManifest(inputs({ rca: rcaDoc.replacedRca, replacedRca: null }));
+      assert.equal(rejudged.rca!.id, rcaDoc.replacedRca.id);
+      if (rejudged.rca!.mentionsFailingRunReceived === true) {
+        assert.equal(rejudged.rca!.describesFailingRun, true, "an RCA whose text names element(s) not found is about this run");
+        assert.equal(rejudged.notes.some((n) => /--trigger-rca/.test(n)), false, "…so no fresh analysis is suggested");
+      }
     }
   } else {
     // first capture: the 401 analysis from two days earlier, inherited through the group

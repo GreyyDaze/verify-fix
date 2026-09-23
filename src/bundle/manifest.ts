@@ -269,27 +269,33 @@ export function rcaMentionsReceived(rca: RootCauseAnalysis | null | undefined, r
 /**
  * How much is the group's RCA worth for THIS run? Three arithmetic/string
  * signals, no judgment:
- *  - createdBefore: the RCA predates the failing run (it cannot have seen it);
- *  - groupMatches:  the group's first failure received what this run received;
- *  - mentions:      the RCA text contains what this run received.
+ *  - mentions:      the RCA text contains what this run received;
+ *  - createdBefore: the RCA predates the failing run;
+ *  - groupMatches:  the group's first failure received what this run received.
  *
- * stale (the RCA is about an earlier, different failure) needs createdBefore:
- * an RCA written before the run is stale when the group merges different
- * failures (groupMatches false) or when it never mentions the run's outcome.
- * An RCA created after the run is never stale — the group message never
- * updates (Checkly keeps the first failure's), so a mismatch there says
- * nothing about a later analysis; otherwise every fresh RCA on a merged
- * group would be re-requested on every capture.
+ * mentions === true settles it: the text names this run's outcome → describes.
+ * Seen live (third drift capture): a recurring failure produces new failing
+ * runs every 5 minutes, so the newest failing run is always younger than any
+ * RCA; "created before" alone must never make an RCA stale, or the tool
+ * requests a new analysis on every capture.
  *
- * describes: true with positive evidence (mentions, or a group whose first
- * failure matches); false when stale; null when nobody can tell from the
- * outside — the reader must read the RCA before trusting it.
+ * stale (about an earlier, different failure) needs an RCA older than the
+ * run that never mentions the run's outcome — or, when the text cannot be
+ * checked, a group that merges different failures. An RCA created after the
+ * run is never stale: the group message never updates (Checkly keeps the
+ * first failure's), so a mismatch there says nothing about a later analysis.
+ *
+ * describes: true with positive evidence; false when stale; null when nobody
+ * can tell from the outside — the reader must read the RCA before trusting it.
  */
 export function rcaFit(x: { rca: RootCauseAnalysis | null; createdBefore: boolean | null; groupMatches: boolean | null; mentions: boolean | null }): { stale: boolean; describes: boolean | null } {
   if (!x.rca) return { stale: false, describes: null };
-  if (x.createdBefore === true && (x.groupMatches === false || x.mentions === false)) return { stale: true, describes: false };
   if (x.mentions === true) return { stale: false, describes: true };
-  if (x.createdBefore === true && x.groupMatches === true) return { stale: false, describes: true };
+  if (x.createdBefore === true) {
+    if (x.mentions === false) return { stale: true, describes: false };
+    if (x.groupMatches === false) return { stale: true, describes: false };
+    if (x.groupMatches === true) return { stale: false, describes: true };
+  }
   return { stale: false, describes: null };
 }
 
@@ -547,7 +553,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
     );
   }
   if (input.replacedRca && rca) {
-    notes.push(`RCA ${rca.id} was requested by verify-fix bundle (--trigger-rca) because the group's earlier RCA ${input.replacedRca.id} (${input.replacedRca.analysis.classification}) described a different failure; both are kept in rca.json`);
+    notes.push(`RCA ${rca.id} was requested by verify-fix bundle (--trigger-rca): the group's earlier RCA ${input.replacedRca.id} (${input.replacedRca.analysis.classification}) was not confirmed to describe this run at capture time; both are kept in rca.json`);
   }
 
   // ---- scenes ----

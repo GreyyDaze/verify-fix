@@ -18,7 +18,7 @@ verify-fix/
 | 0 | Real customer setup: Next.js app + Checkly Playwright Check Suite in ONE project (`web/`: 2 locations, `runParallel`, shared `TEST_USER`, `bundle.packages.prune` so runners skip the app deps), Vercel config | check green on production for a few hours | deployed: Vercel + Upstash + Checkly check `slots booking flow` green |
 | 1 | `verify-fix bundle --check <id> [--result <id>] --out ./bundle`: Checkly client, failing + last passing result + assets, trace → HAR, Rocky RCA → `REPRODUCTION` mode, config → `manifest.json`, `--measure N` for determinism | bundle of a green check is produced end to end | built; ran live against the real account (bundle `2d7403c`); hardened against the real Playwright 1.63 trace and result shapes; 34 bundle tests incl. a golden test over the real bundle |
 | 2 | Cause the incident (overlapping runs), capture it with `bundle`, commit sanitized output to `fixtures/bundles/slots-booking-overlap/`, golden test | fixture + test committed | **done** — re-captured with the hardened tool (`7351d29`): HAR bodies show the login order (us-east-1 v490 at 19:03:59.221, eu-west-1 v491 at .429, us-east-1 `POST /api/book` 401 `session superseded by a newer login`), `decidedBy: result-timestamps`, `results/history.json` (76/100 passed) |
-| 2b | Second incident on the same app: **drift**. Product renamed `data-testid="book-status"` → `booking-status` (`7db4681`); the check is stale and fails at spec line 36 in every location. Captured with `bundle --out fixtures/bundles/slots-booking-drift` + golden test (`test/bundle/golden-drift.spec.ts`). What the live capture taught: Playwright 1.63 prints `Error: element(s) not found` under `Timeout:` and **no `Received:` line**; the live API nests errors under `playwrightCheckResult` (the first two captures had `failingTest: null`); Checkly filed the drift under the 401 error group, so no automatic RCA ran and the run inherited `INFRASTRUCTURE_ERROR / DO_NOT_REPAIR`. Still open here: no failing request → detection scene `inject:<failing request unknown>` (assertion → network dependency from the passing recording, Phase 3); `failing`/`passing` naming assumes the app broke | fixture with a fresh Rocky RCA (`rca.json#replacedRca` present) committed | first capture committed (`0e1d3ba`, inherited RCA); re-capture with `--trigger-rca` pending |
+| 2b | Second incident on the same app: **drift**. Product renamed `data-testid="book-status"` → `booking-status` (`7db4681`); the check is stale and fails at spec line 36 in every location. Captured with `bundle --out fixtures/bundles/slots-booking-drift` + golden test (`test/bundle/golden-drift.spec.ts`). What the live capture taught: Playwright 1.63 prints `Error: element(s) not found` under `Timeout:` and **no `Received:` line**; the live API nests errors under `playwrightCheckResult` (the first two captures had `failingTest: null`); Checkly filed the drift under the 401 error group, so no automatic RCA ran and the run inherited `INFRASTRUCTURE_ERROR / DO_NOT_REPAIR`. Still open here: no failing request → detection scene `inject:<failing request unknown>` (assertion → network dependency from the passing recording, Phase 3); `failing`/`passing` naming assumes the app broke | fixture with a fresh Rocky RCA (`rca.json#replacedRca` present) committed — DONE | captured (`5f350e3`, third capture: fresh RCAs `22bb2081`/`95755aa2`, both about `element(s) not found`) |
 | 3 | Generic scene layer: proxy modes passthrough / replay / inject / concurrent, `ENVIRONMENT_URL` + `ENVIRONMENT_NAME`, `--target`, `--env-file`, evidence gate, `environment` column, config diff + credential policy; migrate the 11 seeded patches; delete `app-sim.ts` | 25+ tests green on the new layer, seeded verdicts unchanged | |
 | 4 | Playwright runner: `page.route` inject, `routeFromHAR` replay, two contexts for concurrent, `page.on('request')` evidence | real spec runs through all four scene modes | |
 | 5 | Live loop + CI gate (`gate.yml`: preview → `verify-fix verify --target staging --env-file .env.staging` → exit 0 → `checkly deploy`); three real fixes PASS, ten fakes FAIL; cost report | gate blocks a bad fix on a real PR | |
@@ -64,6 +64,19 @@ requests a fresh analysis only for stale or missing RCAs (`POST
 /v1/root-cause-analyses/error-groups/{id}`, 202 + `{id, status: PENDING}`,
 polled like `checkly rca run --watch`) and keeps the old one as
 `rca.replaced` / `rca.json#replacedRca`.
+
+Answered live on 2026-09-23 (third capture, `5f350e3`): the on-demand RCA
+analyzes the group's **latest** failure — both fresh analyses talk about
+`getByTestId('book-status')` / `element(s) not found`, the 401 is gone. Rocky
+could not open the trace ("recorded with a newer Playwright version than the
+available viewer", Playwright 1.63), so it could not tell locator drift from an
+app failure: `UNKNOWN_ERROR`, `repairRecommendation: REVIEW`, `codeFix: null`.
+For the drift example the candidate fixes therefore come from us, not from
+Rocky. The same capture exposed a rule bug: a recurring failure makes every new
+failing run younger than any RCA, so "created before this run" alone must never
+mark an RCA stale — a text that names the run's outcome settles it
+(`rcaFit`, `mentions === true` → describes). The capture requested one RCA too
+many because of that; the fixture keeps both.
 
 Rules that do not change between phases (see BRAINSTORM.md Part 7, D1–D9):
 no LLM in the decision path; the decision table is law; credentials only via

@@ -3,7 +3,7 @@
     "id": "6f3223de-350b-4f44-b660-620a60501d27",
     "cleanedErrorMessage": "Error: expect(locator).toHaveText(expected) failed Locator: getByTestId('book-status') Expected: \"200\" Received: \"401\" Timeout: 10000ms Call log: - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms - waiting for getByTestId('book-status'",
     "firstSeen": "2026-09-21T23:14:13.372Z",
-    "lastSeen": "2026-09-23T16:29:14.327Z"
+    "lastSeen": "2026-09-23T16:39:14.599Z"
   },
   "rca": {
     "id": "6bd1f5a6-3b67-43e0-afbf-68c6b2840d94",

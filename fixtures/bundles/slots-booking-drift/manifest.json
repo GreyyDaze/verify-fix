@@ -1,12 +1,12 @@
 {
   "schemaVersion": "v3",
   "generatedBy": "verify-fix bundle 0.1.0",
-  "generatedAt": "2026-09-23T16:29:08.619Z",
-  "incidentId": "slots-booking-monitoring-ee0ac7",
+  "generatedAt": "2026-09-23T16:40:40.271Z",
+  "incidentId": "slots-booking-monitoring-a7108c",
   "incident": {
-    "title": "slots booking flow: expect(locator).toHaveText(expected) failed — on getByTestId('book-status'), expected \"200\"",
-    "description": "Error: expect(locator).toHaveText(expected) failed\n\nLocator: getByTestId('book-status')\nExpected: \"200\"\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms\n  - waiting for getByTestId('book-status')\n\n\n  34 |\n  35 |     // 3. booking answered 200\n> 36 |     await expect(page.getByTestId('book-status')).toHaveText('200')\n     |                                                   ^\n  37 |\n  38 |     // 4. booking confirmed\n  39 |     await expect(page.getByTestId('booking-result')).toHaveText('CONFIRMED')\n    at /tmp/playwright-9YGhOO/user/tests/booking.spec.ts:36:51\n\nRocky RCA (INFRASTRUCTURE_ERROR): The booking flow returned an HTTP 401 (unauthorized) status where the test and application logic expect a successful booking status of 200, indicating that authentication or authorization for the booking request failed on the backend. This is likely due to an environment or credential/configuration issue rather than a problem in the Playwright test code, which has not changed since the last passing run one second earlier.",
-    "sourceReference": "checkly:check-result:72409245-a334-4a09-ac0d-9a28faff1377/01a0cf14-b2db-738d-afb0-db090f93b088",
+    "title": "slots booking flow: expect(locator).toHaveText(expected) failed — on getByTestId('book-status'), expected \"200\", element(s) not found",
+    "description": "Error: expect(locator).toHaveText(expected) failed\n\nLocator: getByTestId('book-status')\nExpected: \"200\"\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms\n  - waiting for getByTestId('book-status')\n\n\n  34 |\n  35 |     // 3. booking answered 200\n> 36 |     await expect(page.getByTestId('book-status')).toHaveText('200')\n     |                                                   ^\n  37 |\n  38 |     // 4. booking confirmed\n  39 |     await expect(page.getByTestId('booking-result')).toHaveText('CONFIRMED')\n    at /tmp/playwright-Sii8Yv/user/tests/booking.spec.ts:36:51\n\nRocky RCA (INFRASTRUCTURE_ERROR): The booking flow returned an HTTP 401 (unauthorized) status where the test and application logic expect a successful booking status of 200, indicating that authentication or authorization for the booking request failed on the backend. This is likely due to an environment or credential/configuration issue rather than a problem in the Playwright test code, which has not changed since the last passing run one second earlier.",
+    "sourceReference": "checkly:check-result:72409245-a334-4a09-ac0d-9a28faff1377/01a0cf22-6ea3-708a-a3f8-7d8e5e494f33",
     "status": "captured"
   },
   "check": {
@@ -22,7 +22,7 @@
     ],
     "logicalId": "slots-booking-monitoring",
     "deployedId": "72409245-a334-4a09-ac0d-9a28faff1377",
-    "projectCommit": "a77d56b2208767f08cb42a808420d0d658343519"
+    "projectCommit": "6c641f5635a2bcd1868223948125a536d52a170a"
   },
   "config": {
     "frequencyMinutes": 5,
@@ -70,19 +70,25 @@
   },
   "results": {
     "failing": {
-      "id": "01a0cf14-b2db-738d-afb0-db090f93b088",
-      "startedAt": "2026-09-23T16:23:56.048Z",
-      "stoppedAt": "2026-09-23T16:24:14.487Z",
-      "runLocation": "eu-west-1",
+      "id": "01a0cf22-6ea3-708a-a3f8-7d8e5e494f33",
+      "startedAt": "2026-09-23T16:38:57.266Z",
+      "stoppedAt": "2026-09-23T16:39:13.928Z",
+      "runLocation": "us-east-1",
       "resultType": "FINAL",
       "attempts": 1,
       "errorGroupIds": [
         "6f3223de-350b-4f44-b660-620a60501d27"
       ],
       "errors": [
-        "Error: expect(locator).toHaveText(expected) failed\n\nLocator: getByTestId('book-status')\nExpected: \"200\"\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms\n  - waiting for getByTestId('book-status')\n\n\n  34 |\n  35 |     // 3. booking answered 200\n> 36 |     await expect(page.getByTestId('book-status')).toHaveText('200')\n     |                                                   ^\n  37 |\n  38 |     // 4. booking confirmed\n  39 |     await expect(page.getByTestId('booking-result')).toHaveText('CONFIRMED')\n    at /tmp/playwright-9YGhOO/user/tests/booking.spec.ts:36:51"
+        "Error: expect(locator).toHaveText(expected) failed\n\nLocator: getByTestId('book-status')\nExpected: \"200\"\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms\n  - waiting for getByTestId('book-status')\n\n\n  34 |\n  35 |     // 3. booking answered 200\n> 36 |     await expect(page.getByTestId('book-status')).toHaveText('200')\n     |                                                   ^\n  37 |\n  38 |     // 4. booking confirmed\n  39 |     await expect(page.getByTestId('booking-result')).toHaveText('CONFIRMED')\n    at /tmp/playwright-Sii8Yv/user/tests/booking.spec.ts:36:51"
       ],
-      "failingTest": null,
+      "failingTest": {
+        "file": "booking.spec.ts",
+        "title": "log in and book the 09:30 slot",
+        "project": "booking",
+        "line": 36,
+        "column": 51
+      },
       "trace": {
         "files": [
           "0-trace.network",
@@ -122,9 +128,9 @@
     "id": "6bd1f5a6-3b67-43e0-afbf-68c6b2840d94",
     "createdAt": "2026-09-21T23:14:13.456Z",
     "createdBeforeFailingRun": true,
-    "groupErrorMatchesFailingRun": null,
-    "mentionsFailingRunReceived": null,
-    "describesFailingRun": true,
+    "groupErrorMatchesFailingRun": false,
+    "mentionsFailingRunReceived": false,
+    "describesFailingRun": false,
     "replaced": null,
     "classification": "INFRASTRUCTURE_ERROR",
     "rootCause": "The booking flow returned an HTTP 401 (unauthorized) status where the test and application logic expect a successful booking status of 200, indicating that authentication or authorization for the booking request failed on the backend. This is likely due to an environment or credential/configuration issue rather than a problem in the Playwright test code, which has not changed since the last passing run one second earlier.",
@@ -167,22 +173,22 @@
     "id": "6f3223de-350b-4f44-b660-620a60501d27",
     "cleanedErrorMessage": "Error: expect(locator).toHaveText(expected) failed Locator: getByTestId('book-status') Expected: \"200\" Received: \"401\" Timeout: 10000ms Call log: - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms - waiting for getByTestId('book-status'",
     "firstSeen": "2026-09-21T23:14:13.372Z",
-    "lastSeen": "2026-09-23T16:29:14.327Z"
+    "lastSeen": "2026-09-23T16:39:14.599Z"
   },
   "reproduction": {
     "mode": "both",
     "matchedRule": null,
     "matchedText": null,
-    "reason": "RCA text matched no rule and no overlapping run was found → both modes; the scene is UNCERTAIN if neither reproduces",
+    "reason": "RCA text matched no rule and no passing overlapping run was found (the overlapping run failed too) → both modes; the scene is UNCERTAIN if neither reproduces",
     "decidedBy": "none",
     "overlappingRuns": [
       {
-        "runId": "01a0cf14-b2db-738d-afb0-d5548458a8cf",
-        "runLocation": "us-east-1",
-        "startedAt": "2026-09-23T16:23:55.918Z",
-        "stoppedAt": "2026-09-23T16:24:12.887Z",
-        "startDeltaMs": 130,
-        "overlapMs": 16839,
+        "runId": "01a0cf22-6ea4-7799-992f-6f32d48fe539",
+        "runLocation": "eu-west-1",
+        "startedAt": "2026-09-23T16:38:56.082Z",
+        "stoppedAt": "2026-09-23T16:39:12.578Z",
+        "startDeltaMs": 1184,
+        "overlapMs": 15312,
         "passed": false
       }
     ]
@@ -191,7 +197,7 @@
     "action": {
       "apiName": "Expect \"toHaveText\"",
       "title": "Expect \"toHaveText\" expected=\"200\"",
-      "error": "Error: expect(locator).toHaveText(expected) failed\n\nLocator: getByTestId('book-status')\nExpected: \"200\"\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms\n  - waiting for getByTestId('book-status')\n\n\n  34 |\n  35 |     // 3. booking answered 200\n> 36 |     await expect(page.getByTestId('book-status')).toHaveText('200')\n     |                                                   ^\n  37 |\n  38 |     // 4. booking confirmed\n  39 |     await expect(page.getByTestId('booking-result')).toHaveText('CONFIRMED')\n    at /tmp/playwright-9YGhOO/user/tests/booking.spec.ts:36:51"
+      "error": "Error: expect(locator).toHaveText(expected) failed\n\nLocator: getByTestId('book-status')\nExpected: \"200\"\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms\n  - waiting for getByTestId('book-status')\n\n\n  34 |\n  35 |     // 3. booking answered 200\n> 36 |     await expect(page.getByTestId('book-status')).toHaveText('200')\n     |                                                   ^\n  37 |\n  38 |     // 4. booking confirmed\n  39 |     await expect(page.getByTestId('booking-result')).toHaveText('CONFIRMED')\n    at /tmp/playwright-Sii8Yv/user/tests/booking.spec.ts:36:51"
     },
     "request": null,
     "assertion": {
@@ -249,7 +255,7 @@
         "mustFail": false,
         "provenance": {
           "kind": "recorded",
-          "runId": "01a0cf14-b2db-738d-afb0-db090f93b088",
+          "runId": "01a0cf22-6ea3-708a-a3f8-7d8e5e494f33",
           "artifactId": "recordings/failing.har"
         },
         "envAssumptions": [
@@ -270,7 +276,7 @@
       ],
       "environment": "target",
       "notes": [
-        "RCA text matched no rule and no overlapping run was found → both modes; the scene is UNCERTAIN if neither reproduces"
+        "RCA text matched no rule and no passing overlapping run was found (the overlapping run failed too) → both modes; the scene is UNCERTAIN if neither reproduces"
       ]
     },
     {
@@ -282,7 +288,7 @@
         "mustFail": true,
         "provenance": {
           "kind": "recorded",
-          "runId": "01a0cf14-b2db-738d-afb0-db090f93b088",
+          "runId": "01a0cf22-6ea3-708a-a3f8-7d8e5e494f33",
           "artifactId": "recordings/failing.har"
         },
         "envAssumptions": [
@@ -403,7 +409,7 @@
     },
     {
       "id": "overlapping-run",
-      "text": "the failing run overlapped in time with 01a0cf14-b2db-738d-afb0-d5548458a8cf (us-east-1, failed)",
+      "text": "the failing run overlapped in time with 01a0cf22-6ea4-7799-992f-6f32d48fe539 (eu-west-1, failed)",
       "verified": true,
       "verifiedBy": "checkly:GET /v2/check-results (startedAt/stoppedAt)"
     }
@@ -413,25 +419,25 @@
     "history": {
       "window": 100,
       "finalRuns": 100,
-      "passed": 30,
-      "failed": 70,
-      "passRate": 0.3,
+      "passed": 24,
+      "failed": 76,
+      "passRate": 0.24,
       "byLocation": {
-        "eu-west-1": {
-          "runs": 50,
-          "passed": 13
-        },
         "us-east-1": {
           "runs": 50,
-          "passed": 17
+          "passed": 14
+        },
+        "eu-west-1": {
+          "runs": 50,
+          "passed": 10
         }
       },
-      "from": "2026-09-23T12:18:58.140Z",
-      "to": "2026-09-23T16:23:56.048Z"
+      "from": "2026-09-23T12:33:55.499Z",
+      "to": "2026-09-23T16:38:57.266Z"
     },
     "sequential": null,
     "overlap": null,
-    "lastVerifiedAt": "2026-09-23T16:29:08.619Z"
+    "lastVerifiedAt": "2026-09-23T16:40:40.271Z"
   },
   "runBudget": {
     "maxPerScene": 10,
@@ -444,7 +450,7 @@
   "provenance": {
     "accountIdHash": "c16b931f",
     "checkId": "72409245-a334-4a09-ac0d-9a28faff1377",
-    "failingResultId": "01a0cf14-b2db-738d-afb0-db090f93b088",
+    "failingResultId": "01a0cf22-6ea3-708a-a3f8-7d8e5e494f33",
     "passingResultId": "01a0ce7d-a2e8-73db-b515-3f2ebf37fd62",
     "errorGroupId": "6f3223de-350b-4f44-b660-620a60501d27",
     "rcaId": "6bd1f5a6-3b67-43e0-afbf-68c6b2840d94",
@@ -453,8 +459,8 @@
         "result": "failing",
         "name": "trace.zip",
         "type": "trace",
-        "bytes": 118398,
-        "sha256": "5f056aecb3abd4b8c7dd7e7f8fbdc49fe09e0a075e2c05bddafd0b81639a4684"
+        "bytes": 117743,
+        "sha256": "8ec30ce35a2d7414a449d997fabe4d04d2532995c540200b8ad8a16f82d5fbc8"
       },
       {
         "result": "passing",
@@ -477,17 +483,17 @@
       },
       {
         "method": "GET",
-        "url": "https://api.checklyhq.com/v1/check-results/72409245-a334-4a09-ac0d-9a28faff1377/01a0cf14-b2db-738d-afb0-db090f93b088",
+        "url": "https://api.checklyhq.com/v1/check-results/72409245-a334-4a09-ac0d-9a28faff1377/01a0cf22-6ea3-708a-a3f8-7d8e5e494f33",
         "status": 200
       },
       {
         "method": "GET",
-        "url": "https://api.checklyhq.com/v1/check-results/72409245-a334-4a09-ac0d-9a28faff1377/01a0cf14-b2db-738d-afb0-db090f93b088/assets",
+        "url": "https://api.checklyhq.com/v1/check-results/72409245-a334-4a09-ac0d-9a28faff1377/01a0cf22-6ea3-708a-a3f8-7d8e5e494f33/assets",
         "status": 200
       },
       {
         "method": "GET",
-        "url": "https://api.checklyhq.com/next/assets/check-run-data/eu-west-1/bb1905b1-d2f9-436f-b2db-86d1210c11c0%2F72409245-a334-4a09-ac0d-9a28faff1377%2F1790180634045%2Fe2601dfc90%2Fassets.zip/redirect",
+        "url": "https://api.checklyhq.com/next/assets/check-run-data/us-east-1/bb1905b1-d2f9-436f-b2db-86d1210c11c0%2F72409245-a334-4a09-ac0d-9a28faff1377%2F1790181534045%2F277fda04a4%2Fassets.zip/redirect",
         "status": 200
       },
       {
@@ -509,11 +515,18 @@
         "method": "GET",
         "url": "https://api.checklyhq.com/v1/error-groups/6f3223de-350b-4f44-b660-620a60501d27",
         "status": 200
+      },
+      {
+        "method": "POST",
+        "url": "https://api.checklyhq.com/v1/root-cause-analyses/error-groups/6f3223de-350b-4f44-b660-620a60501d27",
+        "status": 202
       }
     ]
   },
   "notes": [
-    "01a0cf14-b2db-738d-afb0-d5548458a8cf @ us-east-1 overlapped the failing run and failed too — the failure does not depend on which copy wins, so the overlap is not evidence of concurrency",
-    "REGRESSION scenes (sibling checks) are not generated yet — planned once group listing is wired (Phase 3)"
+    "01a0cf22-6ea4-7799-992f-6f32d48fe539 @ eu-west-1 overlapped the failing run and failed too — the failure does not depend on which copy wins, so the overlap is not evidence of concurrency",
+    "error group 6f3223de-350b-4f44-b660-620a60501d27 merges different failures: its first failure received \"401\", the captured run received element(s) not found. Rocky analyzes only the first failure of a group, so this RCA describes an earlier failure, not this one — pass --trigger-rca to request a fresh analysis",
+    "REGRESSION scenes (sibling checks) are not generated yet — planned once group listing is wired (Phase 3)",
+    "warning: RCA trigger failed (Cannot destructure property 'id' of '(intermediate value)' as it is undefined.)"
   ]
 }

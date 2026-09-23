@@ -107,9 +107,9 @@ export class ChecklyClient {
 
   private async json<T>(method: string, url: string, init: { body?: unknown } = {}): Promise<{ status: number; data: T }> {
     const res = await this.request(method, url, init);
-    if (res.status === 202) return { status: 202, data: undefined as unknown as T };
     const text = await res.text();
     if (!res.ok) throw new ChecklyApiError(res.status, url, text.slice(0, 300));
+    // 202 bodies matter: GET rca → {id, status: "PENDING"}; POST trigger → {id, status: "PENDING"}.
     return { status: res.status, data: (text ? JSON.parse(text) : null) as T };
   }
 
@@ -163,8 +163,18 @@ export class ChecklyClient {
     return r.status === 202 ? { status: "pending" } : { status: "ready", rca: r.data };
   }
 
-  triggerRca(errorGroupId: string): Promise<{ id: string }> {
-    return this.json<{ id: string }>("POST", `/v1/root-cause-analyses/error-groups/${encodeURIComponent(errorGroupId)}`).then((r) => r.data);
+  /**
+   * Ask Rocky for a new analysis of an error group. Same call the Checkly CLI
+   * makes for `checkly rca run --error-group <id>`; the API answers 202 with
+   * {id, status: "PENDING"} and the analysis is polled with getRca().
+   * `userContext` is the CLI's `--user-context` (free text Rocky reads).
+   */
+  async triggerRca(errorGroupId: string, userContext?: string): Promise<{ id: string }> {
+    const url = `/v1/root-cause-analyses/error-groups/${encodeURIComponent(errorGroupId)}`;
+    const r = await this.json<{ id?: string; status?: string } | null>("POST", url, userContext ? { body: { userContext } } : {});
+    const id = r.data?.id;
+    if (!id) throw new ChecklyApiError(r.status, url, `trigger accepted but no RCA id in the response body: ${JSON.stringify(r.data)?.slice(0, 200)}`);
+    return { id };
   }
 
   async waitForRca(id: string, timeoutMs = 180_000, pollMs = 2000): Promise<RootCauseAnalysis | null> {

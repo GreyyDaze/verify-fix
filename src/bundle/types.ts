@@ -152,8 +152,12 @@ export interface ManifestV3 {
     groupErrorMatchesFailingRun: boolean | null;
     /** does Rocky's text mention what this run received (normalized substring)? null = run has no Received */
     mentionsFailingRunReceived: boolean | null;
-    /** false = one of the two signals says this RCA is about an earlier, different failure */
-    describesFailingRun: boolean;
+    /**
+     * true = positive evidence (the text mentions what this run received, or the
+     * group's first failure matches this run); false = the RCA predates this run
+     * and is about a different failure; null = not decidable from the outside.
+     */
+    describesFailingRun: boolean | null;
     /** the RCA this one replaced when `--trigger-rca` requested a fresh analysis */
     replaced: { id: string; createdAt: string; classification: string } | null;
   } | null;

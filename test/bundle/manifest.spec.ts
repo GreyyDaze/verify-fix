@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { buildManifest, detectFailurePoint, detectTargetResolution, expectedReceived, failingTestOf, findOverlappingRuns, groupErrorMatches, rcaIsStale, rcaMentionsReceived, resultErrors, runOutcome, summarizeErrorMessage, specLocation, type ManifestInputs } from "../../src/bundle/manifest.ts";
+import { buildManifest, detectFailurePoint, detectTargetResolution, expectedReceived, failingTestOf, findOverlappingRuns, groupErrorMatches, rcaFit, rcaIsStale, rcaMentionsReceived, resultErrors, runOutcome, summarizeErrorMessage, specLocation, type ManifestInputs } from "../../src/bundle/manifest.ts";
 import { classifyRca } from "../../src/bundle/rca-mode.ts";
 import { traceZipToHar } from "../../src/trace/trace-to-har.ts";
 import { fakeTraceZip } from "../helpers/fake-trace.ts";
@@ -319,7 +319,7 @@ test("expected/received: Playwright and Checkly-cleaned shapes parse; a group ma
   assert.equal(groupErrorMatches(ERROR_GROUP.cleanedErrorMessage, ["tests/booking.spec.ts:19:3 › suite › test"]), null);
 });
 
-test("rca fit: Rocky's paraphrased text is searched for what the run received; either signal marks the RCA stale", () => {
+test("rca fit: Rocky's paraphrased text is searched for what the run received; only an RCA older than the run can be stale", () => {
   const rca401: RootCauseAnalysis = {
     ...RCA_RACE,
     analysis: { ...RCA_RACE.analysis, rootCause: "The booking flow returned an HTTP 401 where 200 was expected.", evidence: [{ description: "the DOM repeatedly shows <span data-testid=\"book-status\">401</span>", artifacts: [] }], steps: [{ name: "Validate the booking status", errors: ["Booking status element reported 401 instead of the expected 200."] }] },
@@ -328,16 +328,24 @@ test("rca fit: Rocky's paraphrased text is searched for what the run received; e
   assert.equal(rcaMentionsReceived(rca401, [DRIFT_MESSAGE]), false, "element(s) not found appears nowhere");
   assert.equal(rcaMentionsReceived(rca401, ["tests/booking.spec.ts:19:3 › suite › test"]), null);
   assert.equal(rcaMentionsReceived(null, [DRIFT_MESSAGE]), null);
-  // signal 1: group disagrees → stale regardless of dates
-  assert.equal(rcaIsStale({ rca: rca401, createdBefore: false, groupMatches: false, mentions: true }), true);
-  // signal 2: older RCA that never mentions the run's value → stale even when the group message is not comparable or was updated
-  assert.equal(rcaIsStale({ rca: rca401, createdBefore: true, groupMatches: null, mentions: false }), true);
-  assert.equal(rcaIsStale({ rca: rca401, createdBefore: true, groupMatches: true, mentions: false }), true);
-  // not stale: same failure, or newer RCA, or nothing comparable
-  assert.equal(rcaIsStale({ rca: rca401, createdBefore: true, groupMatches: true, mentions: true }), false);
-  assert.equal(rcaIsStale({ rca: rca401, createdBefore: false, groupMatches: null, mentions: false }), false);
-  assert.equal(rcaIsStale({ rca: rca401, createdBefore: true, groupMatches: null, mentions: null }), false);
-  assert.equal(rcaIsStale({ rca: null, createdBefore: true, groupMatches: false, mentions: false }), false);
+  // an RCA written BEFORE the run is stale when the group merges different failures…
+  assert.deepEqual(rcaFit({ rca: rca401, createdBefore: true, groupMatches: false, mentions: false }), { stale: true, describes: false });
+  assert.deepEqual(rcaFit({ rca: rca401, createdBefore: true, groupMatches: false, mentions: true }), { stale: true, describes: false }, "group mismatch wins: the text may mention the value for other reasons");
+  // …or when it never mentions what the run received, even if the group message is not comparable
+  assert.deepEqual(rcaFit({ rca: rca401, createdBefore: true, groupMatches: null, mentions: false }), { stale: true, describes: false });
+  assert.deepEqual(rcaFit({ rca: rca401, createdBefore: true, groupMatches: true, mentions: false }), { stale: true, describes: false });
+  // same failure recurring: trusted
+  assert.deepEqual(rcaFit({ rca: rca401, createdBefore: true, groupMatches: true, mentions: true }), { stale: false, describes: true });
+  assert.deepEqual(rcaFit({ rca: rca401, createdBefore: true, groupMatches: true, mentions: null }), { stale: false, describes: true });
+  // an RCA created AFTER the run is never stale: the group message never updates, so a mismatch there
+  // says nothing about a later analysis (and re-requesting it on every capture would loop forever)
+  assert.deepEqual(rcaFit({ rca: rca401, createdBefore: false, groupMatches: false, mentions: true }), { stale: false, describes: true });
+  assert.deepEqual(rcaFit({ rca: rca401, createdBefore: false, groupMatches: false, mentions: false }), { stale: false, describes: null }, "not decidable from the outside");
+  assert.deepEqual(rcaFit({ rca: rca401, createdBefore: false, groupMatches: null, mentions: null }), { stale: false, describes: null });
+  // nothing comparable at all
+  assert.deepEqual(rcaFit({ rca: rca401, createdBefore: true, groupMatches: null, mentions: null }), { stale: false, describes: null });
+  assert.deepEqual(rcaFit({ rca: null, createdBefore: true, groupMatches: false, mentions: false }), { stale: false, describes: null });
+  assert.equal(rcaIsStale({ rca: rca401, createdBefore: true, groupMatches: false, mentions: false }), true);
 });
 
 test("manifest: an RCA that predates a different failure in the same group is flagged, not trusted", () => {
@@ -376,6 +384,10 @@ test("manifest: an RCA that predates a different failure in the same group is fl
   const replaced = buildManifest(inputs({ history, rca: fresh, replacedRca: oldRca, failing: { summary: history[0], detail: { ...history[0], errors: [DRIFT_RESULT_ERROR] }, extract: failingExtract() }, passing: { summary: history[1], detail: null, extract: passingExtract() } }));
   assert.deepEqual(replaced.rca?.replaced, { id: "rca-old", createdAt: "2026-09-21T16:20:00Z", classification: "INFRASTRUCTURE_ERROR" });
   assert.equal(replaced.rca?.createdBeforeFailingRun, false);
+  // fresh RCA whose text (copied from the 401 analysis here) never says "element(s) not found":
+  // not stale (it postdates the run), but not confirmed either — the reader is told to read it
+  assert.equal(replaced.rca?.describesFailingRun, null);
+  assert.ok(replaced.notes.some((n) => /created after this run but its text never mentions what the run received \(element\(s\) not found\)/.test(n)), replaced.notes.join("\n"));
   assert.equal(replaced.rca?.codeFix, "page.getByTestId('booking-status')");
   assert.ok(replaced.notes.some((n) => /requested by verify-fix bundle \(--trigger-rca\)/.test(n) && /rca-old/.test(n)), replaced.notes.join("\n"));
 });

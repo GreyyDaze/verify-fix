@@ -47,7 +47,7 @@ test("client: list results builds the v2 query, RCA 202 is 'pending', errors car
   const { fetch } = fakeFetch((url) => {
     seen.push(url);
     if (url.includes("/v2/check-results/")) return new Response(JSON.stringify({ entries: [{ id: "r1" }], nextId: null }), { status: 200 });
-    if (url.endsWith("/v1/root-cause-analyses/rca-1")) return new Response(null, { status: 202 });
+    if (url.endsWith("/v1/root-cause-analyses/rca-1")) return new Response(JSON.stringify({ id: "rca-1", status: "PENDING" }), { status: 202 });
     if (url.endsWith("/v1/root-cause-analyses/rca-2")) return new Response(JSON.stringify({ id: "rca-2", analysis: { classification: "x" } }), { status: 200 });
     return new Response(JSON.stringify({ statusCode: 401, message: "Bad Token" }), { status: 401 });
   });
@@ -59,6 +59,39 @@ test("client: list results builds the v2 query, RCA 202 is 'pending', errors car
   const ready = await c.getRca("rca-2");
   assert.equal(ready.status, "ready");
   await assert.rejects(c.getCheck("missing"), (err: unknown) => err instanceof ChecklyApiError && err.status === 401 && /Bad Token/.test(err.message));
+});
+
+test("client: triggering an RCA reads the id from the 202 body (the live failure of 2026-09-23)", async () => {
+  // POST /v1/root-cause-analyses/error-groups/{id} answers 202 Accepted with
+  // {id, status: "PENDING"} — the same body the Checkly CLI's `rca run` reads.
+  // The first live --trigger-rca dropped every 202 body and crashed on `id`.
+  const posts: Array<{ url: string; body: string | null; contentType: string | undefined }> = [];
+  const { fetch } = fakeFetch((url, init) => {
+    if (init?.method === "POST") {
+      posts.push({ url, body: (init.body as string | undefined) ?? null, contentType: (init.headers as Record<string, string>)["content-type"] });
+      if (url.endsWith("/error-groups/eg-empty")) return new Response(null, { status: 202 });
+      return new Response(JSON.stringify({ id: "rca-new", status: "PENDING" }), { status: 202 });
+    }
+    if (url.endsWith("/v1/root-cause-analyses/rca-new")) {
+      return posts.length < 2
+        ? new Response(JSON.stringify({ id: "rca-new", status: "PENDING" }), { status: 202 })
+        : new Response(JSON.stringify({ id: "rca-new", status: "COMPLETED", analysis: { classification: "CONFIGURATION_ERROR" } }), { status: 200 });
+    }
+    return new Response("nope", { status: 404 });
+  });
+  const c = new ChecklyClient(creds, { fetchImpl: fetch, baseUrl: "https://api.checklyhq.com", sleep: async () => {} });
+  assert.deepEqual(await c.triggerRca("eg-1"), { id: "rca-new" });
+  assert.equal(posts[0].url, "https://api.checklyhq.com/v1/root-cause-analyses/error-groups/eg-1");
+  assert.equal(posts[0].body, null, "no user context → no body, exactly like the CLI");
+  // optional free-text context is sent the way `checkly rca run --user-context` sends it
+  assert.deepEqual(await c.triggerRca("eg-1", "failing run 01a0cf22 reports element(s) not found"), { id: "rca-new" });
+  assert.equal(posts[1].body, JSON.stringify({ userContext: "failing run 01a0cf22 reports element(s) not found" }));
+  assert.equal(posts[1].contentType, "application/json");
+  // then the poll: 202 (pending) … 200 (ready)
+  const rca = await c.waitForRca("rca-new", 10_000, 1);
+  assert.equal(rca?.analysis.classification, "CONFIGURATION_ERROR");
+  // an accepted trigger without an id is an error we can name, not a crash on destructuring
+  await assert.rejects(c.triggerRca("eg-empty"), (err: unknown) => err instanceof ChecklyApiError && err.status === 202 && /no RCA id in the response body/.test(err.message));
 });
 
 test("client: retries 429 with backoff then succeeds", async () => {

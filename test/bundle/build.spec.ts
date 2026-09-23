@@ -96,7 +96,8 @@ function fakeClient(opts: { archive?: boolean; drift?: boolean } = {}) {
         rootCauseAnalyses: [
           {
             id: "rca-1",
-            created_at: "2026-09-21T10:01:00Z",
+            // drift: the RCA came with the group's first failure (09:59), before this run (10:00) — the live shape
+            created_at: opts.drift ? "2026-09-21T09:59:30Z" : "2026-09-21T10:01:00Z",
             analysis: { classification: "Check configuration", rootCause: "Parallel runs share one test account; the second login supersedes the first session.", userImpact: "none", codeFix: null, evidence: [], referenceLinks: null },
             provider: "openai",
             model: "gpt",
@@ -118,7 +119,7 @@ function fakeClient(opts: { archive?: boolean; drift?: boolean } = {}) {
       return {
         id,
         created_at: "2026-09-21T12:00:30Z",
-        analysis: { classification: "CHECK_ERROR", rootCause: "The element with data-testid book-status no longer exists; the page now renders booking-status.", userImpact: "none", codeFix: "await expect(page.getByTestId('booking-status')).toHaveText('200')", evidence: [], referenceLinks: null, repairRecommendation: "REPAIR" },
+        analysis: { classification: "CHECK_ERROR", rootCause: "Playwright reported element(s) not found for getByTestId('book-status'): the page now renders data-testid booking-status.", userImpact: "none", codeFix: "await expect(page.getByTestId('booking-status')).toHaveText('200')", evidence: [], referenceLinks: null, repairRecommendation: "REPAIR" },
         provider: "openai",
         model: "gpt",
         durationMs: 1,
@@ -230,7 +231,10 @@ test("bundle: a stale RCA (group's first failure ≠ this run's) is flagged; --t
     assert.equal(fresh.manifest.rca?.id, "rca-x");
     assert.equal(fresh.manifest.rca?.classification, "CHECK_ERROR");
     assert.match(fresh.manifest.rca?.codeFix ?? "", /booking-status/);
-    assert.deepEqual(fresh.manifest.rca?.replaced, { id: "rca-1", createdAt: "2026-09-21T10:01:00Z", classification: "Check configuration" });
+    assert.deepEqual(fresh.manifest.rca?.replaced, { id: "rca-1", createdAt: "2026-09-21T09:59:30Z", classification: "Check configuration" });
+    // the fresh RCA was created after the run: never stale, so a third capture does not request yet another one
+    assert.equal(fresh.manifest.rca?.createdBeforeFailingRun, false);
+    assert.equal(fresh.manifest.rca?.describesFailingRun, true, "its codeFix names booking-status… and its text names element(s) not found");
     const rcaFile = JSON.parse(readFileSync(join(out, "b/rca.json"), "utf8"));
     assert.equal(rcaFile.rca.id, "rca-x");
     assert.equal(rcaFile.replacedRca.id, "rca-1");

@@ -50,10 +50,19 @@ Is the RCA even about this failure? Seen live on 2026-09-23: after the UI
 rename, the `element(s) not found` failures were attributed to the existing
 401 error group (Checkly's grouping drops the Expected/Received values), so no
 new error group appeared, no automatic RCA ran, and the drift inherited
-`INFRASTRUCTURE_ERROR / DO_NOT_REPAIR` from two days earlier. The bundle now
-records `rca.createdBeforeFailingRun` and `rca.groupErrorMatchesFailingRun`
-(the group's first "Received" vs this run's), warns when they disagree, and
-`--trigger-rca` then requests a fresh analysis and keeps the old one as
+`INFRASTRUCTURE_ERROR / DO_NOT_REPAIR` from two days earlier. The bundle
+records three signals — `rca.createdBeforeFailingRun`,
+`rca.groupErrorMatchesFailingRun` (the group's first outcome vs this run's)
+and `rca.mentionsFailingRunReceived` (does Rocky's text contain this run's
+outcome) — and derives `rca.describesFailingRun`: `false` when an RCA older
+than the run sits on a group that merges different failures, or never mentions
+the run's outcome (stale); `true` with positive evidence; `null` when nobody
+can tell from the outside. An RCA created after the run is never stale: the
+group message never updates, so a mismatch there says nothing about a later
+analysis, and re-requesting it on every capture would loop. `--trigger-rca`
+requests a fresh analysis only for stale or missing RCAs (`POST
+/v1/root-cause-analyses/error-groups/{id}`, 202 + `{id, status: PENDING}`,
+polled like `checkly rca run --watch`) and keeps the old one as
 `rca.replaced` / `rca.json#replacedRca`.
 
 Rules that do not change between phases (see BRAINSTORM.md Part 7, D1–D9):

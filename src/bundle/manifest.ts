@@ -267,15 +267,35 @@ export function rcaMentionsReceived(rca: RootCauseAnalysis | null | undefined, r
 }
 
 /**
- * Is the group's RCA about an earlier, different failure? Two independent
- * signals; either one is enough:
- *  1. the group's first failure and this run received different things;
- *  2. the RCA predates this run and never mentions what this run received.
+ * How much is the group's RCA worth for THIS run? Three arithmetic/string
+ * signals, no judgment:
+ *  - createdBefore: the RCA predates the failing run (it cannot have seen it);
+ *  - groupMatches:  the group's first failure received what this run received;
+ *  - mentions:      the RCA text contains what this run received.
+ *
+ * stale (the RCA is about an earlier, different failure) needs createdBefore:
+ * an RCA written before the run is stale when the group merges different
+ * failures (groupMatches false) or when it never mentions the run's outcome.
+ * An RCA created after the run is never stale — the group message never
+ * updates (Checkly keeps the first failure's), so a mismatch there says
+ * nothing about a later analysis; otherwise every fresh RCA on a merged
+ * group would be re-requested on every capture.
+ *
+ * describes: true with positive evidence (mentions, or a group whose first
+ * failure matches); false when stale; null when nobody can tell from the
+ * outside — the reader must read the RCA before trusting it.
  */
+export function rcaFit(x: { rca: RootCauseAnalysis | null; createdBefore: boolean | null; groupMatches: boolean | null; mentions: boolean | null }): { stale: boolean; describes: boolean | null } {
+  if (!x.rca) return { stale: false, describes: null };
+  if (x.createdBefore === true && (x.groupMatches === false || x.mentions === false)) return { stale: true, describes: false };
+  if (x.mentions === true) return { stale: false, describes: true };
+  if (x.createdBefore === true && x.groupMatches === true) return { stale: false, describes: true };
+  return { stale: false, describes: null };
+}
+
+/** Shorthand for rcaFit().stale. */
 export function rcaIsStale(x: { rca: RootCauseAnalysis | null; createdBefore: boolean | null; groupMatches: boolean | null; mentions: boolean | null }): boolean {
-  if (!x.rca) return false;
-  if (x.groupMatches === false) return true;
-  return x.createdBefore === true && x.mentions === false;
+  return rcaFit(x).stale;
 }
 
 /** Does the error group's first failure look like this run's failure? null when either side has no "Received". */
@@ -504,7 +524,16 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   const rcaCreatedBefore = rca && failing ? Date.parse(rca.created_at) < Date.parse(failing.summary.startedAt) : null;
   const groupMatches = errorGroup && failing ? groupErrorMatches(errorGroup.cleanedErrorMessage, failingErrorsForRca) : null;
   const rcaMentions = rca && failing ? rcaMentionsReceived(rca, failingErrorsForRca) : null;
-  const rcaStale = rcaIsStale({ rca, createdBefore: rcaCreatedBefore, groupMatches, mentions: rcaMentions });
+  const fit = rcaFit({ rca, createdBefore: rcaCreatedBefore, groupMatches, mentions: rcaMentions });
+  const rcaStale = fit.stale;
+  if (rca && failing && fit.describes === null) {
+    const r = runOutcome(failingErrorsForRca);
+    notes.push(
+      r.received === null
+        ? `RCA ${rca.id}: the captured run has no Expected/Received to compare against, so whether the RCA describes this run is not decidable from the outside — read it before trusting it`
+        : `RCA ${rca.id} was created ${rcaCreatedBefore === false ? "after" : "around"} this run but its text never mentions what the run received (${r.received}) — read it before trusting it`,
+    );
+  }
   if (rca && failing && rcaStale) {
     const g = expectedReceived(errorGroup?.cleanedErrorMessage);
     const r = runOutcome(failingErrorsForRca);
@@ -699,7 +728,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
           createdBeforeFailingRun: rcaCreatedBefore,
           groupErrorMatchesFailingRun: groupMatches,
           mentionsFailingRunReceived: rcaMentions,
-          describesFailingRun: !rcaStale,
+          describesFailingRun: fit.describes,
           replaced: input.replacedRca ? { id: input.replacedRca.id, createdAt: input.replacedRca.created_at, classification: input.replacedRca.analysis.classification } : null,
           classification: rca.analysis.classification,
           rootCause: rca.analysis.rootCause,

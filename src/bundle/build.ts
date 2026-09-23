@@ -20,7 +20,7 @@ import type { AssetManifestEntry, ChecklyCheck, CheckResult, CheckResultSummary,
 import { isZip, openZip } from "../trace/zip.ts";
 import { mergeHars, traceZipToHar, type BodyPolicy, type TraceExtract } from "../trace/trace-to-har.ts";
 import { sanitizeHar } from "./sanitize.ts";
-import { buildManifest, expectedReceived, findOverlappingRuns, groupErrorMatches, rcaIsStale, rcaMentionsReceived, resultErrors, runOutcome, type FetchedResult } from "./manifest.ts";
+import { buildManifest, expectedReceived, findOverlappingRuns, groupErrorMatches, rcaFit, rcaMentionsReceived, resultErrors, runOutcome, type FetchedResult } from "./manifest.ts";
 import { measureDeterminism, type MeasureResult, type Runner } from "./measure.ts";
 import type { ManifestV3 } from "./types.ts";
 
@@ -368,7 +368,8 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
       warnings.push(`error group lookup failed (${(err as Error).message})`);
     }
     if (errorGroup) {
-      const analyses = [...(errorGroup.rootCauseAnalyses ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at));
+      // newest completed analysis first; a PENDING/FAILED entry has no `analysis`
+      const analyses = (errorGroup.rootCauseAnalyses ?? []).filter((a) => a && a.analysis && typeof a.created_at === "string").sort((a, b) => b.created_at.localeCompare(a.created_at));
       rca = analyses[0] ?? null;
       // Rocky analyzes only the first failure of a group. When the captured
       // run's "Received" differs from the group's first failure, the existing
@@ -378,11 +379,13 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
       const matches = groupErrorMatches(errorGroup.cleanedErrorMessage, runErrors);
       const mentions = rcaMentionsReceived(rca, runErrors);
       const createdBefore = rca ? Date.parse(rca.created_at) < Date.parse(failing.summary.startedAt) : null;
-      const stale = rcaIsStale({ rca, createdBefore, groupMatches: matches, mentions });
+      const fit = rcaFit({ rca, createdBefore, groupMatches: matches, mentions });
+      const stale = fit.stale;
       if (rca) {
         log(
           `[bundle] RCA fit: group first received ${expectedReceived(errorGroup.cleanedErrorMessage).received ?? "?"}, this run received ${runOutcome(runErrors).received ?? "?"}; ` +
-            `RCA created ${createdBefore ? "before" : "after"} this run, mentions the run's received value: ${mentions ?? "n/a"} → ${stale ? "STALE (about an earlier failure)" : "describes this run"}`,
+            `RCA created ${createdBefore ? "before" : "after"} this run, mentions the run's received value: ${mentions ?? "n/a"} → ` +
+            (stale ? "STALE (about an earlier failure)" : fit.describes === true ? "describes this run" : "not decidable from the outside (read it before trusting it)"),
         );
       }
       if ((!rca || stale) && opts.triggerRca) {

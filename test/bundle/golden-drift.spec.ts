@@ -6,8 +6,9 @@
 // failures under the existing 401 error group, so no automatic RCA ran.
 //
 // The fixture is re-captured as the tool improves. Assertions below hold for
-// both states of the RCA: the inherited 401 analysis (first capture) and a
-// fresh one requested with --trigger-rca (rca.json then carries replacedRca).
+// both states of the RCA: the inherited 401 analysis (first captures) and a
+// fresh one created after the run (rca.json carries replacedRca when
+// --trigger-rca requested it inside the same capture).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -63,11 +64,17 @@ test("golden (drift): the RCA Checkly attached is judged against THIS run, not t
   const m = buildManifest(inputs());
   assert.ok(m.rca, "an RCA is present on the error group");
   assert.equal(m.errorGroup?.id, overlap.rcaDoc.errorGroup?.id, "Checkly put the drift into the 401 incident's error group");
-  if (rcaDoc.replacedRca) {
-    // re-captured with --trigger-rca: the fresh analysis is the RCA; the inherited one is kept
-    assert.equal(m.rca!.replaced?.id, rcaDoc.replacedRca.id);
-    assert.equal(m.rca!.createdBeforeFailingRun, false);
-    assert.ok(m.notes.some((n) => /requested by verify-fix bundle \(--trigger-rca\)/.test(n)), m.notes.join("\n"));
+  if (m.rca!.createdBeforeFailingRun === false) {
+    // a fresh analysis exists (requested with --trigger-rca, by hand, or by Checkly after the capture)
+    assert.notEqual(m.rca!.id, overlap.rcaDoc.rca!.id);
+    assert.equal(m.rca!.groupErrorMatchesFailingRun, false, "the group message never updates: still the 401");
+    assert.notEqual(m.rca!.describesFailingRun, false, "an RCA created after the run is never called stale");
+    if (m.rca!.describesFailingRun === null) assert.ok(m.notes.some((n) => /read it before trusting it/.test(n)), m.notes.join("\n"));
+    if (rcaDoc.replacedRca) {
+      assert.equal(m.rca!.replaced?.id, rcaDoc.replacedRca.id);
+      assert.equal(rcaDoc.replacedRca.id, overlap.rcaDoc.rca!.id, "the inherited 401 analysis is what got replaced");
+      assert.ok(m.notes.some((n) => /requested by verify-fix bundle \(--trigger-rca\)/.test(n)), m.notes.join("\n"));
+    }
   } else {
     // first capture: the 401 analysis from two days earlier, inherited through the group
     assert.equal(m.rca!.id, overlap.rcaDoc.rca!.id);
@@ -78,6 +85,7 @@ test("golden (drift): the RCA Checkly attached is judged against THIS run, not t
     assert.equal(m.rca!.groupErrorMatchesFailingRun, false, `group first received "401", this run received element(s) not found`);
     assert.equal(m.rca!.mentionsFailingRunReceived, false, "Rocky's 401 text never says element(s) not found");
     assert.equal(m.rca!.describesFailingRun, false);
+    assert.equal(m.rca!.replaced, null);
     assert.ok(m.notes.some((n) => /merges different failures/.test(n) && /--trigger-rca/.test(n)), m.notes.join("\n"));
   }
   assert.deepEqual(m.config.repair, { intent: null, aiAutoRepairEnabled: null });

@@ -11,28 +11,72 @@
     "logicalId": "slots-booking-weak",
     "deployedId": null
   },
+  "recordedOrigin": null,
   "scenes": [
     {
       "sceneId": "scene-b-single-run",
       "type": "HEALTHY",
       "state": "Sequential single run against a healthy app.",
-      "stateDriver": { "kind": "mock-override", "params": { "mode": "normal" } },
-      "verdict": { "mustFail": false, "provenance": { "kind": "code", "assertionId": "assert:weak-1" }, "envAssumptions": [] },
-      "experiments": [{ "durationSec": 30, "repetitions": 5, "expectStable": true }],
+      "mode": "live",
+      "environment": "target",
+      "verdict": {
+        "mustFail": false,
+        "provenance": {
+          "kind": "code",
+          "assertionId": "assert:weak-1"
+        },
+        "envAssumptions": []
+      },
+      "experiments": [
+        {
+          "durationSec": 30,
+          "repetitions": 5,
+          "expectStable": true
+        }
+      ],
       "assertionsInvolved": []
     },
     {
       "sceneId": "scene-e-regression",
       "type": "REGRESSION",
       "state": "Second, independent user books a slot.",
-      "stateDriver": { "kind": "mock-override", "params": { "mode": "normal" } },
-      "verdict": { "mustFail": false, "provenance": { "kind": "code", "assertionId": "assert:weak-2" }, "envAssumptions": [] },
-      "experiments": [{ "durationSec": 30, "repetitions": 2, "expectStable": true }],
+      "mode": "live",
+      "environment": "target",
+      "env": {
+        "ACCOUNT": "other"
+      },
+      "verdict": {
+        "mustFail": false,
+        "provenance": {
+          "kind": "code",
+          "assertionId": "assert:weak-2"
+        },
+        "envAssumptions": []
+      },
+      "experiments": [
+        {
+          "durationSec": 30,
+          "repetitions": 2,
+          "expectStable": true
+        }
+      ],
       "assertionsInvolved": []
     }
   ],
   "envAssumptions": [],
-  "determinism": { "targetRuns": 20, "achieved": 20, "sequentialPassRate": 1, "overlapFailRate": 1, "lastVerifiedAt": "2026-09-20T00:00:00Z" },
-  "runBudget": { "maxPerScene": 40, "used": 0 },
-  "oracleProvenance": { "recorded": 0, "codeDerived": 2 }
+  "determinism": {
+    "targetRuns": 20,
+    "achieved": 20,
+    "sequentialPassRate": 1,
+    "overlapFailRate": 1,
+    "lastVerifiedAt": "2026-09-20T00:00:00Z"
+  },
+  "runBudget": {
+    "maxPerScene": 40,
+    "used": 0
+  },
+  "oracleProvenance": {
+    "recorded": 0,
+    "codeDerived": 2
+  }
 }

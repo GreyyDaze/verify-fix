@@ -18,7 +18,7 @@ import { loadRealBundle } from "../helpers/real-bundle.ts";
 const { captured, failingResult, passingResult, rcaDoc, historyFile, inputs } = loadRealBundle("slots-booking-drift");
 const overlap = loadRealBundle("slots-booking-overlap");
 
-test("golden (drift): a stale check — locator not found at line 36, all responses healthy, no request to inject", () => {
+test("golden (drift): a stale check — locator not found at line 36, all responses healthy; detection derived from the dependency", () => {
   const m = buildManifest(inputs());
   assert.equal(m.incident.status, "captured");
   assert.equal(m.incident.title, `slots booking flow: expect(locator).toHaveText(expected) failed — on getByTestId('book-status'), expected "200", element(s) not found`);
@@ -36,17 +36,34 @@ test("golden (drift): a stale check — locator not found at line 36, all respon
   assert.ok(Date.parse(passingResult.startedAt) < Date.parse(failingResult.startedAt));
   const passingHar = inputs().passing!.extract!.har;
   assert.equal(passingHar.log.entries.some((e) => /\/api\/book/.test(e.request.url) && e.response.status === 200), true);
-  // detection cannot be derived yet: known gap (assertion → network dependency), stated in the scene
+  // detection is derived from the passing run's timeline: the failing step (line 36) depends on the
+  // last API call before it, POST /api/book; answering that with a 500 is a failure no repair may hide
+  assert.deepEqual(
+    { ...m.failurePoint?.dependency, url: undefined, msBeforeStep: undefined },
+    { method: "POST", path: "/api/book", passingStatus: 200, stepLine: 36, stepTitle: 'Expect "toHaveText" expected="200"', url: undefined, msBeforeStep: undefined },
+  );
+  assert.ok((m.failurePoint?.dependency?.msBeforeStep ?? -1) >= 0 && (m.failurePoint?.dependency?.msBeforeStep ?? 1e9) < 1000, "the call finished just before the step");
   const detection = m.scenes.find((s) => s.sceneId === "detection")!;
-  assert.equal(detection.mode, "inject:<failing request unknown>");
-  assert.ok(detection.notes?.some((n) => /no failing API request could be identified/.test(n)));
+  assert.equal(detection.mode, "inject:POST /api/book -> 500");
+  assert.deepEqual(detection.verdict.provenance, { kind: "recorded", runId: passingResult.id, artifactId: "recordings/passing.har" });
+  assert.ok(detection.notes?.some((n) => /derived from the passing run's timeline/.test(n)), detection.notes?.join("\n"));
   assert.equal(detection.verdict.mustFail, true);
 });
 
-test("golden (drift): the sibling failed too, so the overlap decides nothing; the id differs from the overlap incident", () => {
+test("golden (drift): the sibling failed too, so the overlap decides nothing; the persistent history makes the reproduction `live`", () => {
   const m = buildManifest(inputs());
   assert.notEqual(m.reproduction.decidedBy, "result-timestamps");
   assert.notEqual(m.reproduction.matchedRule, "overlapping-run");
+  if (historyFile) {
+    // every final run after the last passing one failed, in both locations → the target itself reproduces it
+    assert.equal(m.reproduction.decidedBy, "history");
+    assert.equal(m.reproduction.mode, "live");
+    const repro = m.scenes.find((s) => s.sceneId === "reproduction")!;
+    assert.equal(repro.mode, "live");
+    assert.equal(repro.alternativeMode, undefined);
+    assert.equal(repro.environment, "target");
+    assert.ok(repro.notes?.some((n) => /every run since the last passing one failed \(\d+\/\d+ since .* across eu-west-1, us-east-1\)/.test(n)), repro.notes?.join("\n"));
+  }
   if (historyFile) {
     const siblings = m.reproduction.overlappingRuns.filter((o) => o.runLocation !== failingResult.runLocation);
     assert.ok(siblings.length >= 1, "runParallel: the other location ran at the same time");

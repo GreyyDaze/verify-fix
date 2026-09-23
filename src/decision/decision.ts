@@ -45,7 +45,9 @@ export function decide(input: DecisionInput): Decision {
     const observed: ObservationValue = obs?.observed ?? "uncertain";
     const note = observed === "uncertain" ? obs?.reason ?? "scene was not observed" : undefined;
     const matched = observed !== "uncertain" && observed === row.expected;
-    return { ...row, observed, matched, strength: adequacy.strength.score, ...(note ? { note } : {}) };
+    // the executor knows what the run actually talked to; the scene's declared kind is the fallback
+    const environment = obs?.environment ?? row.environment;
+    return { ...row, environment, observed, matched, strength: adequacy.strength.score, ...(note ? { note } : {}) };
   });
 
   // Only a real pass/fail can mismatch an oracle; an uncertain observation is

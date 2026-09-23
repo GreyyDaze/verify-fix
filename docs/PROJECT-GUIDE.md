@@ -888,9 +888,96 @@ from, so nothing in it has to be trusted on faith.
 tests in `test/bundle/*.spec.ts` with a real ZIP writer and a fake Checkly served
 over local HTTP (`test/bundle/cli-http.spec.ts`).
 
+## 9c. The scene layer — Phase 3 (replaces the simulator)
+
+Sections 4–8 describe the tool as it was when the guide was written: a
+hand-written `app-sim.ts` per bundle, driven by a "synthetic executor". Phase 3
+removed that. Read those sections for the static engine, the DSL, the
+sandbox, the decision law and the report — they are unchanged — and read this
+section for how a scene is run now.
+
+**What runs the check now.** `src/executor/scene.ts` (`SceneExecutor`, kind
+`scene`). For every scene it arms `src/scene/proxy.ts` and starts one sandbox
+per concurrent run. The check talks to `ENVIRONMENT_URL`; that is the proxy.
+The proxy forwards to the real target (`--target`), answers from a recording,
+or injects one failure. Nothing models the app any more; the target is the
+customer's app (locally `next start` of `examples/slots-booking/web`, or a
+staging URL).
+
+**The four modes** (`src/scene/modes.ts`, written into each scene's `mode`):
+
+| mode | what the proxy does | needs `--target` |
+| --- | --- | --- |
+| `live` | forwards every request | yes |
+| `live-concurrent:N` | N runs at once, interleaved request by request: request k of every run is held until all runs sent theirs, then forwarded in run order, responses released together (login, login, book, book) | yes |
+| `inject:<METHOD> <path> -> <status>` | forwards everything except the matching request, which gets the failing recording's response for that path and status (or a plain JSON failure) | yes |
+| `replay:<file>.har` | answers from the recording in order; unmatched → 404 counted as `unmatched` | no |
+
+`inject:<failing request unknown>` (written by `bundle` when nothing can be
+derived) runs as `uncertain`.
+
+**Concurrency follows the config.** A `live-concurrent:2` scene runs at
+`min(2, effectiveConcurrency(patched config))`, where effective concurrency is
+the number of locations when `runParallel` is true, else 1. That is how a
+config-only fix (`runParallel: false`, or one location) is verified: the scene
+runs at the overlap the new schedule still allows.
+
+**Evidence gate.** The proxy counts hits per run outside the sandbox. A run
+with zero hits, a vacuous run, a sandbox crash, a missing target, an unrunnable
+mode or disagreeing repetitions is `uncertain` — never pass, never fail.
+
+**Environment** (`src/scene/env.ts`): the sandbox receives only `PATH`,
+`HOME`, `ENVIRONMENT_URL`, `ENVIRONMENT_NAME` (`--env-name`, default
+`verify-fix`), the variables from `--env-file` (KEY=VALUE, like `checkly test
+--env-file`) and the scene's own `env` (the regression scene uses
+`ACCOUNT=other`). A check that reads `{{VAR}}` or `process.env.VAR` without a
+fallback and without a provided value makes every scene `uncertain`, with the
+line number. `APP_BASE_URL` no longer exists.
+
+**Patches** (`src/patch.ts`): `--patch <file>` replaces the bundle's main
+check file; `--patch <dir>` replaces every bundle file with the same relative
+path (spec, `checkly.config.ts`, both). `src/scene/config-diff.ts` compares
+the two configs: scheduling keys are allowed and noted; a change that touches
+only `retryStrategy` / `doubleCheck` / timeouts is rejected as masking (retries
+next to a real change are only flagged, because the runner does not simulate
+retries); new `environmentVariables` keys are "declared" — they must exist in
+Checkly and be given through `--env-file` to run here.
+
+**Report.** Every row has an `environment` column: `target <host> (live)`,
+`target <host> (live-concurrent:2)`, `target <host> + inject …`, or
+`recording <file>`; a note under the table says which host the live rows
+ran against and that they prove nothing about any other host.
+
+**Seeded suite after the migration.** `fixtures/slots-booking/patches/`:
+`01-good-run-parallel-false/` and `12-good-one-location/` PASS (config
+patches, check unchanged); `02` (weakened twin of 01) and `03`–`10` FAILED;
+`11-flaky` never PASS; `13-config-retry-only/` FAILED by the config policy.
+The old lock-based good patch is gone: the real app has no `/lock` route, and
+Checkly's own answer to "one run at a time" is scheduling, not a lock.
+`test/helpers/example-app.ts` builds (if needed) and starts the example app for
+the tests; the suite runs in about one minute.
+
+**Bundle side (3.7).** A drift incident has no failing request. The bundle
+command now derives the detection scene from the passing run's timeline: the
+last API call before the failing step (Playwright's monotonic clock on actions
+and HAR entries) is the step's dependency, and the scene injects a 500 on it.
+When every run since the last passing one failed in every location, the
+reproduction mode is `live` (`decidedBy: history`). The committed
+`fixtures/bundles/slots-booking-drift/manifest.json` predates this rule and
+still says `inject:<failing request unknown>`; the golden test proves the
+derivation on the same inputs, and the next capture writes the new modes.
+
+**Not done in Phase 3.** The sandbox runs the DSL checks (`./check-api.ts`).
+A `@playwright/test` spec does not run yet, so the v3 bundles verify to
+UNCERTAIN ("sandbox could not run the check") until Phase 4 adds the
+Playwright runner. The drift verdicts (correct rename PASS, four fakes FAILED)
+wait for that.
+
+---
+
 ## 10. Current state
 
-Implemented and exercised: bundle loading and provenance validation; the
+Implemented and exercised (see 9c for the Phase 3 changes): bundle loading and provenance validation; the
 static engine (inventory, diff, guards, suppression, determinism gate); the
 DSL with fetch instrumentation and evidence rule; the child-process sandbox
 with seeded randomness; the synthetic executor with budget, uncertain

@@ -9,12 +9,12 @@ const ACCOUNT = process.env.ACCOUNT ?? "demo";
 check("slots-booking flow", async ({ baseUrl }) => {
   const base = await baseUrl;
 
-  await fetch(`${base}/login`, {
+  await fetch(`${base}/api/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ account: ACCOUNT }),
   });
-  await fetch(`${base}/book`, {
+  await fetch(`${base}/api/book`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ slot: "09:30" }),

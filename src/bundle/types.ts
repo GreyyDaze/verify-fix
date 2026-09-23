@@ -48,6 +48,13 @@ export interface FailurePoint {
   request: { method: string; url: string; path: string; status: number; passingStatus: number | null; failureText: string | null } | null;
   /** the spec line of the failing expect(), and the inventory assertion on that line */
   assertion: { file: string | null; line: number; column: number | null; assertionId: string | null } | null;
+  /**
+   * When no request failed (drift: the app answered everything, the check
+   * went stale), the request the failing assertion depends on: the last API
+   * call before the same step in the PASSING run. Breaking it is the detection
+   * scene — a repaired check must still fail when that call fails.
+   */
+  dependency: { method: string; url: string; path: string; passingStatus: number; msBeforeStep: number; stepLine: number | null; stepTitle: string } | null;
 }
 
 /** Another run of the same check whose time window intersects the failing run's. */
@@ -169,7 +176,7 @@ export interface ManifestV3 {
     matchedText: string | null;
     reason: string;
     /** which kind of evidence decided the mode */
-    decidedBy: "result-timestamps" | "rca-text" | "error-group-text" | "none";
+    decidedBy: "result-timestamps" | "history" | "rca-text" | "error-group-text" | "none";
     overlappingRuns: OverlappingRun[];
   };
   failurePoint: FailurePoint | null;

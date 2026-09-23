@@ -35,13 +35,23 @@ export interface SceneVerdict {
 export interface Scene {
   sceneId: string;
   type: SceneType;
-  /** How the app is put into this state (deterministic entrypoint). */
+  /** What state the target is in for this scene (prose, for the report). */
   state: string;
-  /** Deterministic entrypoint understood by the app-under-test (see state-driver). */
-  stateDriver?: { kind: "mock-override" | "app-probe"; params: Record<string, string> };
+  /**
+   * How the scene layer puts the target into that state (src/scene/modes.ts):
+   * `live`, `live-concurrent:N`, `replay:<file>.har`, `inject:<METHOD> <path> -> <status>`.
+   */
+  mode: string;
+  /** REPRODUCTION scenes may name a second way to reproduce (used when the first cannot run). */
+  alternativeMode?: string;
+  /** where the evidence comes from (report column) */
+  environment?: "target" | "recording" | "target+recording";
+  /** scene-specific variables layered over the run environment (e.g. a second user for a regression scene) */
+  env?: Record<string, string>;
   verdict: SceneVerdict;
   experiments: Array<{ durationSec: number; repetitions: number; expectStable: boolean }>;
   assertionsInvolved: string[];
+  notes?: string[];
 }
 
 export interface EnvAssumption {
@@ -71,13 +81,31 @@ export interface CheckInfo {
   deployedId: string | null;
 }
 
+/** The check's scheduling/config as it ran (from checkly.config.ts / the construct / the API). */
+export interface BundleConfig {
+  runParallel: boolean;
+  locations: string[];
+  frequencyMinutes: number | null;
+  /** keys only — values never enter a bundle */
+  environmentVariables: string[];
+}
+
 export interface Bundle {
-  schemaVersion: "v2";
+  schemaVersion: "v2" | "v3";
   incidentId: string;
   incident: { title: string; description: string; sourceReference?: string };
   check: CheckInfo;
   /** The check source AS IT RAN when the failure was recorded (the "original"). */
   checkSource: string;
+  /** every file under check/ (path → content); a directory patch may replace any of them */
+  files: Record<string, string>;
+  /** the config file among `files`, when there is one (checkly.config.ts) */
+  configFile: string | null;
+  config: BundleConfig | null;
+  /** origin the failing run was recorded against (null = unknown); never used as a live target by itself */
+  recordedOrigin: string | null;
+  /** absolute path of the bundle directory (recordings are resolved against it) */
+  dir: string;
   scenes: Scene[];
   envAssumptions: EnvAssumption[];
   determinism: DeterminismEvidence;
@@ -139,7 +167,9 @@ export interface SceneObservation {
   repetitions: number;
   /** every claim here must reduce to traced steps + assertion outcomes */
   trace: TraceStep[];
-  source: "synthetic" | "checkly";
+  source: "scene" | "checkly";
+  /** what the run talked to: "target <host> (mode)" or "recording <file>" */
+  environment?: string;
   checklyRunIds?: string[];
   /** Mandatory when observed === "uncertain": why no pass/fail could be admitted. */
   reason?: string;
@@ -157,6 +187,8 @@ export interface TraceStep {
 
 export type EvidenceRow = {
   experiment: string;
+  /** where the evidence came from: the target host, a recording, or both (D3) */
+  environment: string;
   oracle: string;
   observed: ObservationValue;
   expected: OracleExpectation;
@@ -178,10 +210,16 @@ export interface Decision {
 
 // ---- executor interface (interface = proves principled Checkly swap, PR-1) ----
 
+/** What the executor knows about the candidate beyond its check code. */
+export interface RunContext {
+  /** the check config after the patch (scheduling decides the concurrency a scene runs at) */
+  config: BundleConfig | null;
+}
+
 export interface ExperimentExecutor {
-  readonly kind: "synthetic" | "checkly";
+  readonly kind: "scene" | "checkly";
   /** Run the fixed check code in one scene state and observe its outcome. */
-  runScene(bundle: Bundle, patchSource: string, scene: Scene): Promise<SceneObservation>;
+  runScene(bundle: Bundle, patchSource: string, scene: Scene, ctx?: RunContext): Promise<SceneObservation>;
   /** True when the executor can produce live observed runs (PR-1). */
   isLive(): boolean;
   costReport(): { scenes: number; runs: number };

@@ -12,76 +12,168 @@
     "logicalId": "slots-booking",
     "deployedId": null
   },
+  "recordedOrigin": null,
   "scenes": [
     {
       "sceneId": "scene-a-overlap",
       "type": "REPRODUCTION",
-      "state": "Phantom overlapping run: a second run logs in on the same account immediately after the check's own login, unless the candidate serializes runs (stateDriver mode=overlap). A correct fix completes without interference; the overlap mechanism still produces 401 otherwise.",
-      "stateDriver": { "kind": "mock-override", "params": { "mode": "overlap" } },
+      "state": "Two runs of the check start at the same moment against the same account (the check runs in two locations with runParallel on). The scene proxy interleaves them request by request: login, login, book, book. The app allows one session per account, so without a real fix the first run's booking answers 401. A correct fix completes both runs.",
+      "mode": "live-concurrent:2",
+      "environment": "target",
       "verdict": {
         "mustFail": false,
-        "provenance": { "kind": "code", "assertionId": "assert:55fcc552" },
-        "envAssumptions": ["account-single-shared", "session-single-per-account"]
+        "provenance": {
+          "kind": "code",
+          "assertionId": "assert:55fcc552"
+        },
+        "envAssumptions": [
+          "account-single-shared",
+          "session-single-per-account"
+        ]
       },
-      "experiments": [{ "durationSec": 30, "repetitions": 3, "expectStable": true }],
-      "assertionsInvolved": ["assert:a8a58d76", "assert:55fcc552", "assert:f460baf9"]
+      "experiments": [
+        {
+          "durationSec": 30,
+          "repetitions": 3,
+          "expectStable": true
+        }
+      ],
+      "assertionsInvolved": [
+        "assert:a8a58d76",
+        "assert:55fcc552",
+        "assert:f460baf9"
+      ]
     },
     {
       "sceneId": "scene-b-single-run",
       "type": "HEALTHY",
-      "state": "Sequential single run against a healthy app; booking confirmation asserted (stateDriver mode=normal).",
-      "stateDriver": { "kind": "mock-override", "params": { "mode": "normal" } },
+      "state": "One run against the healthy app; booking confirmation asserted.",
+      "mode": "live",
+      "environment": "target",
       "verdict": {
         "mustFail": false,
-        "provenance": { "kind": "code", "assertionId": "assert:55fcc552" },
-        "envAssumptions": ["account-single-shared"]
+        "provenance": {
+          "kind": "code",
+          "assertionId": "assert:55fcc552"
+        },
+        "envAssumptions": [
+          "account-single-shared"
+        ]
       },
-      "experiments": [{ "durationSec": 30, "repetitions": 5, "expectStable": true }],
-      "assertionsInvolved": ["assert:43cb9d60", "assert:a8a58d76", "assert:55fcc552", "assert:f460baf9"]
+      "experiments": [
+        {
+          "durationSec": 30,
+          "repetitions": 5,
+          "expectStable": true
+        }
+      ],
+      "assertionsInvolved": [
+        "assert:43cb9d60",
+        "assert:a8a58d76",
+        "assert:55fcc552",
+        "assert:f460baf9"
+      ]
     },
     {
       "sceneId": "scene-a-prime-overlap-variant",
       "type": "REPRODUCTION",
-      "state": "Independent reproduction: same overlap mechanism, second run on a different slot boundary. Guards against nothing more than a lucky repro.",
-      "stateDriver": { "kind": "mock-override", "params": { "mode": "overlap" } },
+      "state": "Independent reproduction: the same two-run interleaving, second repetition with a different random seed per run. Guards against nothing more than a lucky repro.",
+      "mode": "live-concurrent:2",
+      "environment": "target",
       "verdict": {
         "mustFail": false,
-        "provenance": { "kind": "code", "assertionId": "assert:a8a58d76" },
-        "envAssumptions": ["session-single-per-account"]
+        "provenance": {
+          "kind": "code",
+          "assertionId": "assert:a8a58d76"
+        },
+        "envAssumptions": [
+          "session-single-per-account"
+        ]
       },
-      "experiments": [{ "durationSec": 30, "repetitions": 2, "expectStable": true }],
-      "assertionsInvolved": ["assert:a8a58d76"]
+      "experiments": [
+        {
+          "durationSec": 30,
+          "repetitions": 2,
+          "expectStable": true
+        }
+      ],
+      "assertionsInvolved": [
+        "assert:a8a58d76"
+      ]
     },
     {
       "sceneId": "scene-c-auth-failure",
       "type": "DETECTION",
-      "state": "Forced real failure: the protected behavior is broken (booking always 401). Detection must survive a repair (stateDriver mode=auth-fail).",
-      "stateDriver": { "kind": "mock-override", "params": { "mode": "auth-fail" } },
+      "state": "Forced real failure: the proxy answers POST /api/book with the recorded 401 (booking always fails). Detection must survive a repair.",
+      "mode": "inject:POST /api/book -> 401",
+      "environment": "target",
       "verdict": {
         "mustFail": true,
-        "provenance": { "kind": "code", "assertionId": "assert:a8a58d76" },
-        "envAssumptions": ["account-single-shared"]
+        "provenance": {
+          "kind": "code",
+          "assertionId": "assert:a8a58d76"
+        },
+        "envAssumptions": [
+          "account-single-shared"
+        ]
       },
-      "experiments": [{ "durationSec": 30, "repetitions": 5, "expectStable": true }],
-      "assertionsInvolved": ["assert:a8a58d76", "assert:55fcc552"]
+      "experiments": [
+        {
+          "durationSec": 30,
+          "repetitions": 5,
+          "expectStable": true
+        }
+      ],
+      "assertionsInvolved": [
+        "assert:a8a58d76",
+        "assert:55fcc552"
+      ]
     },
     {
       "sceneId": "scene-e-regression",
       "type": "REGRESSION",
-      "state": "Recorded healthy behavior: a second, independent user books a slot and confirms. A fix that only patches the reported symptom must not break this.",
-      "stateDriver": { "kind": "mock-override", "params": { "mode": "normal" } },
+      "state": "Recorded healthy behavior: a second, independent user (ACCOUNT=other) books a slot and confirms. A fix that only patches the reported symptom must not break this.",
+      "mode": "live",
+      "env": {
+        "ACCOUNT": "other"
+      },
+      "environment": "target",
       "verdict": {
         "mustFail": false,
-        "provenance": { "kind": "code", "assertionId": "assert:43cb9d60" },
-        "envAssumptions": ["account-single-shared"]
+        "provenance": {
+          "kind": "code",
+          "assertionId": "assert:43cb9d60"
+        },
+        "envAssumptions": [
+          "account-single-shared"
+        ]
       },
-      "experiments": [{ "durationSec": 30, "repetitions": 2, "expectStable": true }],
-      "assertionsInvolved": ["assert:43cb9d60", "assert:f460baf9"]
+      "experiments": [
+        {
+          "durationSec": 30,
+          "repetitions": 2,
+          "expectStable": true
+        }
+      ],
+      "assertionsInvolved": [
+        "assert:43cb9d60",
+        "assert:f460baf9"
+      ]
     }
   ],
   "envAssumptions": [
-    { "id": "account-single-shared", "text": "the check monitors a single fixed shared account ('demo')", "verified": true, "verifiedBy": "determinism-driver" },
-    { "id": "session-single-per-account", "text": "the app allows one session per account; a later login invalidates the earlier session", "verified": true, "verifiedBy": "determinism-driver" }
+    {
+      "id": "account-single-shared",
+      "text": "the check monitors a single fixed shared account ('demo')",
+      "verified": true,
+      "verifiedBy": "determinism-driver"
+    },
+    {
+      "id": "session-single-per-account",
+      "text": "the app allows one session per account; a later login invalidates the earlier session",
+      "verified": true,
+      "verifiedBy": "determinism-driver"
+    }
   ],
   "determinism": {
     "targetRuns": 20,
@@ -90,6 +182,12 @@
     "overlapFailRate": 1,
     "lastVerifiedAt": "2026-09-20T00:00:00Z"
   },
-  "runBudget": { "maxPerScene": 40, "used": 0 },
-  "oracleProvenance": { "recorded": 3, "codeDerived": 5 }
+  "runBudget": {
+    "maxPerScene": 40,
+    "used": 0
+  },
+  "oracleProvenance": {
+    "recorded": 3,
+    "codeDerived": 5
+  }
 }

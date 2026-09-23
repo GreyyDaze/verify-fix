@@ -51,8 +51,9 @@ const trace: TraceItem[] = [];
 let simHits = 0;
 let assertionCount = 0;
 
+/** Checkly's convention: the target comes from ENVIRONMENT_URL. */
 export function baseUrl(): string {
-  return process.env.APP_BASE_URL ?? "http://127.0.0.1:1";
+  return process.env.ENVIRONMENT_URL ?? "http://127.0.0.1:1";
 }
 
 export function step(what: string) {
@@ -257,9 +258,10 @@ export async function runCollected(ctx: { baseUrl: string; account: string; conc
 
   for (const entry of registry) {
     const runs = ctx.concurrentRuns ?? 1;
-    // NOTE: trace/simHits/assertionCount are per-run module state; the synthetic
-    // executor always drives concurrentRuns=1 (overlap is expressed by the
-    // app-sim's armed state), so a run's evidence is exactly what it recorded.
+    // NOTE: trace/simHits/assertionCount are per-run module state; the scene
+    // executor always drives one run per sandbox process (overlap is N sandbox
+    // processes interleaved at the proxy), so a run's evidence is exactly what
+    // it recorded.
     const sub = await Promise.all(
       Array.from({ length: runs }, async (_, i) => {
         trace.length = 0;

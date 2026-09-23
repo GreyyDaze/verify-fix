@@ -1,12 +1,13 @@
 // Sandbox runner: execute the patched check source in an isolated temp dir
-// using Node's native TypeScript support, with the deterministic app-sim as the
-// system under test. Verdicts come from the recorded JSON trace, never from
-// inference.
+// using Node's native TypeScript support. The check talks to ENVIRONMENT_URL
+// (Checkly's convention) — in a scene that is the scene proxy, which forwards
+// to the target, answers from a recording, or injects a failure. Verdicts come
+// from the recorded JSON trace, never from inference.
 //
 // Evidence rule (mirrors check-api.ts): `passed` is true only when at least
-// one check ran, contacted the armed baseUrl, and every run held. A run that
-// registered no check or never reached the armed app is `vacuous` — the caller
-// must classify it UNCERTAIN, never pass/fail.
+// one check ran, contacted ENVIRONMENT_URL, and every run held. A run that
+// registered no check or never reached it is `vacuous` — the caller must
+// classify it UNCERTAIN, never pass/fail.
 
 import { mkdtemp, writeFile, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,9 +16,12 @@ import { spawn } from "node:child_process";
 import type { CheckRunResult, CollectedOutcome } from "./check-api.ts";
 
 export interface SandboxContext {
+  /** becomes ENVIRONMENT_URL — the scene proxy's origin for this run */
   baseUrl: string;
-  account: string;
-  concurrentRuns?: number;
+  /** becomes ENVIRONMENT_NAME */
+  environmentName?: string;
+  /** the check's own variables (from --env-file / the scene), e.g. ACCOUNT, TEST_USER */
+  env?: Record<string, string>;
   timeoutMs?: number;
   /** Seed for the sandbox's Math.random (see SEED_MODULE). Omit for native randomness. */
   seed?: number;
@@ -104,24 +108,27 @@ export async function runSandbox(checkSource: string, ctx: SandboxContext): Prom
       `import "./seed.ts";`,
       `import "./check.ts";`,
       `import { runCollected } from "./check-api.ts";`,
-      `const concurrent = Number(process.env.CONCURRENT_RUNS ?? 1);`,
       `await runCollected({`,
-      `  baseUrl: process.env.APP_BASE_URL ?? "http://127.0.0.1:1",`,
-      `  account: process.env.ACCOUNT ?? "demo",`,
-      `  concurrentRuns: concurrent,`,
+      `  baseUrl: process.env.ENVIRONMENT_URL ?? "http://127.0.0.1:1",`,
+      `  account: process.env.ACCOUNT ?? process.env.TEST_USER ?? "demo",`,
       `});`,
       ``,
     ].join("\n");
     await writeFile(join(dir, "driver.ts"), driver, "utf8");
 
     const raw = await new Promise<string>((resolve, reject) => {
+      // Only what the sandbox needs: PATH/HOME for node, Checkly's two
+      // variables, the check's own variables, the seed. The parent's
+      // environment (API keys, shell state) does not leak into the check.
       const child = spawn(process.execPath, ["--no-warnings", "driver.ts"], {
         cwd: dir,
         env: {
-          ...process.env,
-          APP_BASE_URL: ctx.baseUrl,
-          ACCOUNT: ctx.account,
-          CONCURRENT_RUNS: String(ctx.concurrentRuns ?? 1),
+          PATH: process.env.PATH ?? "",
+          HOME: process.env.HOME ?? "",
+          NODE_OPTIONS: process.env.NODE_OPTIONS ?? "",
+          ...(ctx.env ?? {}),
+          ENVIRONMENT_URL: ctx.baseUrl,
+          ENVIRONMENT_NAME: ctx.environmentName ?? "verify-fix",
           SANDBOX_SEED: ctx.seed === undefined ? "" : String(ctx.seed >>> 0),
         },
       });

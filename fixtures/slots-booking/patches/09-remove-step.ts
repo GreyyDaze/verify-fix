@@ -9,7 +9,7 @@ const ACCOUNT = process.env.ACCOUNT ?? "demo";
 check("slots-booking flow", async ({ baseUrl }) => {
   const base = await baseUrl;
 
-  const login = await fetch(`${base}/login`, {
+  const login = await fetch(`${base}/api/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ account: ACCOUNT }),

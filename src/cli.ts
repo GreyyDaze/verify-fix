@@ -2,15 +2,18 @@
 //   verify-fix bundle --check <checkId> [--result <id>] [--project <dir>] [--out <dir>]
 //                     [--measure N] [--measure-overlap M] [--target-url <url>]
 //                     [--trigger-rca] [--bodies api|all|none] [--keep-raw] [--history N] [--json] [--verbose]
-//   verify-fix verify --patch check.patch.ts --bundle incidents/<id> [--executor synthetic|checkly] [--dry-run] [--json] [--verbose]
+//   verify-fix verify --patch <file|dir> --bundle <dir> --target <url> [--env-file <file>] [--env-name <name>]
+//                     [--executor scene|checkly] [--dry-run] [--json] [--verbose]
 // Exit codes: 0 PASS/ok · 1 FAILED · 2 UNCERTAIN / usage / could not run.
 
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadBundle } from "./bundle.ts";
 import { verify } from "./verify.ts";
-import { SyntheticExecutor } from "./executor/synthetic.ts";
+import { SceneExecutor } from "./executor/scene.ts";
 import { ChecklyExecutor } from "./executor/checkly.ts";
+import { loadPatch } from "./patch.ts";
+import { parseEnvFile } from "./scene/env.ts";
 import { resolveCredentials, CREDENTIALS_HELP } from "./checkly/credentials.ts";
 import { ChecklyClient, ChecklyApiError } from "./checkly/client.ts";
 import { buildBundle } from "./bundle/build.ts";
@@ -23,7 +26,10 @@ interface Args {
   command: string | null;
   patch: string | null;
   bundle: string | null;
-  executor: "synthetic" | "checkly" | "auto";
+  executor: "scene" | "checkly";
+  target: string | null;
+  envFile: string | null;
+  envName: string | null;
   dryRun: boolean;
   json: boolean;
   verbose: boolean;
@@ -43,7 +49,7 @@ interface Args {
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
-    command: null, patch: null, bundle: null, executor: "auto", dryRun: false, json: false, verbose: false,
+    command: null, patch: null, bundle: null, executor: "scene", target: null, envFile: null, envName: null, dryRun: false, json: false, verbose: false,
     check: null, result: null, out: null, project: null, measure: 0, measureOverlap: 0, targetUrl: null,
     triggerRca: false, bodies: "api", keepRaw: false, history: 100,
   };
@@ -59,7 +65,15 @@ function parseArgs(argv: string[]): Args {
     switch (key) {
       case "--patch": args.patch = value(i, a); if (takes) i++; break;
       case "--bundle": args.bundle = value(i, a); if (takes) i++; break;
-      case "--executor": args.executor = value(i, a) as Args["executor"]; if (takes) i++; break;
+      case "--executor": {
+        const v = value(i, a);
+        args.executor = v === "synthetic" ? "scene" : (v as Args["executor"]);
+        if (takes) i++;
+        break;
+      }
+      case "--target": args.target = value(i, a); if (takes) i++; break;
+      case "--env-file": args.envFile = value(i, a); if (takes) i++; break;
+      case "--env-name": args.envName = value(i, a); if (takes) i++; break;
       case "--dry-run": args.dryRun = true; break;
       case "--json": args.json = true; break;
       case "--verbose": args.verbose = true; break;
@@ -95,8 +109,12 @@ function usage(): string {
     "      --trigger-rca asks Rocky for a fresh analysis when the group has none, or when its RCA describes",
     "      an earlier, different failure of the same group (Rocky analyzes only a group's first failure).",
     "",
-    "  verify-fix verify --patch <file> --bundle <incidents/<id>> [--executor synthetic|checkly] [--dry-run] [--json] [--verbose]",
-    "      Grades a candidate fix against a bundle.",
+    "  verify-fix verify --patch <file|dir> --bundle <dir> --target <url> [--env-file <file>] [--env-name <name>]",
+    "                    [--executor scene|checkly] [--dry-run] [--json] [--verbose]",
+    "      Grades a candidate fix against a bundle. --patch is the new check file, or a directory whose files",
+    "      replace the bundle's check/ files (spec and/or checkly.config.ts). --target is the app the live",
+    "      scenes run against (becomes ENVIRONMENT_URL, Checkly's convention); the tool never picks one.",
+    "      --env-file gives the check its own variables (KEY=VALUE lines, like `checkly test --env-file`).",
     "",
     "Exit codes: 0 = PASS/ok · 1 = FAILED · 2 = UNCERTAIN / usage error",
     "",
@@ -181,25 +199,20 @@ async function runVerify(args: Args): Promise<ExitCode> {
     process.stderr.write("--patch and --bundle are required\n\n" + usage());
     return 2;
   }
-  const patchSource = readFileSync(args.patch, "utf8");
-  const { bundle, appSimPath } = loadBundle(args.bundle);
-
-  let executor;
-  if (args.executor === "synthetic") {
-    if (!appSimPath) {
-      process.stderr.write(`--executor synthetic requires an app-sim.ts in the bundle directory (${args.bundle})\n`);
-      return 2;
-    }
-    executor = new SyntheticExecutor(appSimPath, { verbose: args.verbose });
-  } else if (args.executor === "checkly") {
-    executor = new ChecklyExecutor({ dryRunOnly: args.dryRun || !process.env.CHECKLY_API_KEY, verbose: args.verbose });
-  } else {
-    executor = appSimPath
-      ? new SyntheticExecutor(appSimPath, { verbose: args.verbose })
-      : new ChecklyExecutor({ dryRunOnly: args.dryRun || !process.env.CHECKLY_API_KEY, verbose: args.verbose });
+  const { bundle } = loadBundle(args.bundle);
+  const patch = loadPatch(args.patch, bundle);
+  const env = args.envFile ? parseEnvFile(readFileSync(args.envFile, "utf8")) : {};
+  if (args.target && !/^https?:\/\//.test(args.target)) {
+    process.stderr.write("--target must be an http(s) origin, e.g. https://staging.example.com\n");
+    return 2;
   }
 
-  const result = await verify({ bundle, patchSource, executor, verbose: args.verbose });
+  const executor =
+    args.executor === "checkly"
+      ? new ChecklyExecutor({ dryRunOnly: args.dryRun || !process.env.CHECKLY_API_KEY, verbose: args.verbose })
+      : new SceneExecutor({ target: args.target, env, environmentName: args.envName ?? undefined, verbose: args.verbose });
+
+  const result = await verify({ bundle, patch, executor, target: args.target, env, environmentName: args.envName ?? undefined, verbose: args.verbose });
 
   if (args.json) {
     process.stdout.write(JSON.stringify(result.report.json, null, 2) + "\n");

@@ -14,7 +14,7 @@ function sleep(ms: number): Promise<void> {
 check("slots-booking flow", async ({ baseUrl }) => {
   const base = await baseUrl;
 
-  const login = await fetch(`${base}/login`, {
+  const login = await fetch(`${base}/api/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ account: ACCOUNT }),
@@ -24,7 +24,7 @@ check("slots-booking flow", async ({ baseUrl }) => {
 
   let body: { confirmed: boolean; booking: string } | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
-    const book = await fetch(`${base}/book`, {
+    const book = await fetch(`${base}/api/book`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify({ slot: "09:30" }),

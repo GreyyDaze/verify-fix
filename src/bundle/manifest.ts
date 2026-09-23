@@ -48,6 +48,8 @@ export interface ManifestInputs {
 }
 
 const REPS = 5;
+/** the status injected on a dependency when no request failed in the incident (drift): a server error no check may accept */
+const DEPENDENCY_FAILURE_STATUS = 500;
 
 function errorMessage(e: PlaywrightResultError | string): string {
   if (typeof e === "string") return stripAnsi(e);
@@ -204,8 +206,48 @@ export function detectFailurePoint(
       failureText: last.response._failureText ?? null,
     };
   }
+  const dependency = request ? null : dependencyOf(passing, failing, assertion?.line ?? null, action?.title ?? null, origin);
   if (!action && !request) return null;
-  return { action, request, assertion };
+  return { action, request, assertion, dependency };
+}
+
+/**
+ * Drift has no failing request. The failing step exists in the passing run
+ * too (same spec line, or same title); the last API-like request the app
+ * answered before that step started is what the step depends on. Times are
+ * Playwright's monotonic clock: action.startTime and HAR _monotonicTime.
+ */
+export function dependencyOf(
+  passing: TraceExtract | null,
+  failing: TraceExtract | null,
+  stepLine: number | null,
+  stepTitle: string | null,
+  origin: string | null,
+): FailurePoint["dependency"] {
+  if (!passing) return null;
+  const step =
+    (stepLine !== null ? passing.actions.find((a) => a.location?.line === stepLine && a.startTime !== null) : undefined) ??
+    (stepTitle ? passing.actions.find((a) => a.title === stepTitle && a.startTime !== null) : undefined) ??
+    null;
+  if (!step || step.startTime === null) return null;
+  const before = passing.har.log.entries
+    .filter((e) => e._monotonicTime !== undefined && e._monotonicTime <= step.startTime! && isApiLike(e) && (!origin || originOf(e.request.url) === origin || originOf(e.request.url) === originOf(passing.baseURL)))
+    .sort((a, b) => (b._monotonicTime ?? 0) - (a._monotonicTime ?? 0));
+  const last = before[0];
+  if (!last) return null;
+  // the failing run must have made the same call and got an OK answer — otherwise this is not drift
+  const key = `${last.request.method} ${pathOf(last.request.url).replace(/\?.*$/, "")}`;
+  const inFailing = failing?.har.log.entries.find((e) => `${e.request.method} ${pathOf(e.request.url).replace(/\?.*$/, "")}` === key) ?? null;
+  if (failing && (!inFailing || inFailing.response.status >= 400)) return null;
+  return {
+    method: last.request.method,
+    url: last.request.url,
+    path: pathOf(last.request.url),
+    passingStatus: last.response.status,
+    msBeforeStep: Math.round((step.startTime - (last._monotonicTime ?? step.startTime)) * 10) / 10,
+    stepLine: step.location?.line ?? null,
+    stepTitle: step.title,
+  };
 }
 
 /**
@@ -318,6 +360,24 @@ export function groupErrorMatches(groupMessage: string | null | undefined, runEr
  * another location is the direct evidence for a concurrency incident, and it
  * needs no interpretation of any text.
  */
+/**
+ * A failure that has not stopped: every final run after the last passing one
+ * failed (the failing run included), in every location that ran, at least 3
+ * runs. Such a failure is reproduced by the target itself — no interleaving
+ * needed. Without a passing reference the whole history window is used.
+ */
+export function persistentFailure(failing: CheckResultSummary | null, passing: CheckResultSummary | null, history: CheckResultSummary[]): { runs: number; failed: number; locations: string[]; since: string } | null {
+  if (!failing) return null;
+  const after = passing ? Date.parse(passing.startedAt) : Number.NEGATIVE_INFINITY;
+  const window = history.filter((r) => (r.resultType ?? "FINAL") === "FINAL" && Date.parse(r.startedAt) > after);
+  if (!window.some((r) => r.id === failing.id)) window.push(failing);
+  if (window.length < 3) return null;
+  const failed = window.filter((r) => r.hasFailures || r.hasErrors).length;
+  if (failed !== window.length) return null;
+  const since = window.map((r) => r.startedAt).sort()[0];
+  return { runs: window.length, failed, locations: [...new Set(window.map((r) => r.runLocation))].sort(), since };
+}
+
 export function findOverlappingRuns(failing: CheckResultSummary | null, history: CheckResultSummary[], fallbackDurationMs = 30_000): OverlappingRun[] {
   if (!failing) return [];
   const start = Date.parse(failing.startedAt);
@@ -434,6 +494,10 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   const failedSiblings = siblingRuns.filter((o) => !o.passed);
   const rcaText = rca ? `${rca.analysis.classification}\n${rca.analysis.rootCause}\n${rca.analysis.userImpact}` : errorGroup?.cleanedErrorMessage ?? null;
   const textCls = classifyRca(rcaText);
+  const persistent = persistentFailure(failing?.summary ?? null, passing?.summary ?? null, input.history);
+  if (failing && !otherLocationOverlap.length && failedSiblings.length) {
+    notes.push(`${failedSiblings.map((o) => `${o.runId} @ ${o.runLocation}`).join(", ")} overlapped the failing run and failed too — the failure does not depend on which copy wins, so the overlap is not evidence of concurrency`);
+  }
   let cls: { mode: ReturnType<typeof classifyRca>["mode"]; matchedRule: string | null; matchedText: string | null };
   let decidedBy: ManifestV3["reproduction"]["decidedBy"];
   let reproductionReason: string;
@@ -452,12 +516,17 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
     } else if (rca && !textCls.matchedRule) {
       notes.push(`Rocky classified the failure as ${rca.analysis.classification}${rca.analysis.repairRecommendation ? ` (${rca.analysis.repairRecommendation})` : ""}; the result timestamps show an overlapping run from another location, which the RCA text does not name — the tool follows the timestamps`);
     }
+  } else if (persistent && !failurePoint?.request) {
+    // Every run since the incident fails, in every location, and the app
+    // answered every request: the failure does not depend on timing or on
+    // which copy wins. The target as it is now reproduces it — one live run.
+    cls = { mode: "live", matchedRule: "persistent-failure", matchedText: `${persistent.failed}/${persistent.runs} runs failed since ${persistent.since}` };
+    decidedBy = "history";
+    reproductionReason = `every run since the last passing one failed (${persistent.failed}/${persistent.runs} since ${persistent.since} across ${persistent.locations.join(", ")}) and no request failed → the current target reproduces it on its own: live`;
+    if (textCls.matchedRule) notes.push(`RCA/error-group text suggested ${textCls.mode} (rule "${textCls.matchedRule}") but the history shows a persistent failure in every location; the tool follows the history`);
   } else {
     cls = textCls;
     decidedBy = textCls.matchedRule ? (rca ? "rca-text" : "error-group-text") : "none";
-    if (failedSiblings.length) {
-      notes.push(`${failedSiblings.map((o) => `${o.runId} @ ${o.runLocation}`).join(", ")} overlapped the failing run and failed too — the failure does not depend on which copy wins, so the overlap is not evidence of concurrency`);
-    }
     reproductionReason = rca
       ? textCls.matchedRule
         ? `RCA text matched rule "${textCls.matchedRule}" ("${textCls.matchedText}") → ${textCls.mode}`
@@ -600,7 +669,9 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
       state:
         mode === "live-concurrent:2"
           ? `two copies of the check run at once on the target, as the overlapping locations did in the failing run${otherLocationOverlap.length ? ` (${failing!.summary.runLocation} + ${otherLocationOverlap[0].runLocation})` : ""}; the fixed check must pass`
-          : "the responses of the failing run are replayed from recordings/failing.har; the fixed check must pass against them",
+          : mode === "live"
+            ? "one run of the check against the target as it is now (the failure is persistent, not timing-dependent); the fixed check must pass"
+            : "the responses of the failing run are replayed from recordings/failing.har; the fixed check must pass against them",
       verdict: {
         mustFail: false,
         provenance: { kind: "recorded", runId: failingId, artifactId: "recordings/failing.har" },
@@ -609,24 +680,43 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
       },
       experiments: [{ durationSec: 120, repetitions: REPS, expectStable: true }],
       assertionsInvolved: failureAssertions,
-      environment: mode === "live-concurrent:2" ? "target" : "recording",
+      environment: mode === "replay:failing.har" ? "recording" : "target",
       notes: [reproductionReason],
     });
 
     const req = failurePoint?.request;
-    const injectRule = req ? `inject:${req.method} ${req.path.replace(/\?.*$/, "")} -> ${req.status}` : "inject:<failing request unknown>";
+    const dep = failurePoint?.dependency ?? null;
+    // Three cases: a request failed (inject its recorded failure); nothing
+    // failed but the failing step depends on a request (drift → inject a
+    // server error there: the repaired check must still notice a broken
+    // dependency); nothing derivable (pending, runs as uncertain).
+    const injectRule = req
+      ? `inject:${req.method} ${req.path.replace(/\?.*$/, "")} -> ${req.status}`
+      : dep
+        ? `inject:${dep.method} ${dep.path.replace(/\?.*$/, "")} -> ${DEPENDENCY_FAILURE_STATUS}`
+        : "inject:<failing request unknown>";
     scenes.push({
       sceneId: "detection",
       type: "DETECTION",
       mode: injectRule as SceneV3["mode"],
       state: req
         ? `the failing response (${req.method} ${req.path.replace(/\?.*$/, "")} → ${req.status}) is injected on top of a live run; the fixed check MUST still fail (it may not hide the incident)`
-        : "the recorded failure is injected on top of a live run; the fixed check must still fail",
-      verdict: { mustFail: true, provenance: { kind: "recorded", runId: failingId, artifactId: "recordings/failing.har" }, envAssumptions: ["target-resolution"] },
+        : dep
+          ? `no request failed in the incident (the check went stale); the step that failed (${dep.stepTitle}${dep.stepLine ? `, line ${dep.stepLine}` : ""}) depends on ${dep.method} ${dep.path.replace(/\?.*$/, "")} (answered ${dep.passingStatus} ${dep.msBeforeStep} ms before it in the passing run) — that call is answered ${DEPENDENCY_FAILURE_STATUS} on top of a live run; the fixed check MUST still fail`
+          : "the recorded failure is injected on top of a live run; the fixed check must still fail",
+      verdict: {
+        mustFail: true,
+        provenance: req || !dep ? { kind: "recorded", runId: failingId, artifactId: "recordings/failing.har" } : { kind: "recorded", runId: passing?.summary.id ?? failingId, artifactId: "recordings/passing.har" },
+        envAssumptions: ["target-resolution"],
+      },
       experiments: [{ durationSec: 60, repetitions: REPS, expectStable: true }],
       assertionsInvolved: failureAssertions,
       environment: "target+recording",
-      ...(req ? {} : { notes: ["no failing API request could be identified in the trace; the scene layer must derive the injection from the failing action"] }),
+      ...(req
+        ? {}
+        : dep
+          ? { notes: [`derived from the passing run's timeline: ${dep.method} ${dep.path.replace(/\?.*$/, "")} is the last API call before the failing step; a ${DEPENDENCY_FAILURE_STATUS} there is a real failure a repaired check may not hide`] }
+          : { notes: ["no failing API request could be identified in the trace and the failing step has no request before it in the passing run; the scene runs as uncertain"] }),
     });
   } else {
     notes.push("no failing result found for this check: REPRODUCTION and DETECTION scenes are absent until an incident is captured (re-run `verify-fix bundle` after a failure)");

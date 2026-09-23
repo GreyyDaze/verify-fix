@@ -78,6 +78,7 @@ export function buildContract(bundle: Bundle, patchedSource: string): ContractRe
     const { observed: expected, oracle } = sceneExpected(scene);
     return {
       experiment: scene.sceneId,
+      environment: scene.environment ?? "target",
       oracle,
       observed: "uncertain",
       expected,

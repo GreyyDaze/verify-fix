@@ -9,7 +9,7 @@
 //   changed response / selector    → replay:failing.har  (recorded responses are exact)
 //   anything else                  → both
 
-export type ReproductionMode = "live-concurrent:2" | "replay:failing.har" | "both";
+export type ReproductionMode = "live" | "live-concurrent:2" | "replay:failing.har" | "both";
 
 export interface RcaClassification {
   mode: ReproductionMode;

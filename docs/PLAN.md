@@ -19,7 +19,7 @@ verify-fix/
 | 1 | `verify-fix bundle --check <id> [--result <id>] --out ./bundle`: Checkly client, failing + last passing result + assets, trace → HAR, Rocky RCA → `REPRODUCTION` mode, config → `manifest.json`, `--measure N` for determinism | bundle of a green check is produced end to end | built; ran live against the real account (bundle `2d7403c`); hardened against the real Playwright 1.63 trace and result shapes; 34 bundle tests incl. a golden test over the real bundle |
 | 2 | Cause the incident (overlapping runs), capture it with `bundle`, commit sanitized output to `fixtures/bundles/slots-booking-overlap/`, golden test | fixture + test committed | **done** — re-captured with the hardened tool (`7351d29`): HAR bodies show the login order (us-east-1 v490 at 19:03:59.221, eu-west-1 v491 at .429, us-east-1 `POST /api/book` 401 `session superseded by a newer login`), `decidedBy: result-timestamps`, `results/history.json` (76/100 passed) |
 | 2b | Second incident on the same app: **drift**. Product renamed `data-testid="book-status"` → `booking-status` (`7db4681`); the check is stale and fails at spec line 36 in every location. Captured with `bundle --out fixtures/bundles/slots-booking-drift` + golden test (`test/bundle/golden-drift.spec.ts`). What the live capture taught: Playwright 1.63 prints `Error: element(s) not found` under `Timeout:` and **no `Received:` line**; the live API nests errors under `playwrightCheckResult` (the first two captures had `failingTest: null`); Checkly filed the drift under the 401 error group, so no automatic RCA ran and the run inherited `INFRASTRUCTURE_ERROR / DO_NOT_REPAIR`. Still open here: no failing request → detection scene `inject:<failing request unknown>` (assertion → network dependency from the passing recording, Phase 3); `failing`/`passing` naming assumes the app broke | fixture with a fresh Rocky RCA (`rca.json#replacedRca` present) committed — DONE | captured (`5f350e3`, third capture: fresh RCAs `22bb2081`/`95755aa2`, both about `element(s) not found`) |
-| 3 | Generic scene layer: proxy modes passthrough / replay / inject / concurrent, `ENVIRONMENT_URL` + `ENVIRONMENT_NAME`, `--target`, `--env-file`, evidence gate, `environment` column, config diff + credential policy; migrate the 11 seeded patches; delete `app-sim.ts` | 25+ tests green on the new layer, seeded verdicts unchanged | |
+| 3 | Generic scene layer: `src/scene/proxy.ts` (modes `live` / `live-concurrent:N` / `replay:<har>` / `inject:<METHOD> <path> -> <status>`, one listener per concurrent run, lockstep interleaving), `src/executor/scene.ts` (replaces the synthetic executor; concurrency = min(scene N, what the patched config allows); evidence gate on the proxy's own hit count), Checkly's env convention (`ENVIRONMENT_URL` + `ENVIRONMENT_NAME`, `--target`, `--env-file`, `--env-name`; `APP_BASE_URL` gone; a check that reads an unprovided variable → UNCERTAIN), `--patch <file|dir>` (spec and/or `checkly.config.ts`), config diff + policy (`src/scene/config-diff.ts`: scheduling allowed, retry/timeout-only rejected, new env keys declared), report `environment` column + parity note, v3 bundles load (`src/bundle.ts`), 3.7: drift reproduction `live` from a persistent history and detection `inject:<dependency> -> 500` derived from the passing run's timeline; seeded suite migrated to the real app (`next start`, `test/helpers/example-app.ts`), both `app-sim.ts` deleted, seeded patches 01/02 became config patches (`runParallel: false`), 12 (one location) and 13 (retry-only config) added | suite green with no simulator; overlap 01 + 12 PASS, 02–10 + 13 FAILED, 11 never PASS; drift bundle loads with runnable modes | **done** — 95 tests green (verify suite ≈60 s against the real app); the drift *verdicts* (correct rename PASS, four fakes FAILED) wait for the Playwright runner (Phase 4): the sandbox runs the DSL checks, not `@playwright/test` specs |
 | 4 | Playwright runner: `page.route` inject, `routeFromHAR` replay, two contexts for concurrent, `page.on('request')` evidence | real spec runs through all four scene modes | |
 | 5 | Live loop + CI gate (`gate.yml`: preview → `verify-fix verify --target staging --env-file .env.staging` → exit 0 → `checkly deploy`); three real fixes PASS, ten fakes FAIL; cost report | gate blocks a bad fix on a real PR | |
 | 6 | Example 2: Express API + ApiCheck with `{{ENVIRONMENT_URL}}`, changed-response incident, replay mode, host-only replacement, retry-config fakes | second bundle + golden test | |
@@ -37,9 +37,19 @@ Rocky classified the overlap incident as `INFRASTRUCTURE_ERROR / DO_NOT_REPAIR`)
    the shape of drift or an app-wide outage). This is arithmetic on Checkly's
    own data, not a reading of any text. The bundle keeps the result window in
    `results/history.json` so the overlap can be re-checked offline.
-2. **Rule table second.** Otherwise the RCA text (or the error-group message)
+2. **Persistent history second** (Phase 3.7). If every final run after the
+   last passing one failed, in every location, at least 3 runs, and no request
+   failed in the failing run, the failure does not depend on timing: the
+   target as it is now reproduces it → `live` (`matchedRule:
+   persistent-failure`, `decidedBy: history`). That is drift. The detection
+   scene is then derived from the **passing** run's timeline: the last API call
+   before the step that failed (Playwright's monotonic clock on both the
+   actions and the HAR) is the step's dependency; the scene answers that call
+   with a 500 on top of a live run, and a repaired check must still fail
+   (`failurePoint.dependency`, provenance `recordings/passing.har`).
+3. **Rule table third.** Otherwise the RCA text (or the error-group message)
    goes through the fixed table in `src/bundle/rca-mode.ts`.
-3. **Nothing matched → `both`** (`live-concurrent:2` first, `replay:failing.har`
+4. **Nothing matched → `both`** (`live-concurrent:2` first, `replay:failing.har`
    as the alternative; the scene is UNCERTAIN if neither reproduces).
 
 When the RCA text and the timestamps disagree, the manifest says so in

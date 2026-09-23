@@ -25,12 +25,18 @@ export function buildReport(contract: ContractReport, decision: Decision, observ
   lines.push("");
   lines.push(`**Check:** ${contract.bundle.check.repo}/${contract.bundle.check.file} (logicalId \`${contract.bundle.check.logicalId}\`)`);
   lines.push("");
-  lines.push("| experiment | oracle | expected | observed | match | strength |");
-  lines.push("|---|---|---|---|---|---|");
+  lines.push("| experiment | environment | oracle | expected | observed | match | strength |");
+  lines.push("|---|---|---|---|---|---|---|");
   for (const r of decision.rows) {
     const match = r.observed === "uncertain" ? "?" : r.matched ? "✓" : "✗";
-    lines.push(`| ${r.experiment} | ${oracleShorthand(r)} | ${r.expected} | ${r.observed} | ${match} | ${r.strength.toFixed(3)} |`);
+    lines.push(`| ${r.experiment} | ${r.environment} | ${oracleShorthand(r)} | ${r.expected} | ${r.observed} | ${match} | ${r.strength.toFixed(3)} |`);
   }
+  lines.push("");
+  // Parity note (D3): a live row proves behavior against THAT host only. Which
+  // host is the customer's choice (--target); the tool never picks one.
+  const liveRows = decision.rows.filter((r) => r.environment.startsWith("target "));
+  const hosts = [...new Set(liveRows.map((r) => /^target (\S+)/.exec(r.environment)?.[1] ?? ""))].filter(Boolean);
+  if (hosts.length > 0) lines.push(`_Live rows ran against ${hosts.join(", ")}. They say nothing about any other environment; run again with \`--target\` for each one that matters._`);
   lines.push("");
   if (decision.adequacy) {
     const s = decision.adequacy;

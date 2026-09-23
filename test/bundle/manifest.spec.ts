@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { buildManifest, detectFailurePoint, detectTargetResolution, expectedReceived, findOverlappingRuns, groupErrorMatches, resultErrors, summarizeErrorMessage, specLocation, type ManifestInputs } from "../../src/bundle/manifest.ts";
+import { buildManifest, detectFailurePoint, detectTargetResolution, expectedReceived, findOverlappingRuns, groupErrorMatches, rcaIsStale, rcaMentionsReceived, resultErrors, summarizeErrorMessage, specLocation, type ManifestInputs } from "../../src/bundle/manifest.ts";
 import { classifyRca } from "../../src/bundle/rca-mode.ts";
 import { traceZipToHar } from "../../src/trace/trace-to-har.ts";
 import { fakeTraceZip } from "../helpers/fake-trace.ts";
@@ -311,6 +311,27 @@ test("expected/received: Playwright and Checkly-cleaned shapes parse; a group ma
   assert.equal(groupErrorMatches(ERROR_GROUP.cleanedErrorMessage, ["tests/booking.spec.ts:19:3 › suite › test"]), null);
 });
 
+test("rca fit: Rocky's paraphrased text is searched for what the run received; either signal marks the RCA stale", () => {
+  const rca401: RootCauseAnalysis = {
+    ...RCA_RACE,
+    analysis: { ...RCA_RACE.analysis, rootCause: "The booking flow returned an HTTP 401 where 200 was expected.", evidence: [{ description: "the DOM repeatedly shows <span data-testid=\"book-status\">401</span>", artifacts: [] }], steps: [{ name: "Validate the booking status", errors: ["Booking status element reported 401 instead of the expected 200."] }] },
+  };
+  assert.equal(rcaMentionsReceived(rca401, [REAL_MESSAGE]), true, '"401" → 401 appears in the text');
+  assert.equal(rcaMentionsReceived(rca401, [DRIFT_MESSAGE]), false, "element(s) not found appears nowhere");
+  assert.equal(rcaMentionsReceived(rca401, ["tests/booking.spec.ts:19:3 › suite › test"]), null);
+  assert.equal(rcaMentionsReceived(null, [DRIFT_MESSAGE]), null);
+  // signal 1: group disagrees → stale regardless of dates
+  assert.equal(rcaIsStale({ rca: rca401, createdBefore: false, groupMatches: false, mentions: true }), true);
+  // signal 2: older RCA that never mentions the run's value → stale even when the group message is not comparable or was updated
+  assert.equal(rcaIsStale({ rca: rca401, createdBefore: true, groupMatches: null, mentions: false }), true);
+  assert.equal(rcaIsStale({ rca: rca401, createdBefore: true, groupMatches: true, mentions: false }), true);
+  // not stale: same failure, or newer RCA, or nothing comparable
+  assert.equal(rcaIsStale({ rca: rca401, createdBefore: true, groupMatches: true, mentions: true }), false);
+  assert.equal(rcaIsStale({ rca: rca401, createdBefore: false, groupMatches: null, mentions: false }), false);
+  assert.equal(rcaIsStale({ rca: rca401, createdBefore: true, groupMatches: null, mentions: null }), false);
+  assert.equal(rcaIsStale({ rca: null, createdBefore: true, groupMatches: false, mentions: false }), false);
+});
+
 test("manifest: an RCA that predates a different failure in the same group is flagged, not trusted", () => {
   // Seen live on 2026-09-23: the UI rename ("element(s) not found") was grouped
   // with the 401 incident, so no new RCA ran and the drift inherited
@@ -325,10 +346,23 @@ test("manifest: an RCA that predates a different failure in the same group is fl
   assert.equal(m.rca?.groupErrorMatchesFailingRun, false);
   assert.equal(m.rca?.replaced, null);
   assert.ok(m.notes.some((n) => /merges different failures/.test(n) && /received "401"/.test(n) && /received <element\(s\) not found>/.test(n) && /--trigger-rca/.test(n)), m.notes.join("\n"));
+  assert.equal(m.rca?.describesFailingRun, false);
+  // the two incidents must not share an incident id even though Checkly gave them one group
+  const overlapId = buildManifest(inputs({ history, rca: oldRca, failing: { summary: history[0], detail: { ...history[0], errors: [REAL_RESULT_ERROR] }, extract: failingExtract() }, passing: { summary: history[1], detail: null, extract: passingExtract() } })).incidentId;
+  assert.notEqual(m.incidentId, overlapId);
+  assert.match(m.incidentId, /^slots-booking-monitoring-[0-9a-f]{6}$/);
+  // same group, but Checkly updated the group message to the new failure → signal 2 (old RCA never mentions "element(s) not found") still flags it
+  const updatedGroup = { ...ERROR_GROUP, cleanedErrorMessage: ERROR_GROUP.cleanedErrorMessage.replace('Received string: "401"', "Received string: <element(s) not found>") };
+  const viaText = buildManifest(inputs({ history, rca: oldRca, errorGroup: updatedGroup, failing: { summary: history[0], detail: { ...history[0], errors: [DRIFT_RESULT_ERROR] }, extract: failingExtract() }, passing: { summary: history[1], detail: null, extract: passingExtract() } }));
+  assert.equal(viaText.rca?.groupErrorMatchesFailingRun, true);
+  assert.equal(viaText.rca?.mentionsFailingRunReceived, false);
+  assert.equal(viaText.rca?.describesFailingRun, false);
+  assert.ok(viaText.notes.some((n) => /never mentions what the captured run received/.test(n) && /--trigger-rca/.test(n)), viaText.notes.join("\n"));
   // the same run in a group whose first failure IS this failure → fine
   const same = buildManifest(inputs({ history, rca: oldRca, failing: { summary: history[0], detail: { ...history[0], errors: [REAL_RESULT_ERROR] }, extract: failingExtract() }, passing: { summary: history[1], detail: null, extract: passingExtract() } }));
   assert.equal(same.rca?.groupErrorMatchesFailingRun, true);
-  assert.equal(same.notes.some((n) => /merges different failures/.test(n)), false);
+  assert.equal(same.rca?.describesFailingRun, true);
+  assert.equal(same.notes.some((n) => /merges different failures|never mentions/.test(n)), false);
   // a fresh RCA that replaced the old one is recorded with its predecessor
   const fresh: RootCauseAnalysis = { ...oldRca, id: "rca-fresh", created_at: "2026-09-23T13:45:00Z", analysis: { ...oldRca.analysis, classification: "CHECK_ERROR", codeFix: "page.getByTestId('booking-status')", repairRecommendation: "REPAIR" } };
   const replaced = buildManifest(inputs({ history, rca: fresh, replacedRca: oldRca, failing: { summary: history[0], detail: { ...history[0], errors: [DRIFT_RESULT_ERROR] }, extract: failingExtract() }, passing: { summary: history[1], detail: null, extract: passingExtract() } }));

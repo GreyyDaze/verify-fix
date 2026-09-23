@@ -224,6 +224,39 @@ export function expectedReceived(text: string | null | undefined): { expected: s
   return { expected: value("Expected"), received: value("Received") };
 }
 
+/** Everything Rocky wrote, as one string (root cause, impact, evidence, reconstructed step errors). */
+export function rcaText(rca: RootCauseAnalysis | null | undefined): string {
+  if (!rca) return "";
+  const a = rca.analysis;
+  return [a.rootCause, a.userImpact, ...(a.evidence ?? []).map((e) => e.description), ...(a.steps ?? []).flatMap((st) => [st.name, ...(st.errors ?? [])])].filter(Boolean).join("\n");
+}
+
+/**
+ * Does Rocky's text mention what THIS run received? Rocky paraphrases (the
+ * steps say "reported 401", not `Received: "401"`), so this is a normalized
+ * substring test: `"401"` → 401, `<element(s) not found>` → element(s) not found.
+ * null when the run has no "Received" line.
+ */
+export function rcaMentionsReceived(rca: RootCauseAnalysis | null | undefined, runErrors: string[]): boolean | null {
+  const r = expectedReceived(runErrors.find((e) => /Received/i.test(e)) ?? null);
+  if (!rca || r.received === null) return null;
+  const needle = r.received.replace(/^["'<]+|[">']+$/g, "").trim().toLowerCase();
+  if (!needle) return null;
+  return rcaText(rca).toLowerCase().includes(needle);
+}
+
+/**
+ * Is the group's RCA about an earlier, different failure? Two independent
+ * signals; either one is enough:
+ *  1. the group's first failure and this run received different things;
+ *  2. the RCA predates this run and never mentions what this run received.
+ */
+export function rcaIsStale(x: { rca: RootCauseAnalysis | null; createdBefore: boolean | null; groupMatches: boolean | null; mentions: boolean | null }): boolean {
+  if (!x.rca) return false;
+  if (x.groupMatches === false) return true;
+  return x.createdBefore === true && x.mentions === false;
+}
+
 /** Does the error group's first failure look like this run's failure? null when either side has no "Received". */
 export function groupErrorMatches(groupMessage: string | null | undefined, runErrors: string[]): boolean | null {
   const g = expectedReceived(groupMessage);
@@ -449,12 +482,17 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   const failingErrorsForRca = resultErrors(failing?.detail ?? null);
   const rcaCreatedBefore = rca && failing ? Date.parse(rca.created_at) < Date.parse(failing.summary.startedAt) : null;
   const groupMatches = errorGroup && failing ? groupErrorMatches(errorGroup.cleanedErrorMessage, failingErrorsForRca) : null;
-  if (rca && errorGroup && failing && groupMatches === false) {
-    const g = expectedReceived(errorGroup.cleanedErrorMessage);
+  const rcaMentions = rca && failing ? rcaMentionsReceived(rca, failingErrorsForRca) : null;
+  const rcaStale = rcaIsStale({ rca, createdBefore: rcaCreatedBefore, groupMatches, mentions: rcaMentions });
+  if (rca && failing && rcaStale) {
+    const g = expectedReceived(errorGroup?.cleanedErrorMessage);
     const r = expectedReceived(failingErrorsForRca.find((e) => /Received/i.test(e)) ?? null);
+    const why =
+      groupMatches === false
+        ? `error group ${errorGroup!.id} merges different failures: its first failure received ${g.received}, the captured run received ${r.received}`
+        : `RCA ${rca.id} never mentions what the captured run received (${r.received}) and was created ${rca.created_at}, before this run`;
     notes.push(
-      `error group ${errorGroup.id} merges different failures: its first failure received ${g.received}, the captured run received ${r.received}. ` +
-        `Rocky analyzes only the first failure of a group, so RCA ${rca.id} (${rca.created_at}${rcaCreatedBefore ? ", before this run" : ""}) describes the earlier failure, not this one` +
+      `${why}. Rocky analyzes only the first failure of a group, so this RCA describes an earlier failure, not this one` +
         (input.replacedRca ? "" : " — pass --trigger-rca to request a fresh analysis"),
     );
   }
@@ -554,7 +592,12 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   const primaryFile = input.mainSource ?? input.sources[0]?.path ?? null;
   const failingErrors = resultErrors(failing?.detail ?? null);
   const incidentSlug = (input.project.logicalId ?? check.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-  const incidentId = failingId ? `${incidentSlug}-${fnv1a(errorGroup?.id ?? failingId).slice(0, 6)}` : `${incidentSlug}-baseline`;
+  // Stable across re-captures of the same failure. When Checkly filed a
+  // different failure under an existing group (its Received differs), the
+  // run's Received joins the key so the two incidents do not share an id.
+  const runReceived = expectedReceived(resultErrors(failing?.detail ?? null).find((e) => /Received/i.test(e)) ?? null).received;
+  const groupKey = errorGroup ? (groupErrorMatches(errorGroup.cleanedErrorMessage, resultErrors(failing?.detail ?? null)) === false && runReceived ? `${errorGroup.id}|${runReceived}` : errorGroup.id) : null;
+  const incidentId = failingId ? `${incidentSlug}-${fnv1a(groupKey ?? failingId).slice(0, 6)}` : `${incidentSlug}-baseline`;
 
   return {
     schemaVersion: "v3",
@@ -634,6 +677,8 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
           createdAt: rca.created_at,
           createdBeforeFailingRun: rcaCreatedBefore,
           groupErrorMatchesFailingRun: groupMatches,
+          mentionsFailingRunReceived: rcaMentions,
+          describesFailingRun: !rcaStale,
           replaced: input.replacedRca ? { id: input.replacedRca.id, createdAt: input.replacedRca.created_at, classification: input.replacedRca.analysis.classification } : null,
           classification: rca.analysis.classification,
           rootCause: rca.analysis.rootCause,

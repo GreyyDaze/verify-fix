@@ -149,7 +149,10 @@ test("golden (real bundle): the captured incident is the booking 401 at spec lin
   // the group's first failure and this run both received "401" → the RCA is about this failure
   assert.equal(m.rca?.groupErrorMatchesFailingRun, true);
   assert.equal(m.rca?.createdBeforeFailingRun, true, "Rocky analyzed the first 401 two days before this run");
-  assert.equal(m.notes.some((n) => /merges different failures/.test(n)), false);
+  assert.equal(m.rca?.mentionsFailingRunReceived, true, "Rocky's text says 401");
+  assert.equal(m.rca?.describesFailingRun, true);
+  assert.equal(m.notes.some((n) => /merges different failures|never mentions/.test(n)), false);
+  assert.equal(m.incidentId, captured.incidentId, "the incident id is stable across re-captures of the same failure");
   assert.equal(resultErrors(passingResult).length, 0);
 });
 

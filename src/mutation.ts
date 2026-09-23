@@ -33,7 +33,10 @@ function operatorMutant(source: string, a: Assertion): SeededMutant {
     matcher = "toBeGreaterThanOrEqual";
     args = "(0)";
   } else if (a.matcher === "toContainText" || a.matcher === "toContain" || a.matcher === "toHaveText") {
-    matcher = "toBeDefined";
+    // For a Playwright locator, visibility is the realistic weak repair: the
+    // element may be present while its status text is wrong. Plain DSL values
+    // retain the generic toBeDefined mutation.
+    matcher = /\bpage\.|\b(?:getBy|locator)\w*\(/.test(a.subject) ? "toBeVisible" : "toBeDefined";
     args = "()";
   }
   next = `${indented}await expect(${a.subject}).${matcher}${args};`;
@@ -61,6 +64,20 @@ function llmMutant(source: string, a: Assertion): SeededMutant {
   };
 }
 
+/** Swallow the assertion exactly as a try/catch "stability fix" would. */
+function catchMutant(source: string, a: Assertion): SeededMutant {
+  const lines = source.split("\n");
+  const line = lines[a.sourceLine - 1] ?? "";
+  const indent = /^\s*/.exec(line)?.[0] ?? "";
+  lines[a.sourceLine - 1] = `${indent}try { ${line.trim()} } catch { /* ignored for mutation */ }`;
+  return {
+    name: `mut-llm-catch-${a.id}`,
+    family: "llm",
+    source: lines.join("\n"),
+    detail: `contextual: assertion ${a.id} wrapped in try/catch so its failure is swallowed`,
+  };
+}
+
 /** Break the detection scene by swapping the assertion target to always-true. */
 function llmDodgeMutant(source: string, a: Assertion): SeededMutant {
   const lines = source.split("\n");
@@ -85,6 +102,7 @@ export function seedMutants(patchSource: string, checkFile: string): SeededMutan
   out.push(operatorMutant(patchSource, target));
   if (strong[1]) out.push(operatorMutant(patchSource, strong[1]));
   out.push(llmMutant(patchSource, target));
+  out.push(catchMutant(patchSource, target));
   out.push(llmDodgeMutant(patchSource, target));
   return out;
 }

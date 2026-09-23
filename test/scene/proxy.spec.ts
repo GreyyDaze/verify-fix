@@ -5,7 +5,7 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
-import { SceneProxy } from "../../src/scene/proxy.ts";
+import { SceneProxy, shouldInterleave } from "../../src/scene/proxy.ts";
 import { parseMode } from "../../src/scene/modes.ts";
 import type { Har, HarEntry } from "../../src/trace/har-types.ts";
 
@@ -13,6 +13,15 @@ let target: Server;
 let targetUrl: string;
 const arrivals: string[] = [];
 let sessions = new Map<string, number>();
+
+test("browser barrier admits fetch/API calls but not documents, assets, or Next.js RSC traffic", () => {
+  const req = (headers: Record<string, string>, url = "/api/x", method = "GET") => ({ headers, url, method });
+  assert.equal(shouldInterleave(req({})), true, "non-browser API clients omit Fetch Metadata");
+  assert.equal(shouldInterleave(req({ "sec-fetch-dest": "empty" })), true, "browser fetch/XHR");
+  assert.equal(shouldInterleave(req({ "sec-fetch-dest": "document" }, "/")), false);
+  assert.equal(shouldInterleave(req({ "sec-fetch-dest": "script" }, "/_next/static/app.js")), false);
+  assert.equal(shouldInterleave(req({ "sec-fetch-dest": "empty", rsc: "1" }, "/book")), false, "Next client navigation is not a business API call");
+});
 
 before(async () => {
   target = createServer(async (req, res) => {
@@ -144,6 +153,21 @@ describe("scene proxy", () => {
       assert.equal(miss.status, 404);
       assert.equal(proxy.hits().at(-1)?.source, "unmatched");
       assert.equal(arrivals.length, before, "the target saw nothing");
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  test("browser replay: API responses come from an API-only HAR while explicit target supplies omitted page assets", async () => {
+    const proxy = new SceneProxy();
+    try {
+      const recording = har([entry("POST", "/api/login", 200, { token: "recorded" }), entry("GET", "/app.js", 200, "recorded asset")]);
+      const [url] = await proxy.arm({ mode: parseMode("replay:passing.har"), target: targetUrl, runs: 1, replayHar: recording, replayBrowserAssetsFromTarget: true });
+      const api = await fetch(`${url}/api/login`, { method: "POST", headers: { "sec-fetch-dest": "empty" } });
+      assert.deepEqual(await api.json(), { token: "recorded" });
+      const asset = await fetch(`${url}/app.js`, { headers: { "sec-fetch-dest": "script" } });
+      assert.equal(await asset.text(), "ok /app.js");
+      assert.deepEqual(proxy.hits().map((h) => h.source), ["recording", "target"]);
     } finally {
       await proxy.close();
     }

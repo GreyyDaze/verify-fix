@@ -504,7 +504,10 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   return { manifest, outDir, files: files.map((f) => f.file), warnings };
 }
 
-function bundleReadme(m: ManifestV3): string {
+export function bundleReadme(m: ManifestV3): string {
+  // Older captured bundles predate the Rocky repair fields. Regenerating their
+  // README during local measurement must remain safe.
+  const repair = m.config.repair ?? { intent: null, aiAutoRepairEnabled: null };
   const lines = [
     `# Bundle: ${m.incidentId}`,
     "",
@@ -515,11 +518,13 @@ function bundleReadme(m: ManifestV3): string {
     `- Failing result: ${m.results.failing ? `\`${m.results.failing.id}\` (${m.results.failing.runLocation}, ${m.results.failing.startedAt})` : "none yet"}`,
     `- Passing result: ${m.results.passing ? `\`${m.results.passing.id}\` (${m.results.passing.runLocation}, ${m.results.passing.startedAt})` : "none"}`,
     `- RCA: ${m.rca ? `${m.rca.classification}${m.rca.repairRecommendation ? ` / ${m.rca.repairRecommendation}` : ""} — ${m.rca.rootCause.slice(0, 200)}` : "none"}`,
-    `- Rocky guardrails: intent ${m.config.repair.intent ? `"${m.config.repair.intent.goal}" (${m.config.repair.intent.mustPreserve.length} mustPreserve, ${m.config.repair.intent.requiredOutcomes.length} requiredOutcomes)` : "none"}; automatic repair ${m.config.repair.aiAutoRepairEnabled === null ? "inherits the account default" : m.config.repair.aiAutoRepairEnabled ? "ON for this check" : "OFF for this check"}`,
+    `- Rocky guardrails: intent ${repair.intent ? `"${repair.intent.goal}" (${repair.intent.mustPreserve.length} mustPreserve, ${repair.intent.requiredOutcomes.length} requiredOutcomes)` : "none"}; automatic repair ${repair.aiAutoRepairEnabled === null ? "inherits the account default" : repair.aiAutoRepairEnabled ? "ON for this check" : "OFF for this check"}`,
     `- Reproduction mode: **${m.reproduction.mode}** (decided by ${m.reproduction.decidedBy}) — ${m.reproduction.reason}`,
     m.failurePoint?.request
       ? `- Failure point: ${m.failurePoint.request.method} ${m.failurePoint.request.path} → ${m.failurePoint.request.status}${m.failurePoint.request.passingStatus !== null ? ` (passing run: ${m.failurePoint.request.passingStatus})` : ""}`
-      : "- Failure point: not identified",
+      : m.failurePoint?.dependency
+        ? `- Step dependency: ${m.failurePoint.dependency.method} ${m.failurePoint.dependency.path} → ${m.failurePoint.dependency.passingStatus} in the passing run (detection injects 500)`
+        : "- Failure point: not identified",
     m.failurePoint?.action ? `- Failing step: \`${m.failurePoint.action.title}\` — ${m.failurePoint.action.error.split("\n")[0]}` : "",
     m.failurePoint?.assertion
       ? `- Failing assertion: ${m.failurePoint.assertion.file ?? "spec"}:${m.failurePoint.assertion.line}${m.failurePoint.assertion.assertionId ? ` (${m.failurePoint.assertion.assertionId})` : ""}`
@@ -539,6 +544,7 @@ function bundleReadme(m: ManifestV3): string {
     `- History (${m.determinism.history.finalRuns} final runs): pass rate ${m.determinism.history.passRate ?? "n/a"}; by location: ${Object.entries(m.determinism.history.byLocation).map(([l, v]) => `${l} ${v.passed}/${v.runs}`).join(", ") || "n/a"}`,
     `- Measured sequential: ${m.determinism.sequential ? `${m.determinism.sequential.passed}/${m.determinism.sequential.runs}` : "not measured"}`,
     `- Measured overlap: ${m.determinism.overlap ? `${m.determinism.overlap.pairsWithFailure}/${m.determinism.overlap.pairs} pairs failed` : "not measured"}`,
+    `- Measurement method: ${m.determinism.method ?? "none"}; last verified ${m.determinism.lastVerifiedAt}`,
     "",
     "## Notes",
     "",

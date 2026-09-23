@@ -58,6 +58,7 @@ export function loadBundle(dirIn: string): LoadedBundle {
   bundle.config = (raw.config as BundleConfig | undefined) ?? (configFile ? configFromSource(files[configFile]) : null);
   bundle.recordedOrigin = (raw.recordedOrigin as string | undefined) ?? null;
   bundle.dir = dir;
+  bundle.playwright = null;
   validateScenes(bundle.scenes, manifestPath);
   return { bundle };
 }
@@ -110,16 +111,36 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
     },
     recordedOrigin: m.target.recordedOrigin,
     dir,
+    playwright: m.config.playwright?.configPath
+      ? { configFile: m.config.playwright.configPath.replace(/^\.\//, ""), projects: m.config.playwright.projects }
+      : null,
     scenes,
     envAssumptions: m.envAssumptions,
     // PR-7: without measured numbers the gate stays closed (UNCERTAIN, never PASS).
-    determinism: {
-      targetRuns: 20,
-      achieved: m.determinism.measured && seq ? seq.runs : 0,
-      sequentialPassRate: seq?.passRate ?? 0,
-      overlapFailRate: ovl?.failRate ?? 0,
-      lastVerifiedAt: m.determinism.lastVerifiedAt,
-    },
+    // A concurrency incident needs both a green one-at-a-time baseline and a
+    // red overlap. A persistent live incident (such as check drift) needs the
+    // original check to fail every time in `live`; an overlap number is not
+    // relevant to that incident.
+    determinism: (() => {
+      const reproduction = scenes.find((s) => s.type === "REPRODUCTION");
+      const mode = parseMode(reproduction?.mode);
+      const isConcurrent = mode.kind === "live-concurrent";
+      const achieved = !m.determinism.measured
+        ? 0
+        : isConcurrent
+          ? Math.min(seq?.runs ?? 0, ovl?.pairs ?? 0)
+          : seq?.runs ?? 0;
+      return {
+        targetRuns: 20,
+        achieved,
+        sequentialPassRate: seq?.passRate ?? 0,
+        overlapFailRate: ovl?.failRate ?? 0,
+        reproductionFailRate: isConcurrent ? ovl?.failRate ?? 0 : seq ? Number((1 - seq.passRate).toFixed(3)) : 0,
+        baselinePassRate: isConcurrent ? seq?.passRate ?? 0 : null,
+        method: m.determinism.method ?? null,
+        lastVerifiedAt: m.determinism.lastVerifiedAt,
+      };
+    })(),
     runBudget: m.runBudget,
     oracleProvenance: m.oracleProvenance,
   };

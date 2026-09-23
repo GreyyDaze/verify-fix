@@ -13,7 +13,9 @@
 //               exist in Checkly and be provided with --env-file to run here
 //
 // Nothing here reads the check code; code-side dodges (hardcoded account,
-// generated account) stay in executor/synthetic detectEnvScopeDodge.
+// generated account) stay in executor/scene detectEnvScopeDodge.
+
+import { stripComments } from "../assertion/inventory.ts";
 
 export interface CheckConfigView {
   runParallel: boolean | null;
@@ -28,7 +30,9 @@ export interface CheckConfigView {
 const TIMEOUT_KEYS = ["maxResponseTime", "timeout", "degradedResponseTime"];
 
 export function parseCheckConfig(source: string | null | undefined): CheckConfigView {
-  const s = source ?? "";
+  // Real checkly.config.ts files explain settings in comments. Those examples
+  // are not values. Parse only executable text.
+  const s = stripComments(source ?? "");
   const bool = (key: string): boolean | null => {
     const m = new RegExp(`\\b${key}\\s*:\\s*(true|false)\\b`).exec(s);
     return m ? m[1] === "true" : null;

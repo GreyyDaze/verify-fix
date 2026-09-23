@@ -9,6 +9,9 @@ import { parseCheckConfig, diffCheckConfig, applyConfigPolicy } from "../../src/
 import { parseEnvFile, referencedEnvVars, checkEnv } from "../../src/scene/env.ts";
 import { loadBundle } from "../../src/bundle.ts";
 import { loadPatch, patchedConfig, patchedCheckSource, newFiles } from "../../src/patch.ts";
+import { parseInventory, inventoryDiff } from "../../src/assertion/inventory.ts";
+import { buildContract } from "../../src/contract/contract.ts";
+import { SceneExecutor } from "../../src/executor/scene.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const INCIDENT_DIR = join(ROOT, "fixtures/slots-booking/bundle/incidents/slots-booking-overlap");
@@ -58,6 +61,7 @@ describe("config diff + policy", () => {
     assert.equal(v.retryStrategy, null);
     assert.deepEqual(v.envKeys, ["ACCOUNT"]);
     assert.deepEqual(parseCheckConfig(null), { runParallel: null, locations: null, frequency: null, retryStrategy: null, doubleCheck: null, timeouts: {}, envKeys: [] });
+    assert.equal(parseCheckConfig(`// example: runParallel: true\nrunParallel: false`).runParallel, false, "commented examples are not config values");
   });
 
   test("scheduling changes are allowed and noted", () => {
@@ -103,6 +107,60 @@ describe("environment", () => {
     assert.deepEqual(result.undeclared, ["API_KEY"]);
     assert.equal(checkEnv(`fetch(process.env.ENVIRONMENT_URL)`, {}, []).missing.length, 1, "ENVIRONMENT_URL counts as a reference when nothing provides it");
     assert.deepEqual(checkEnv(`fetch(process.env.ENVIRONMENT_URL)`, {}, []).undeclared, [], "Checkly's own variables are always declared");
+  });
+});
+
+describe("Playwright locator drift", () => {
+  test("an exact locator rename keeps the assertion contract; weaker matcher and deletion do not", () => {
+    const original = `await expect(page.getByTestId('book-status')).toHaveText('200')`;
+    const renamed = `await expect(page.getByTestId('booking-status')).toHaveText('200')`;
+    const weak = `await expect(page.getByTestId('booking-status')).toBeVisible()`;
+    const removed = `// assertion deleted`;
+    const inv = parseInventory("tests/booking.spec.ts", original);
+    assert.equal(inventoryDiff(inv, parseInventory("tests/booking.spec.ts", renamed)).removed.length, 0);
+    assert.equal(inventoryDiff(inv, parseInventory("tests/booking.spec.ts", weak)).removed.length, 1);
+    assert.equal(inventoryDiff(inv, parseInventory("tests/booking.spec.ts", removed)).removed.length, 1);
+  });
+
+  test("duplicate matcher/target ids still detect deletion of one assertion", () => {
+    const original = `await expect(page.getByTestId('login-status')).toHaveText('200')\nawait expect(page.getByTestId('book-status')).toHaveText('200')`;
+    const patched = `await expect(page.getByTestId('login-status')).toHaveText('200')`;
+    const diff = inventoryDiff(parseInventory("x.spec.ts", original), parseInventory("x.spec.ts", patched));
+    assert.equal(diff.removed.length, 1);
+    assert.match(diff.removed[0].subject, /book-status/);
+  });
+});
+
+describe("measured real bundles", () => {
+  test("local measurements open the right determinism gate for overlap and persistent drift", () => {
+    const overlap = loadBundle(join(ROOT, "fixtures/bundles/slots-booking-overlap")).bundle;
+    const drift = loadBundle(join(ROOT, "fixtures/bundles/slots-booking-drift")).bundle;
+    assert.deepEqual(
+      { achieved: overlap.determinism.achieved, reproduction: overlap.determinism.reproductionFailRate, baseline: overlap.determinism.baselinePassRate, method: overlap.determinism.method },
+      { achieved: 20, reproduction: 1, baseline: 1, method: "local-runner" },
+    );
+    assert.deepEqual(
+      { achieved: drift.determinism.achieved, reproduction: drift.determinism.reproductionFailRate, baseline: drift.determinism.baselinePassRate, method: drift.determinism.method },
+      { achieved: 20, reproduction: 1, baseline: null, method: "local-runner" },
+    );
+    const overlapFix = loadPatch(join(ROOT, "fixtures/patches/slots-booking-overlap/01-good-run-parallel-false"), overlap);
+    const driftFix = loadPatch(join(ROOT, "fixtures/patches/slots-booking-drift/01-good-rename"), drift);
+    assert.equal(buildContract(overlap, patchedCheckSource(overlap, overlapFix)).determinismGate.blocked, false);
+    assert.equal(buildContract(drift, patchedCheckSource(drift, driftFix)).determinismGate.blocked, false);
+  });
+
+  test("an API-only browser replay without --target is inconclusive before Playwright starts", async () => {
+    const bundle = loadBundle(join(ROOT, "fixtures/bundles/slots-booking-overlap")).bundle;
+    const base = bundle.scenes.find((s) => s.type === "HEALTHY")!;
+    const scene = { ...base, sceneId: "replay-preflight", mode: "replay:passing.har", experiments: [{ ...base.experiments[0], repetitions: 1 }] };
+    const executor = new SceneExecutor({ target: null, env: { TEST_USER: "demo" } });
+    try {
+      const observed = await executor.runScene(bundle, bundle.checkSource, scene, { config: bundle.config, files: bundle.files });
+      assert.equal(observed.observed, "uncertain");
+      assert.match(observed.reason ?? "", /needs --target for page assets/);
+    } finally {
+      await executor.close();
+    }
   });
 });
 

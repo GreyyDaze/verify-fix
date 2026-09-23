@@ -239,7 +239,12 @@ export function inventoryDiff(original: AssertionInventory, patched: AssertionIn
     seenKeys.add(key);
     const orig = byKey.get(key);
     if (!orig) {
-      // maybe subject changed? Treated as added (overfit/renaming) unless removed counterpart exists
+      // A locator rename keeps the same assertion contract when matcher and
+      // target stay exact. assertionId intentionally binds on those two fields
+      // (not the source expression), so the browser scenes decide whether the
+      // new locator is correct. This is what permits a real drift repair such
+      // as book-status → booking-status without permitting a weaker matcher.
+      if (original.assertions.some((a) => a.id === p.id)) continue;
       added.push(p);
       continue;
     }
@@ -251,7 +256,8 @@ export function inventoryDiff(original: AssertionInventory, patched: AssertionIn
     if (!orig.falsifiable && p.falsifiable) added.push(p); // notable: made stronger
   }
   for (const a of original.assertions) {
-    if (!seenKeys.has(`${a.subject}|${a.matcher}`) && !patched.assertions.some((p) => p.subject === a.subject && p.matcher === a.matcher)) {
+    const sameContractPreserved = patched.assertions.filter((p) => p.id === a.id).length >= original.assertions.filter((o) => o.id === a.id).length;
+    if (!seenKeys.has(`${a.subject}|${a.matcher}`) && !sameContractPreserved && !patched.assertions.some((p) => p.subject === a.subject && p.matcher === a.matcher)) {
       removed.push(a);
     }
   }

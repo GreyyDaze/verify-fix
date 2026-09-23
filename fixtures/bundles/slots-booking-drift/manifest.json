@@ -180,11 +180,11 @@
     "lastSeen": "2026-09-23T16:49:14.208Z"
   },
   "reproduction": {
-    "mode": "both",
-    "matchedRule": null,
-    "matchedText": null,
-    "reason": "RCA text matched no rule and no passing overlapping run was found (the overlapping run failed too) → both modes; the scene is UNCERTAIN if neither reproduces",
-    "decidedBy": "none",
+    "mode": "live",
+    "matchedRule": "persistent-failure",
+    "matchedText": "76/76 runs failed since 2026-09-23T13:43:55.869Z",
+    "reason": "every run since the last passing one failed (76/76 since 2026-09-23T13:43:55.869Z across eu-west-1, us-east-1) and no request failed → the current target reproduces it on its own: live",
+    "decidedBy": "history",
     "overlappingRuns": [
       {
         "runId": "01a0cf2b-9514-717a-a3b7-ee0ba84be3de",
@@ -209,6 +209,15 @@
       "line": 36,
       "column": 51,
       "assertionId": "assert:fab411b3"
+    },
+    "dependency": {
+      "method": "POST",
+      "url": "https://slots-booking-verify-fix.vercel.app/api/book",
+      "path": "/api/book",
+      "passingStatus": 200,
+      "msBeforeStep": 8.1,
+      "stepLine": 36,
+      "stepTitle": "Expect \"toHaveText\" expected=\"200\""
     }
   },
   "recordings": {
@@ -252,9 +261,8 @@
     {
       "sceneId": "reproduction",
       "type": "REPRODUCTION",
-      "mode": "live-concurrent:2",
-      "alternativeMode": "replay:failing.har",
-      "state": "two copies of the check run at once on the target, as the overlapping locations did in the failing run; the fixed check must pass",
+      "mode": "live",
+      "state": "one run of the check against the target as it is now (the failure is persistent, not timing-dependent); the fixed check must pass",
       "verdict": {
         "mustFail": false,
         "provenance": {
@@ -280,20 +288,20 @@
       ],
       "environment": "target",
       "notes": [
-        "RCA text matched no rule and no passing overlapping run was found (the overlapping run failed too) → both modes; the scene is UNCERTAIN if neither reproduces"
+        "every run since the last passing one failed (76/76 since 2026-09-23T13:43:55.869Z across eu-west-1, us-east-1) and no request failed → the current target reproduces it on its own: live"
       ]
     },
     {
       "sceneId": "detection",
       "type": "DETECTION",
-      "mode": "inject:<failing request unknown>",
-      "state": "the recorded failure is injected on top of a live run; the fixed check must still fail",
+      "mode": "inject:POST /api/book -> 500",
+      "state": "no request failed in the incident (the check went stale); the step that failed (Expect \"toHaveText\" expected=\"200\", line 36) depends on POST /api/book (answered 200 8.1 ms before it in the passing run) — that call is answered 500 on top of a live run; the fixed check MUST still fail",
       "verdict": {
         "mustFail": true,
         "provenance": {
           "kind": "recorded",
-          "runId": "01a0cf2b-9514-717a-a3b7-f025c779f436",
-          "artifactId": "recordings/failing.har"
+          "runId": "01a0ce7d-a2e8-73db-b515-3f2ebf37fd62",
+          "artifactId": "recordings/passing.har"
         },
         "envAssumptions": [
           "target-resolution"
@@ -311,7 +319,7 @@
       ],
       "environment": "target+recording",
       "notes": [
-        "no failing API request could be identified in the trace; the scene layer must derive the injection from the failing action"
+        "derived from the passing run's timeline: POST /api/book is the last API call before the failing step; a 500 there is a real failure a repaired check may not hide"
       ]
     }
   ],
@@ -334,7 +342,7 @@
         "subject": "page",
         "matcher": "toHaveURL",
         "target": "/\\/book$/",
-        "kind": "property",
+        "kind": "exact",
         "onCriticalPath": true,
         "sourceLine": 30,
         "falsifiable": true,
@@ -348,7 +356,7 @@
         "kind": "exact",
         "onCriticalPath": true,
         "sourceLine": 31,
-        "falsifiable": false,
+        "falsifiable": true,
         "guarded": false
       },
       {
@@ -419,7 +427,7 @@
     }
   ],
   "determinism": {
-    "measured": false,
+    "measured": true,
     "history": {
       "window": 100,
       "finalRuns": 100,
@@ -439,9 +447,15 @@
       "from": "2026-09-23T12:43:58.199Z",
       "to": "2026-09-23T16:48:56.106Z"
     },
-    "sequential": null,
+    "sequential": {
+      "runs": 20,
+      "passed": 0,
+      "passRate": 0,
+      "sessions": []
+    },
     "overlap": null,
-    "lastVerifiedAt": "2026-09-23T16:53:45.674Z"
+    "lastVerifiedAt": "2026-09-23T20:24:17.135Z",
+    "method": "local-runner"
   },
   "runBudget": {
     "maxPerScene": 10,
@@ -564,7 +578,7 @@
   },
   "notes": [
     "01a0cf2b-9514-717a-a3b7-ee0ba84be3de @ us-east-1 overlapped the failing run and failed too — the failure does not depend on which copy wins, so the overlap is not evidence of concurrency",
-    "RCA 95755aa2-1856-433d-a64b-35786a370d39 was requested by verify-fix bundle (--trigger-rca) because the group's earlier RCA 22bb2081-9c74-4495-ac79-1e80e6f5ea7d (UNKNOWN_ERROR) described a different failure; both are kept in rca.json",
+    "RCA 95755aa2-1856-433d-a64b-35786a370d39 was requested by verify-fix bundle (--trigger-rca): the group's earlier RCA 22bb2081-9c74-4495-ac79-1e80e6f5ea7d (UNKNOWN_ERROR) was not confirmed to describe this run at capture time; both are kept in rca.json",
     "REGRESSION scenes (sibling checks) are not generated yet — planned once group listing is wired (Phase 3)"
   ]
 }

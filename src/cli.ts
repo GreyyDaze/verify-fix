@@ -2,8 +2,8 @@
 //   verify-fix bundle --check <checkId> [--result <id>] [--project <dir>] [--out <dir>]
 //                     [--measure N] [--measure-overlap M] [--target-url <url>]
 //                     [--trigger-rca] [--bodies api|all|none] [--keep-raw] [--history N] [--json] [--verbose]
-//   verify-fix verify --patch <file|dir> --bundle <dir> --target <url> [--env-file <file>] [--env-name <name>]
-//                     [--executor scene|checkly] [--dry-run] [--json] [--verbose]
+//   verify-fix verify --patch <file|dir> --bundle <dir> --target <url> [--project <dir>] [--env-file <file>]
+//   verify-fix measure --bundle <dir> --target <url> --project <dir> [--runs 20] [--env-file <file>]
 // Exit codes: 0 PASS/ok · 1 FAILED · 2 UNCERTAIN / usage / could not run.
 
 import { readFileSync, existsSync } from "node:fs";
@@ -14,6 +14,7 @@ import { SceneExecutor } from "./executor/scene.ts";
 import { ChecklyExecutor } from "./executor/checkly.ts";
 import { loadPatch } from "./patch.ts";
 import { parseEnvFile } from "./scene/env.ts";
+import { measureLocalDeterminism } from "./measure-local.ts";
 import { resolveCredentials, CREDENTIALS_HELP } from "./checkly/credentials.ts";
 import { ChecklyClient, ChecklyApiError } from "./checkly/client.ts";
 import { buildBundle } from "./bundle/build.ts";
@@ -45,13 +46,15 @@ interface Args {
   bodies: BodyPolicy;
   keepRaw: boolean;
   history: number;
+  // local measure
+  runs: number;
 }
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: null, patch: null, bundle: null, executor: "scene", target: null, envFile: null, envName: null, dryRun: false, json: false, verbose: false,
     check: null, result: null, out: null, project: null, measure: 0, measureOverlap: 0, targetUrl: null,
-    triggerRca: false, bodies: "api", keepRaw: false, history: 100,
+    triggerRca: false, bodies: "api", keepRaw: false, history: 100, runs: 20,
   };
   const value = (i: number, a: string): string => {
     const eq = a.indexOf("=");
@@ -88,6 +91,7 @@ function parseArgs(argv: string[]): Args {
       case "--bodies": args.bodies = value(i, a) as BodyPolicy; if (takes) i++; break;
       case "--keep-raw": args.keepRaw = true; break;
       case "--history": args.history = Number(value(i, a)); if (takes) i++; break;
+      case "--runs": args.runs = Number(value(i, a)); if (takes) i++; break;
       case "--help": case "-h": args.command = "help"; break;
       default:
         if (!args.command && !a.startsWith("-")) args.command = a;
@@ -109,12 +113,17 @@ function usage(): string {
     "      --trigger-rca asks Rocky for a fresh analysis when the group has none, or when its RCA describes",
     "      an earlier, different failure of the same group (Rocky analyzes only a group's first failure).",
     "",
-    "  verify-fix verify --patch <file|dir> --bundle <dir> --target <url> [--env-file <file>] [--env-name <name>]",
-    "                    [--executor scene|checkly] [--dry-run] [--json] [--verbose]",
+    "  verify-fix verify --patch <file|dir> --bundle <dir> --target <url> [--project <dir>]",
+    "                    [--env-file <file>] [--env-name <name>] [--executor scene|checkly] [--dry-run] [--json] [--verbose]",
     "      Grades a candidate fix against a bundle. --patch is the new check file, or a directory whose files",
     "      replace the bundle's check/ files (spec and/or checkly.config.ts). --target is the app the live",
     "      scenes run against (becomes ENVIRONMENT_URL, Checkly's convention); the tool never picks one.",
+    "      Playwright bundles also need --project: the customer's project with @playwright/test installed.",
     "      --env-file gives the check its own variables (KEY=VALUE lines, like `checkly test --env-file`).",
+    "",
+    "  verify-fix measure --bundle <dir> --target <url> --project <dir> [--runs 20] [--env-file <file>] [--verbose]",
+    "      Runs the original Playwright check locally through its reproduction mode, then writes measured",
+    "      determinism numbers to manifest.json with method local-runner. No Checkly credentials are used.",
     "",
     "Exit codes: 0 = PASS/ok · 1 = FAILED · 2 = UNCERTAIN / usage error",
     "",
@@ -194,6 +203,57 @@ async function runBundle(args: Args): Promise<ExitCode> {
   }
 }
 
+async function runMeasure(args: Args): Promise<ExitCode> {
+  if (!args.bundle || !args.target || !args.project) {
+    process.stderr.write("--bundle, --target and --project are required for local measurement\n\n" + usage());
+    return 2;
+  }
+  if (!/^https?:\/\//.test(args.target)) {
+    process.stderr.write("--target must be an http(s) origin, e.g. https://staging.example.com\n");
+    return 2;
+  }
+  if (!Number.isInteger(args.runs) || args.runs < 1) {
+    process.stderr.write("--runs must be a positive integer\n");
+    return 2;
+  }
+  const { bundle } = loadBundle(args.bundle);
+  const env = args.envFile ? parseEnvFile(readFileSync(args.envFile, "utf8")) : {};
+  try {
+    const measured = await measureLocalDeterminism({
+      bundle,
+      target: args.target,
+      env,
+      environmentName: args.envName ?? undefined,
+      projectDir: args.project,
+      runs: args.runs,
+      verbose: args.verbose,
+      browserExecutablePath: process.env.VERIFY_FIX_BROWSER_PATH,
+    });
+    const result = {
+      bundle: bundle.dir,
+      method: "local-runner",
+      reproductionMode: measured.reproductionMode,
+      sequential: measured.sequential,
+      overlap: measured.overlap,
+    };
+    if (args.json) process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+    else {
+      process.stdout.write([
+        `measurement written to ${join(bundle.dir, "manifest.json")}`,
+        `  method:       local-runner`,
+        `  reproduction: ${measured.reproductionMode}`,
+        `  sequential:   ${measured.sequential.passed}/${measured.sequential.runs} passed`,
+        `  overlap:      ${measured.overlap ? `${measured.overlap.pairsWithFailure}/${measured.overlap.pairs} pairs reproduced the failure` : "not required for this mode"}`,
+      ].join("\n") + "\n");
+    }
+    return 0;
+  } catch (err) {
+    process.stderr.write(`measure failed: ${(err as Error).message}\n`);
+    if (args.verbose && (err as Error).stack) process.stderr.write((err as Error).stack + "\n");
+    return 2;
+  }
+}
+
 async function runVerify(args: Args): Promise<ExitCode> {
   if (!args.patch || !args.bundle) {
     process.stderr.write("--patch and --bundle are required\n\n" + usage());
@@ -210,7 +270,14 @@ async function runVerify(args: Args): Promise<ExitCode> {
   const executor =
     args.executor === "checkly"
       ? new ChecklyExecutor({ dryRunOnly: args.dryRun || !process.env.CHECKLY_API_KEY, verbose: args.verbose })
-      : new SceneExecutor({ target: args.target, env, environmentName: args.envName ?? undefined, verbose: args.verbose });
+      : new SceneExecutor({
+          target: args.target,
+          env,
+          environmentName: args.envName ?? undefined,
+          projectDir: args.project,
+          browserExecutablePath: process.env.VERIFY_FIX_BROWSER_PATH,
+          verbose: args.verbose,
+        });
 
   const result = await verify({ bundle, patch, executor, target: args.target, env, environmentName: args.envName ?? undefined, verbose: args.verbose });
 
@@ -232,6 +299,7 @@ async function main(): Promise<ExitCode> {
     return 2;
   }
   if (args.command === "bundle") return runBundle(args);
+  if (args.command === "measure") return runMeasure(args);
   if (args.command === "verify") return runVerify(args);
   process.stderr.write(`unknown command: ${args.command}\n\n${usage()}`);
   return 2;

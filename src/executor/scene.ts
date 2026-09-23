@@ -19,11 +19,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Bundle, ExperimentExecutor, ObservationValue, RunContext, Scene, SceneObservation, TraceStep } from "../types.ts";
-import { runSandbox, type SandboxOutcome } from "../sandbox.ts";
+import { runSandbox } from "../sandbox.ts";
+import { runPlaywrightSandbox } from "../playwright-sandbox.ts";
 import { sceneExpected } from "../contract/contract.ts";
 import { fnv1a } from "../assertion/id.ts";
 import { effectiveConcurrency, needsTarget, parseMode, type ParsedMode } from "../scene/modes.ts";
-import { SceneProxy } from "../scene/proxy.ts";
+import { SceneProxy, type ProxyHit } from "../scene/proxy.ts";
 import type { Har } from "../trace/har-types.ts";
 
 /** Reproducible per-run randomness seed: same scene + repetition + run → same seed. */
@@ -42,10 +43,23 @@ export interface SceneExecutorOptions {
   verbose?: boolean;
   barrierTimeoutMs?: number;
   sandboxTimeoutMs?: number;
+  /** Customer project containing node_modules/@playwright/test. */
+  projectDir?: string | null;
+  /** Optional custom Chromium/Chrome binary (mainly CI/sandbox use). */
+  browserExecutablePath?: string;
+  /** Measurement hook. Called once for every completed scene repetition. */
+  onRepetition?: (record: { sceneId: string; repetition: number; checkPassed: boolean; hits: ProxyHit[] }) => void;
 }
 
 /** Fallback cap when neither the option nor the bundle declares one. */
 export const DEFAULT_MAX_RUNS_PER_SCENE = 10;
+
+interface CandidateOutcome {
+  passed: boolean;
+  inconclusive: boolean;
+  reason: string | null;
+  trace: TraceStep[];
+}
 
 export function isSceneExecutor(e: ExperimentExecutor): e is SceneExecutor {
   return e.kind === "scene";
@@ -60,6 +74,9 @@ export class SceneExecutor implements ExperimentExecutor {
   readonly verbose: boolean;
   private readonly barrierTimeoutMs: number | undefined;
   private readonly sandboxTimeoutMs: number | undefined;
+  private readonly projectDir: string | null;
+  private readonly browserExecutablePath: string | undefined;
+  private readonly onRepetition: SceneExecutorOptions["onRepetition"];
   private readonly proxy = new SceneProxy();
   private used = new Map<string, number>();
   private harCache = new Map<string, Har | null>();
@@ -76,6 +93,9 @@ export class SceneExecutor implements ExperimentExecutor {
     this.verbose = opts.verbose ?? false;
     this.barrierTimeoutMs = opts.barrierTimeoutMs;
     this.sandboxTimeoutMs = opts.sandboxTimeoutMs;
+    this.projectDir = opts.projectDir ?? null;
+    this.browserExecutablePath = opts.browserExecutablePath;
+    this.onRepetition = opts.onRepetition;
   }
 
   isLive(): boolean {
@@ -92,7 +112,7 @@ export class SceneExecutor implements ExperimentExecutor {
   }
 
   /** The label the report shows in its environment column. */
-  environmentLabel(bundle: Bundle, scene: Scene, mode: ParsedMode, concurrency: number): string {
+  environmentLabel(bundle: Bundle, scene: Scene, mode: ParsedMode, concurrency: number, replayBrowserAssets = false): string {
     const host = this.target ? new URL(this.target).host : "no target";
     switch (mode.kind) {
       case "live":
@@ -102,7 +122,9 @@ export class SceneExecutor implements ExperimentExecutor {
       case "inject":
         return `target ${host} + inject ${mode.rule.raw}`;
       case "replay":
-        return `recording ${mode.har}`;
+        return replayBrowserAssets && this.target
+          ? `recording ${mode.har} + target ${new URL(this.target).host} (browser assets)`
+          : `recording ${mode.har}`;
       default:
         return scene.mode;
     }
@@ -128,12 +150,40 @@ export class SceneExecutor implements ExperimentExecutor {
     return { sceneId: scene.sceneId, observed: "uncertain", repetitions, trace, source: "scene", reason, environment };
   }
 
+  private async runCandidate(bundle: Bundle, patchSource: string, ctx: RunContext | undefined, url: string, env: Record<string, string>, seed: number): Promise<CandidateOutcome> {
+    if (bundle.playwright && /\.(?:spec|test)\.[cm]?[jt]sx?$/.test(bundle.check.file)) {
+      if (!this.projectDir) throw new Error(`Playwright check needs --project <dir> so @playwright/test can be resolved`);
+      const out = await runPlaywrightSandbox({
+        baseUrl: url,
+        environmentName: this.environmentName,
+        env,
+        timeoutMs: this.sandboxTimeoutMs,
+        projectDir: this.projectDir,
+        configFile: bundle.playwright.configFile,
+        projects: bundle.playwright.projects,
+        files: { ...bundle.files, ...(ctx?.files ?? {}), [bundle.check.file]: patchSource },
+        checkFile: bundle.check.file,
+        seed,
+        browserExecutablePath: this.browserExecutablePath,
+      });
+      return { passed: out.passed, inconclusive: out.inconclusive, reason: out.reason, trace: out.trace };
+    }
+
+    const out = await runSandbox(patchSource, { baseUrl: url, environmentName: this.environmentName, env, seed, timeoutMs: this.sandboxTimeoutMs });
+    return {
+      passed: out.passed,
+      inconclusive: out.vacuous,
+      reason: out.vacuousReason,
+      trace: out.results.flatMap((r) => r.trace).map((t, index) => ({ ...t, index })),
+    };
+  }
+
   async runScene(bundle: Bundle, patchSource: string, scene: Scene, ctx?: RunContext): Promise<SceneObservation> {
     const mode = parseMode(scene.mode);
     const config = ctx?.config ?? bundle.config;
     const allowed = effectiveConcurrency(config);
     const concurrency = mode.kind === "live-concurrent" ? Math.max(1, Math.min(mode.concurrency, allowed)) : 1;
-    const environment = this.environmentLabel(bundle, scene, mode, concurrency);
+    let environment = this.environmentLabel(bundle, scene, mode, concurrency);
 
     if (mode.kind === "unknown" || mode.kind === "pending") return this.uncertain(scene, `scene mode not runnable: ${mode.reason}`, 0, [], environment);
     if (needsTarget(mode) && !this.target) {
@@ -142,6 +192,11 @@ export class SceneExecutor implements ExperimentExecutor {
     }
     const replayHar = mode.kind === "replay" ? this.har(bundle, mode.har) : null;
     if (mode.kind === "replay" && !replayHar) return this.uncertain(scene, `recording ${mode.har} not found in the bundle`, 0, [], environment);
+    const replayBrowserAssets = Boolean(mode.kind === "replay" && bundle.playwright && replayHar && browserAssetBodiesMissing(replayHar));
+    if (replayBrowserAssets && !this.target) {
+      return this.uncertain(scene, `recording ${mode.kind === "replay" ? mode.har : ""} keeps API bodies only; this browser replay needs --target for page assets (or recapture with --bodies all)`, 0, [], environment);
+    }
+    if (replayBrowserAssets) environment = this.environmentLabel(bundle, scene, mode, concurrency, true);
     const failingHar = mode.kind === "inject" ? this.har(bundle, "failing.har") : null;
 
     const budget = this.budgetFor(bundle);
@@ -164,11 +219,11 @@ export class SceneExecutor implements ExperimentExecutor {
     }
 
     for (let rep = 0; rep < reps; rep++) {
-      const urls = await this.proxy.arm({ mode, target: this.target, runs: concurrency, replayHar, failingHar, barrierTimeoutMs: this.barrierTimeoutMs });
+      const urls = await this.proxy.arm({ mode, target: this.target, runs: concurrency, replayHar, replayBrowserAssetsFromTarget: replayBrowserAssets, failingHar, barrierTimeoutMs: this.barrierTimeoutMs });
       const env = { ...this.env, ...(scene.env ?? {}) };
       const settled = await Promise.all(
         urls.map((url, runIndex) =>
-          runSandbox(patchSource, { baseUrl: url, environmentName: this.environmentName, env, seed: repetitionSeed(scene.sceneId, rep, runIndex), timeoutMs: this.sandboxTimeoutMs })
+          this.runCandidate(bundle, patchSource, ctx, url, env, repetitionSeed(scene.sceneId, rep, runIndex))
             .then((outcome) => ({ ok: true as const, outcome }))
             .catch((err: Error) => ({ ok: false as const, err }))
             .finally(() => this.proxy.runFinished(runIndex)),
@@ -185,17 +240,18 @@ export class SceneExecutor implements ExperimentExecutor {
           push({ kind: "step", what: `${tag}sandbox error: ${msg.split("\n")[0].slice(0, 200)}`, outcome: "failed" });
           return this.uncertain(scene, `sandbox could not run the check: ${msg.split("\n")[0].slice(0, 200)}`, rep, mergedTrace, environment);
         }
-        const outcome: SandboxOutcome = s.outcome;
-        for (const r of outcome.results) for (const t of r.trace) push({ ...t, what: tag ? `${tag}${t.what}` : t.what });
-        push({ kind: "step", what: `${tag}${runHits.length} request(s) reached the proxy → ${hits.length ? summarize(runHits) : "none"}`, outcome: runHits.length ? "ok" : "skipped" });
+        const outcome = s.outcome;
+        for (const t of outcome.trace) push({ ...t, what: tag ? `${tag}${t.what}` : t.what });
+        push({ kind: "step", what: `${tag}${runHits.length} request(s) reached the proxy → ${runHits.length ? summarize(runHits) : "none"}`, outcome: runHits.length ? "ok" : "skipped" });
         if (runHits.length === 0) {
           // The executor's own count, independent of anything inside the sandbox.
           return this.uncertain(scene, `${tag}no request reached ENVIRONMENT_URL — nothing was observed in this scene state`, rep + 1, mergedTrace, environment);
         }
-        if (outcome.vacuous) return this.uncertain(scene, `${tag}${outcome.vacuousReason ?? "vacuous run"}`, rep + 1, mergedTrace, environment);
+        if (outcome.inconclusive) return this.uncertain(scene, `${tag}${outcome.reason ?? "runner produced no admissible result"}`, rep + 1, mergedTrace, environment);
         if (!outcome.passed) repPassed = false;
       }
       observedOutcomes.push(repPassed ? "pass" : "fail");
+      this.onRepetition?.({ sceneId: scene.sceneId, repetition: rep, checkPassed: repPassed, hits: [...hits] });
       if (this.verbose) {
         console.error(`[scene] ${scene.sceneId} rep=${rep + 1}/${reps} concurrency=${concurrency} observed=${repPassed ? "pass" : "fail"} expected=${sceneExpected(scene).observed} hits=${hits.length} (${environment})`);
       }
@@ -217,8 +273,17 @@ export class SceneExecutor implements ExperimentExecutor {
   }
 }
 
-function summarize(hits: Array<{ method: string; path: string; status: number; source: string }>): string {
-  return hits.map((h) => `${h.method} ${h.path} ${h.status}${h.source === "target" ? "" : ` (${h.source})`}`).join(", ");
+function browserAssetBodiesMissing(har: Har): boolean {
+  const browserTypes = new Set(["document", "script", "stylesheet", "font", "image"]);
+  return har.log.entries.some((e) => browserTypes.has(e._resourceType ?? "") && e.response.status !== 204 && !e.response.content.text);
+}
+
+function summarize(hits: Array<{ method: string; path: string; status: number; source: string; action?: boolean }>): string {
+  const useful = hits.filter((h) => h.action !== false || h.path.startsWith("/api/"));
+  const shown = (useful.length ? useful : hits).slice(0, 12);
+  const text = shown.map((h) => `${h.method} ${h.path} ${h.status}${h.source === "target" ? "" : ` (${h.source})`}`).join(", ");
+  const hidden = hits.length - shown.length;
+  return hidden > 0 ? `${text}, … ${hidden} browser asset request(s)` : text;
 }
 
 /** Detect the "change account/region/env to dodge" vector (threat row + STING

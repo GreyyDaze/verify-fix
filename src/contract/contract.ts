@@ -59,13 +59,18 @@ export function buildContract(bundle: Bundle, patchedSource: string): ContractRe
     if (bundle.determinism.achieved < bundle.determinism.targetRuns) {
       return { blocked: true, reason: `reproduction only verified for ${bundle.determinism.achieved}/${bundle.determinism.targetRuns} runs (PR-7 N≥20 bar not met)` };
     }
-    if (bundle.determinism.overlapFailRate !== 1) {
-      return { blocked: true, reason: `overlap fail-rate ${bundle.determinism.overlapFailRate * 100}% ≠ 100% — reproduction is not deterministic` };
+    const reproductionFailRate = bundle.determinism.reproductionFailRate ?? bundle.determinism.overlapFailRate;
+    if (reproductionFailRate !== 1) {
+      return { blocked: true, reason: `reproduction fail-rate ${reproductionFailRate * 100}% ≠ 100% — the incident is not deterministic` };
     }
-    if (bundle.determinism.sequentialPassRate !== 1) {
-      return { blocked: true, reason: `sequential pass-rate ${bundle.determinism.sequentialPassRate * 100}% ≠ 100% — healthy baseline is not deterministic` };
+    // A separate healthy baseline exists for timing/concurrency incidents. A
+    // persistent `live` drift incident has no green baseline on the current
+    // target; its one-at-a-time failures are the reproduction itself.
+    const baselinePassRate = bundle.determinism.baselinePassRate === undefined ? bundle.determinism.sequentialPassRate : bundle.determinism.baselinePassRate;
+    if (baselinePassRate !== null && baselinePassRate !== 1) {
+      return { blocked: true, reason: `baseline pass-rate ${baselinePassRate * 100}% ≠ 100% — healthy baseline is not deterministic` };
     }
-    return { blocked: false, reason: "determinism gate passed" };
+    return { blocked: false, reason: `determinism gate passed${bundle.determinism.method ? ` (${bundle.determinism.method})` : ""}` };
   })();
 
   const suppressionCandidates = patched.assertions

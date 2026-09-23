@@ -729,6 +729,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   const measurement = input.measurement;
   const determinism: DeterminismV3 = {
     measured: Boolean(measurement && (measurement.sequential.runs > 0 || measurement.overlap.pairs > 0)),
+    method: measurement ? "checkly-cloud" : null,
     history: historyStats(input.history),
     sequential: measurement && measurement.sequential.runs > 0 ? measurement.sequential : null,
     overlap: measurement && measurement.overlap.pairs > 0 ? measurement.overlap : null,

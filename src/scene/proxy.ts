@@ -3,13 +3,12 @@
 // mode and a target, then every request is:
 //
 //   live              forwarded to the target as-is
-//   live-concurrent   forwarded, but interleaved: request k of every run is
-//                     held until all runs have sent their request k, then the
-//                     group is forwarded one after another in run order and
-//                     the responses are released together. Two runs therefore
-//                     always execute "login, login, book, book" — the overlap
-//                     that produced the recorded 401 — instead of whatever the
-//                     process scheduler happened to give.
+//   live-concurrent   forwarded, but API/fetch call k of every run is held
+//                     until all runs have sent call k, then the group is
+//                     forwarded in run order and responses are released
+//                     together. Browser documents/assets bypass the barrier.
+//                     Two runs therefore execute "login, login, book, book" —
+//                     the recorded 401 overlap — instead of scheduler timing.
 //   inject            forwarded, except the request matching the rule, which
 //                     is answered with the recorded failing response (same
 //                     method, path and status in the failing HAR) or a plain
@@ -36,6 +35,8 @@ export interface ProxyHit {
   method: string;
   path: string;
   status: number;
+  /** true for API/fetch traffic; false for browser documents and assets */
+  action: boolean;
   source: "target" | "recording" | "injected" | "unmatched" | "error";
 }
 
@@ -47,6 +48,8 @@ export interface ArmOptions {
   runs: number;
   /** recording used by replay (the one named in the mode) */
   replayHar?: Har | null;
+  /** For API-only browser HARs, serve page assets from the explicit target. */
+  replayBrowserAssetsFromTarget?: boolean;
   /** the failing recording — inject answers with its recorded failure when it has one */
   failingHar?: Har | null;
   /** lockstep barrier: how long to wait for the other runs' request k before forwarding anyway */
@@ -120,6 +123,8 @@ export class SceneProxy {
   private opts: ArmOptions | null = null;
   private hitsList: ProxyHit[] = [];
   private ordinals: number[] = [];
+  /** Ordinals only for API/fetch traffic. Browser assets never enter the barrier. */
+  private actionOrdinals: number[] = [];
   private barrier: Barrier | null = null;
   private replayUsed = new Map<string, number>();
 
@@ -129,6 +134,7 @@ export class SceneProxy {
     this.opts = opts;
     this.hitsList = [];
     this.ordinals = Array.from({ length: opts.runs }, () => 0);
+    this.actionOrdinals = Array.from({ length: opts.runs }, () => 0);
     this.replayUsed = new Map();
     this.barrier = opts.mode.kind === "live-concurrent" && opts.runs > 1 ? new Barrier(opts.runs, opts.barrierTimeoutMs ?? 2000) : null;
     this.urls = [];
@@ -176,7 +182,8 @@ export class SceneProxy {
     const method = (req.method ?? "GET").toUpperCase();
     const url = new URL(req.url ?? "/", this.urls[runIndex]);
     const body = await readBody(req);
-    const hit: ProxyHit = { runIndex, ordinal, method, path: url.pathname, status: 0, source: "error" };
+    const action = shouldInterleave(req);
+    const hit: ProxyHit = { runIndex, ordinal, method, path: url.pathname, status: 0, action, source: "error" };
     this.hitsList.push(hit);
 
     let answer: Answer = { status: 502, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ error: "verify-fix proxy: not handled" })), source: "error" };
@@ -187,8 +194,17 @@ export class SceneProxy {
         answer = { status: 502, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ error: `verify-fix proxy: ${(err as Error).message}` })), source: "error" };
       }
     };
-    if (this.barrier) await this.barrier.enter({ runIndex, ordinal, forward, release: () => {} });
-    else await forward();
+    // Browser document/script/style/image requests can arrive in a different
+    // order in each process. Pairing those by ordinal can deadlock or pair a
+    // login with a script. Fetch/XHR requests have `sec-fetch-dest: empty`.
+    // Non-browser API clients omit that header, so all of their calls retain
+    // the Phase 3 lockstep behavior.
+    if (this.barrier && action) {
+      const actionOrdinal = ++this.actionOrdinals[runIndex];
+      await this.barrier.enter({ runIndex, ordinal: actionOrdinal, forward, release: () => {} });
+    } else {
+      await forward();
+    }
 
     hit.status = answer.status;
     hit.source = answer.source;
@@ -198,7 +214,13 @@ export class SceneProxy {
 
   private async answer(opts: ArmOptions, runIndex: number, method: string, url: URL, req: IncomingMessage, body: Buffer): Promise<Answer> {
     const mode = opts.mode;
-    if (mode.kind === "replay") return this.fromRecording(opts.replayHar ?? null, method, url);
+    if (mode.kind === "replay") {
+      if (opts.replayBrowserAssetsFromTarget && !shouldInterleave(req)) {
+        if (!opts.target) throw new Error("browser replay needs a target because the HAR omits page asset bodies");
+        return this.forwardToTarget(opts.target, this.urls[runIndex], method, url, req, body);
+      }
+      return this.fromRecording(opts.replayHar ?? null, method, url);
+    }
     if (mode.kind === "inject" && matchesRule(mode.rule, method, url)) return injected(mode.rule, opts.failingHar ?? null);
     if (mode.kind === "unknown" || mode.kind === "pending") throw new Error(mode.reason);
     if (!opts.target) throw new Error("no target for a live scene (pass --target <url>)");
@@ -262,6 +284,20 @@ function samePath(recordedUrl: string, url: URL): boolean {
   } catch {
     return false;
   }
+}
+
+/** Browser fetch/XHR uses `empty`; assets and navigations name their type. */
+export function shouldInterleave(req: Pick<IncomingMessage, "headers" | "method" | "url">): boolean {
+  const raw = req.headers["sec-fetch-dest"];
+  const dest = Array.isArray(raw) ? raw[0] : raw;
+  if (dest === undefined) return true; // Node/API checks have no Fetch Metadata header.
+  if (dest !== "" && dest !== "empty") return false; // document, script, style, image, font…
+  // Next.js client navigation and prefetch also use fetch(), but they are page
+  // assets rather than business API actions and may differ between browsers.
+  if (req.headers.rsc !== undefined || req.headers["next-router-state-tree"] !== undefined || req.headers["next-router-prefetch"] !== undefined) return false;
+  const path = new URL(req.url ?? "/", "http://proxy.invalid").pathname;
+  if (path.startsWith("/_next/") || /\.(?:js|css|map|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|otf)$/i.test(path)) return false;
+  return true;
 }
 
 function matchesRule(rule: InjectRule, method: string, url: URL): boolean {

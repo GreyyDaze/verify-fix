@@ -71,6 +71,8 @@ export interface OverlappingRun {
 
 export interface DeterminismV3 {
   measured: boolean;
+  /** checkly-cloud is recorded during bundle; local-runner is written by `measure`. */
+  method?: "checkly-cloud" | "local-runner" | null;
   history: {
     window: number;
     finalRuns: number;

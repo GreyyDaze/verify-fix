@@ -64,8 +64,15 @@ export interface EnvAssumption {
 export interface DeterminismEvidence {
   targetRuns: number;
   achieved: number;
+  /** Legacy capture fields, kept for v2 bundles and reports. */
   sequentialPassRate: number;
   overlapFailRate: number;
+  /** Rate at which the original check reproduced the incident's own mode. */
+  reproductionFailRate?: number;
+  /** One-at-a-time healthy rate. Only required for concurrency incidents. */
+  baselinePassRate?: number | null;
+  /** Where the measured numbers came from. */
+  method?: "checkly-cloud" | "local-runner" | null;
   lastVerifiedAt: string;
 }
 
@@ -106,6 +113,8 @@ export interface Bundle {
   recordedOrigin: string | null;
   /** absolute path of the bundle directory (recordings are resolved against it) */
   dir: string;
+  /** Playwright runner details captured from Checkly/project config. */
+  playwright?: { configFile: string; projects: string[] } | null;
   scenes: Scene[];
   envAssumptions: EnvAssumption[];
   determinism: DeterminismEvidence;
@@ -214,6 +223,8 @@ export interface Decision {
 export interface RunContext {
   /** the check config after the patch (scheduling decides the concurrency a scene runs at) */
   config: BundleConfig | null;
+  /** Complete candidate check tree. Browser specs may import helper files from it. */
+  files?: Record<string, string>;
 }
 
 export interface ExperimentExecutor {

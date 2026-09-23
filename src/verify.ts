@@ -30,6 +30,9 @@ export interface VerifyOptions {
   env?: Record<string, string>;
   environmentName?: string;
   maxRunsPerScene?: number;
+  /** Checkly/Playwright project whose node_modules runs browser specs. */
+  projectDir?: string | null;
+  browserExecutablePath?: string;
   verbose?: boolean;
 }
 
@@ -46,18 +49,18 @@ export interface VerifyResult {
   cost: { scenes: number; runs: number };
 }
 
-export function makeExecutor(opts: { target?: string | null; env?: Record<string, string>; environmentName?: string; maxRunsPerScene?: number; verbose?: boolean }): ExperimentExecutor {
+export function makeExecutor(opts: { target?: string | null; env?: Record<string, string>; environmentName?: string; maxRunsPerScene?: number; projectDir?: string | null; browserExecutablePath?: string; verbose?: boolean }): ExperimentExecutor {
   if (process.env.VERIFY_FIX_EXECUTOR === "checkly") {
     return new ChecklyExecutor({ dryRunOnly: !process.env.CHECKLY_API_KEY, verbose: opts.verbose });
   }
-  return new SceneExecutor({ target: opts.target ?? null, env: opts.env, environmentName: opts.environmentName, maxRunsPerScene: opts.maxRunsPerScene, verbose: opts.verbose });
+  return new SceneExecutor({ target: opts.target ?? null, env: opts.env, environmentName: opts.environmentName, maxRunsPerScene: opts.maxRunsPerScene, projectDir: opts.projectDir, browserExecutablePath: opts.browserExecutablePath, verbose: opts.verbose });
 }
 
 export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   const { bundle, verbose } = opts;
   const patch: PatchSet = typeof opts.patch === "string" ? inlinePatch(bundle, opts.patch) : opts.patch;
   const patchSource = patchedCheckSource(bundle, patch);
-  const executor = opts.executor ?? makeExecutor({ target: opts.target, env: opts.env, environmentName: opts.environmentName, maxRunsPerScene: opts.maxRunsPerScene, verbose });
+  const executor = opts.executor ?? makeExecutor({ target: opts.target, env: opts.env, environmentName: opts.environmentName, maxRunsPerScene: opts.maxRunsPerScene, projectDir: opts.projectDir, browserExecutablePath: opts.browserExecutablePath, verbose });
   const scene = isSceneExecutor(executor) ? executor : null;
 
   // ── static: code dodges, config policy, environment ──────────────────────
@@ -67,7 +70,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   const codeChanged = patchSource !== bundle.checkSource;
   const configPolicy = applyConfigPolicy(diffCheckConfig(originalCfg, patchedCfgView), codeChanged, originalCfg, patchedCfgView);
   const runConfig = patchedConfig(bundle, patch);
-  const ctx: RunContext = { config: runConfig };
+  const ctx: RunContext = { config: runConfig, files: { ...bundle.files, ...patch.files } };
   const provided = { ...(opts.env ?? {}), ...(scene ? scene.env : {}) };
   const declared = [...(bundle.config?.environmentVariables ?? []), ...configPolicy.declaredEnvKeys];
   const envCheck = checkEnv(patchSource, provided, declared);
@@ -161,7 +164,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     decision.reasons.push(`env: the patch reads ${envCheck.undeclared.join(", ")} — not declared on the check; it must be added to the check's environment variables in Checkly (values never enter the bundle)`);
   }
   for (const d of envCheck.defaulted) decision.reasons.push(`env: ${d.name} not provided; the check ran on its own fallback (line ${d.line})`);
-  if (added.length > 0) decision.reasons.push(`patch adds files not in the bundle: ${added.join(", ")} (not executed by the sandbox)`);
+  if (added.length > 0) decision.reasons.push(`patch adds files not in the bundle: ${added.join(", ")} (copied into the candidate check tree)`);
 
   if (scene) await scene.close();
 

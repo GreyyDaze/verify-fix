@@ -911,7 +911,13 @@ staging URL).
 | `live` | forwards every request | yes |
 | `live-concurrent:N` | N runs at once, interleaved request by request: request k of every run is held until all runs sent theirs, then forwarded in run order, responses released together (login, login, book, book) | yes |
 | `inject:<METHOD> <path> -> <status>` | forwards everything except the matching request, which gets the failing recording's response for that path and status (or a plain JSON failure) | yes |
-| `replay:<file>.har` | answers from the recording in order; unmatched → 404 counted as `unmatched` | no |
+| `replay:<file>.har` | answers from the recording in order; unmatched → 404 counted as `unmatched` | no for a complete HAR; browser HARs captured with `--bodies api` need an explicit target for omitted page assets |
+
+For a Playwright replay whose HAR keeps API bodies only, the proxy serves API
+responses from the recording and serves documents/scripts/styles from the
+explicit `--target`. The report labels both sources. A complete `--bodies all`
+HAR stays offline. With no target and missing asset bodies, the scene is
+UNCERTAIN rather than a false browser failure.
 
 `inject:<failing request unknown>` (written by `bundle` when nothing can be
 derived) runs as `uncertain`.
@@ -962,45 +968,88 @@ command now derives the detection scene from the passing run's timeline: the
 last API call before the failing step (Playwright's monotonic clock on actions
 and HAR entries) is the step's dependency, and the scene injects a 500 on it.
 When every run since the last passing one failed in every location, the
-reproduction mode is `live` (`decidedBy: history`). The committed
-`fixtures/bundles/slots-booking-drift/manifest.json` predates this rule and
-still says `inject:<failing request unknown>`; the golden test proves the
-derivation on the same inputs, and the next capture writes the new modes.
+reproduction mode is `live` (`decidedBy: history`). Phase 4 rebuilt the
+committed drift manifest from its retained HAR, actions and result history, so
+it now contains `live` and `inject:POST /api/book -> 500` directly.
 
-**Not done in Phase 3.** The sandbox runs the DSL checks (`./check-api.ts`).
-A `@playwright/test` spec does not run yet, so the v3 bundles verify to
-UNCERTAIN ("sandbox could not run the check") until Phase 4 adds the
-Playwright runner. The drift verdicts (correct rename PASS, four fakes FAILED)
-wait for that.
+## 9d. The Playwright runner — Phase 4
+
+**Selection.** A bundle whose main check is a `.spec.ts` or `.test.ts` file and
+whose manifest names a Playwright config uses `src/playwright-sandbox.ts`.
+DSL checks still use `src/sandbox.ts`.
+
+**Files and dependency.** The runner creates a temporary directory. It copies
+every captured file under `check/`, then overlays every candidate file. This
+lets a patch replace the spec, `checkly.config.ts`, or a helper. It resolves
+`@playwright/test` from `--project <dir>` and links that project's
+`node_modules`; the tool does not download a second Playwright version.
+
+**Process.** The runner starts the official Playwright CLI with the captured
+`playwright.config.ts`, its recorded projects, `--workers=1`, `--retries=0`
+and `--reporter=json`. It passes only the explicit check variables plus
+`ENVIRONMENT_URL` and `ENVIRONMENT_NAME`. A deterministic seed is loaded
+before the config and spec, so repeated flaky candidates give the same result
+on the next verify-fix invocation.
+
+**Evidence.** Exit 1 plus a JSON report containing a failed test is a real
+failure observation. A missing report, zero tests, skipped/interrupted tests,
+a missing Playwright install, or a runner crash is inconclusive. The scene
+executor then applies its independent proxy-hit gate. Therefore a browser
+process cannot pass a scene unless a test ran and a request reached that
+scene's proxy.
+
+**Browser concurrency.** HTML, scripts, styles, images and Next.js RSC
+navigation bypass the lockstep barrier because their order can differ between
+browsers. API/fetch traffic enters it. Two browser runs therefore reach the
+app as login, login, slots, slots, book, book. In the measured overlap bundle,
+the first booking returned 401 and the second returned 200 in all 20 pairs.
+Inject and replay remain in the proxy; the Playwright spec contains no
+`page.route` code.
+
+**Locator repairs.** Assertion identity is unchanged: it is still the hash of
+`matcher|target`. A locator rename with the same exact matcher and target is
+allowed to reach the browser scenes. A matcher change, assertion deletion, or
+try/catch remains a static failure. Duplicate assertion ids are counted, so
+deleting one of two `toHaveText('200')` checks is still detected.
+
+**Local measurement.** `verify-fix measure --bundle <dir> --target <url>
+--project <dir> --runs 20` runs the original captured spec through the same
+proxy and writes `determinism.method: local-runner`. A concurrency incident
+needs a 100% healthy one-at-a-time API baseline and a 100% failing overlap. A
+persistent `live` drift incident needs the original stale check to fail 100%;
+it does not need a meaningless overlap number.
+
+**Real results.** `fixtures/patches/slots-booking-overlap/` contains the 13
+Playwright candidates. `runParallel:false` and one location PASS. Candidates
+02–10 and 13 FAILED. Candidate 11 produced mixed repetitions and was
+UNCERTAIN, never PASS. `fixtures/patches/slots-booking-drift/` contains the
+correct rename plus four fakes. The rename PASSed. All four fakes FAILED.
+These were run with Chromium against the local `next start` app. A real
+Playwright replay also passed with recorded API responses plus local page
+assets. Vercel was not contacted.
 
 ---
 
 ## 10. Current state
 
-Implemented and exercised (see 9c for the Phase 3 changes): bundle loading and provenance validation; the
-static engine (inventory, diff, guards, suppression, determinism gate); the
-DSL with fetch instrumentation and evidence rule; the child-process sandbox
-with seeded randomness; the synthetic executor with budget, uncertain
-classification and flake detection; mutation seeding with static+dynamic kills;
-the adequacy score; the decision law with the inconclusive-evidence gate; the
-report; the CLI with exit codes; the Checkly executor's dry-run path; a 25-test
-harness; two fixture bundles and eleven seeded patches.
+Phases 0–4 are implemented. The tool can capture a real Checkly incident,
+load the generated bundle, run DSL or Playwright checks against a chosen real
+target, shape the four scene modes at the network boundary, grade code and
+config patches, and return PASS/FAILED/UNCERTAIN with exit 0/1/2.
 
-What the most recent commit (`453cf3a`) fixed: the sandbox driver never
-imported the patched check, so every run was vacuous and the DETECTION scene
-was "satisfied" by an empty registry, wrongly failing the good patch. Fixing
-that exposed and fixed: `/book` in the simulator not identifying the session
-from the bearer token; the env-dodge false positive; the budget-exhausted stub
-reporting `pass`; the mutation phase ignoring the static engine; the scanner
-counting commented-out assertions; double-recorded failed assertions; runtime
-assertion ids not binding to inventory ids; the Checkly dry-run reporting
-`pass`.
+The repository has two real captured Playwright incidents. The overlap bundle
+has a 20/20 one-at-a-time API baseline and reproduces its 401 in 20/20 browser
+pairs. The drift bundle reproduces its stale locator in 20/20 runs. Their
+manifests say `method: local-runner`, so the determinism gate is open without
+pretending the numbers came from Checkly's cloud.
 
-Sensible next steps: regenerate the manifest ids under the current scheme;
-add Playwright-flavoured instrumentation (or a request-level proxy) so browser
-checks count as contact; exercise the Checkly executor against a real account;
-consider whether observed flakiness should pre-empt mismatches in the law;
-replace the regex scanner with a real TypeScript AST walk.
+The automated suite has 103 tests. It uses the real local app for the DSL
+suite and a fake project-local Playwright CLI for the browser process boundary.
+The full candidate matrix was also run manually through real Chromium against
+the local app. No production or Vercel request was made in Phase 4.
+
+The next work is Phase 5. It adds the live preview/CI loop around the existing
+verdict command. It does not change the decision law.
 
 ---
 
@@ -1018,6 +1067,6 @@ replace the regex scanner with a real TypeScript AST walk.
 - *What else does it check?* Static weakening (removed/weakened/guarded
   assertions), environment dodges, flakiness, oracle strength (falsifiability,
   coverage, env completeness, mutation kill rate), and a run budget.
-- *How does it run?* Node runs the TypeScript directly; the app is a tiny
-  in-process HTTP simulator; each check repetition is a child process that
-  prints one JSON line of evidence.
+- *How does it run?* Each repetition is a child process. DSL checks use the
+  small local check API. Browser checks use the customer's own Playwright.
+  Both talk through the scene proxy to the real target or a recording.

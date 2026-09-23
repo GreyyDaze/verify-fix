@@ -111,6 +111,16 @@ export interface ManifestV3 {
     environmentVariables: Array<{ key: string; secret: boolean }>;
     playwright: { configPath: string | null; projects: string[]; tags: string[]; version: string | null; source: "api" | "project" | null } | null;
     apiRequest: { method: string | null; url: string | null; assertions: unknown[] } | null;
+    /**
+     * What the customer told Rocky about this check. Recorded as evidence so a
+     * patch can be read next to the customer's own `mustPreserve` statements;
+     * the verdict never depends on it. `aiAutoRepairEnabled: null` = inherits
+     * the account default.
+     */
+    repair: {
+      intent: { goal: string; requiredOutcomes: string[]; mustPreserve: string[] } | null;
+      aiAutoRepairEnabled: boolean | null;
+    };
   };
   target: {
     resolution: "code" | "handlebars" | "unknown";

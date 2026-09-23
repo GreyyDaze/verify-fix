@@ -275,6 +275,23 @@ test("manifest: a sibling that failed at the same moment is not evidence of conc
   assert.equal(m.scenes[1].verdict.envAssumptions.includes("overlapping-run"), false, "a failed sibling is not the reproduction scene's evidence");
 });
 
+test("manifest: Rocky guardrails (intent, aiAutoRepairEnabled) are recorded as evidence, absent → null", () => {
+  const bare = buildManifest(inputs());
+  assert.deepEqual(bare.config.repair, { intent: null, aiAutoRepairEnabled: null });
+  const guarded: ChecklyCheck = {
+    ...CHECK,
+    intent: { goal: "A logged-in user can book the 09:30 slot.", mustPreserve: ["The booking status assertion expects 200."], requiredOutcomes: null },
+    aiAutoRepairEnabled: false,
+  };
+  const m = buildManifest(inputs({ check: guarded }));
+  assert.deepEqual(m.config.repair, {
+    intent: { goal: "A logged-in user can book the 09:30 slot.", requiredOutcomes: [], mustPreserve: ["The booking status assertion expects 200."] },
+    aiAutoRepairEnabled: false,
+  });
+  // still no env var value anywhere
+  assert.equal(JSON.stringify(m).includes("demo-account-value"), false);
+});
+
 test("manifest: real Playwright result shape → error text, failing test, spec line, assertion id, readable title", () => {
   const history = [summary("r-fail", false, "2026-09-21T10:00:00Z", "eu-west-1"), summary("r-pass-2", true, "2026-09-21T09:55:00Z")];
   const m = buildManifest(inputs({ history, failing: { summary: history[0], detail: { ...history[0], errors: [REAL_RESULT_ERROR] }, extract: failingExtract() } }));

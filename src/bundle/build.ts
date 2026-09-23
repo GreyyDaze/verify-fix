@@ -490,6 +490,7 @@ function bundleReadme(m: ManifestV3): string {
     `- Failing result: ${m.results.failing ? `\`${m.results.failing.id}\` (${m.results.failing.runLocation}, ${m.results.failing.startedAt})` : "none yet"}`,
     `- Passing result: ${m.results.passing ? `\`${m.results.passing.id}\` (${m.results.passing.runLocation}, ${m.results.passing.startedAt})` : "none"}`,
     `- RCA: ${m.rca ? `${m.rca.classification}${m.rca.repairRecommendation ? ` / ${m.rca.repairRecommendation}` : ""} — ${m.rca.rootCause.slice(0, 200)}` : "none"}`,
+    `- Rocky guardrails: intent ${m.config.repair.intent ? `"${m.config.repair.intent.goal}" (${m.config.repair.intent.mustPreserve.length} mustPreserve, ${m.config.repair.intent.requiredOutcomes.length} requiredOutcomes)` : "none"}; automatic repair ${m.config.repair.aiAutoRepairEnabled === null ? "inherits the account default" : m.config.repair.aiAutoRepairEnabled ? "ON for this check" : "OFF for this check"}`,
     `- Reproduction mode: **${m.reproduction.mode}** (decided by ${m.reproduction.decidedBy}) — ${m.reproduction.reason}`,
     m.failurePoint?.request
       ? `- Failure point: ${m.failurePoint.request.method} ${m.failurePoint.request.path} → ${m.failurePoint.request.status}${m.failurePoint.request.passingStatus !== null ? ` (passing run: ${m.failurePoint.request.passingStatus})` : ""}`

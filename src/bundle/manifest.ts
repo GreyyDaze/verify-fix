@@ -549,6 +549,12 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
       tags: check.tags ?? [],
       runtimeId: check.runtimeId ?? null,
       environmentVariables: envVars,
+      repair: {
+        intent: check.intent?.goal
+          ? { goal: check.intent.goal, requiredOutcomes: check.intent.requiredOutcomes ?? [], mustPreserve: check.intent.mustPreserve ?? [] }
+          : null,
+        aiAutoRepairEnabled: typeof check.aiAutoRepairEnabled === "boolean" ? check.aiAutoRepairEnabled : null,
+      },
       playwright:
         check.checkType === "PLAYWRIGHT"
           ? {

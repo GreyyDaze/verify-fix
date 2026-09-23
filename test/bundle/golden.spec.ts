@@ -139,6 +139,8 @@ test("golden (real bundle): the captured incident is the booking 401 at spec lin
   assert.equal(m.config.playwright?.configPath, "./playwright.config.ts");
   assert.deepEqual(m.config.playwright?.projects, ["booking"]);
   assert.equal(m.config.playwright?.source, "project");
+  // the real check has no intent and inherits the account's repair default (kept OFF)
+  assert.deepEqual(m.config.repair, { intent: null, aiAutoRepairEnabled: null });
   assert.equal(m.target.resolution, "code");
   assert.equal(m.target.recordedOrigin, "https://slots-booking-verify-fix.vercel.app");
   // Rocky's verdict is recorded, never followed blindly

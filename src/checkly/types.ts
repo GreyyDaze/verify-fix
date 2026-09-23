@@ -18,6 +18,12 @@ export interface ChecklyRetryStrategy {
   sameRegion?: boolean;
 }
 
+export interface ChecklyCheckIntent {
+  goal: string;
+  requiredOutcomes?: string[] | null;
+  mustPreserve?: string[] | null;
+}
+
 export interface ChecklyCheck {
   id: string;
   name: string;
@@ -35,6 +41,14 @@ export interface ChecklyCheck {
   doubleCheck?: boolean;
   retryStrategy?: ChecklyRetryStrategy | null;
   environmentVariables?: ChecklyEnvVar[];
+  /**
+   * Rocky guardrails (CLI >= 8.21.0 / 9.4.0). `intent` is free text the RCA and
+   * check-repair agents read; `aiAutoRepairEnabled` null = inherit the account
+   * default ("Automatic Repair Default"). Absent on check types that cannot be
+   * repaired yet (PLAYWRIGHT, API) and on older accounts.
+   */
+  intent?: ChecklyCheckIntent | null;
+  aiAutoRepairEnabled?: boolean | null;
   /** BROWSER / MULTI_STEP: the script itself. */
   script?: string | null;
   scriptPath?: string | null;

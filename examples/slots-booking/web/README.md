@@ -36,16 +36,26 @@ in this folder.
 Checkly's runners install only the dev side of this `package.json`
 (`@playwright/test`, `checkly`), not Next.js. Files on disk are untouched.
 
-## Phase 5 gate setup
+## Protected gate setup
 
 Create protected GitHub environments named `verify-fix-preview` and
-`verify-fix-production`. Put `CHECKLY_API_KEY`, `TEST_USER`, optional regional
-users, and the optional Vercel automation bypass secret in GitHub Secrets. Put
-`CHECKLY_ACCOUNT_ID` in GitHub Variables. `VERIFY_FIX_BUNDLE` may select a
-newer sanitized incident bundle. The workflow creates its dotenv file under
-`$RUNNER_TEMP`; no runtime value is committed. The production deploy receives
-the same user variables from the protected environment after verification
-passes.
+`verify-fix-production`. Require an authorized reviewer for the preview
+environment. Put a preview-only `CHECKLY_PREVIEW_API_KEY`,
+`VERIFY_FIX_PREVIEW_TEST_USER`, optional preview regional users, and the
+optional Vercel automation bypass secret in GitHub Secrets. Put the matching
+`CHECKLY_PREVIEW_ACCOUNT_ID` in GitHub Variables. Do not reuse production
+credentials in the PR environment. The production environment keeps its
+separate `CHECKLY_API_KEY`, `CHECKLY_ACCOUNT_ID`, and production users.
+`VERIFY_FIX_BUNDLE` may select a newer sanitized incident bundle.
+
+The first workflow job has no protected secrets. It resolves the PR head,
+creates a complete immutable snapshot, and performs static checks. The approved
+job then requires the deployment SHA to equal that PR head. It runs a trusted
+verifier and incident bundle from the default branch, not files changed by the
+candidate. Fork PRs remain blocked until the protected reviewer explicitly
+approves them. The workflow creates its dotenv and deployment-metadata files
+under `$RUNNER_TEMP`; no runtime value is committed. The production deploy
+receives the same user variables only after verification passes.
 
 `playwright.config.ts` reads
 `CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET` only when CI supplies it. It

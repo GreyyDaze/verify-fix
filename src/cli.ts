@@ -2,17 +2,26 @@
 //   verify-fix bundle --check <checkId> [--result <id>] [--project <dir>] [--out <dir>]
 //                     [--measure N] [--measure-overlap M] [--target-url <url>]
 //                     [--trigger-rca] [--bodies api|all|none] [--keep-raw] [--history N] [--json] [--verbose]
-//   verify-fix verify --patch <file|dir> --bundle <dir> --target <url> [--project <dir>] [--env-file <file>]
+//   verify-fix verify (--patch <file|dir> | --candidate-project <dir> --base <ref> | --pr <url>)
+//                     --bundle <dir> [--target <url>] [--project <dependency-dir>] [--env-file <file>]
 //   verify-fix measure --bundle <dir> --target <url> --project <dir> [--runs 20] [--env-file <file>]
 // Exit codes: 0 PASS/ok · 1 FAILED · 2 UNCERTAIN / usage / could not run.
 
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { loadBundle } from "./bundle.ts";
 import { verify } from "./verify.ts";
 import { SceneExecutor } from "./executor/scene.ts";
 import { HybridExecutor } from "./executor/hybrid.ts";
-import { loadCandidateProject, loadPatch } from "./patch.ts";
+import { loadCandidateRevision, loadPatch } from "./patch.ts";
+import {
+  assertPullRequestStillCurrent,
+  bindCandidateTarget,
+  loadDeploymentMetadata,
+  snapshotLocalCandidate,
+  snapshotPullRequestCandidate,
+  type CandidateRevision,
+} from "./candidate/revision.ts";
 import { parseEnvFile } from "./scene/env.ts";
 import { measureLocalDeterminism } from "./measure-local.ts";
 import { buildCostMatrix, costMatrixMarkdown } from "./cost-report.ts";
@@ -28,10 +37,16 @@ interface Args {
   command: string | null;
   patch: string | null;
   candidateProject: string | null;
+  pr: string | null;
+  base: string | null;
+  projectPath: string;
   bundle: string | null;
   executor: "scene" | "hybrid";
   target: string | null;
   targetRevision: string | null;
+  targetMetadata: string | null;
+  cloudApproved: boolean;
+  allowForkCloud: boolean;
   reportJson: string | null;
   reportMarkdown: string | null;
   envFile: string | null;
@@ -60,7 +75,7 @@ interface Args {
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
-    command: null, patch: null, candidateProject: null, bundle: null, executor: "scene", target: null, targetRevision: null, reportJson: null, reportMarkdown: null, envFile: null, envName: null, dryRun: false, json: false, verbose: false,
+    command: null, patch: null, candidateProject: null, pr: null, base: null, projectPath: ".", bundle: null, executor: "scene", target: null, targetRevision: null, targetMetadata: null, cloudApproved: false, allowForkCloud: false, reportJson: null, reportMarkdown: null, envFile: null, envName: null, dryRun: false, json: false, verbose: false,
     check: null, result: null, out: null, project: null, measure: 0, measureOverlap: 0, targetUrl: null,
     triggerRca: false, bodies: "api", keepRaw: false, history: 100, runs: 20, reports: null,
   };
@@ -76,6 +91,9 @@ function parseArgs(argv: string[]): Args {
     switch (key) {
       case "--patch": args.patch = value(i, a); if (takes) i++; break;
       case "--candidate-project": args.candidateProject = value(i, a); if (takes) i++; break;
+      case "--pr": args.pr = value(i, a); if (takes) i++; break;
+      case "--base": args.base = value(i, a); if (takes) i++; break;
+      case "--project-path": args.projectPath = value(i, a); if (takes) i++; break;
       case "--bundle": args.bundle = value(i, a); if (takes) i++; break;
       case "--executor": {
         const v = value(i, a);
@@ -85,6 +103,9 @@ function parseArgs(argv: string[]): Args {
       }
       case "--target": args.target = value(i, a); if (takes) i++; break;
       case "--target-revision": args.targetRevision = value(i, a); if (takes) i++; break;
+      case "--target-metadata": args.targetMetadata = value(i, a); if (takes) i++; break;
+      case "--cloud-approved": args.cloudApproved = true; break;
+      case "--allow-fork-cloud": args.allowForkCloud = true; break;
       case "--report-json": args.reportJson = value(i, a); if (takes) i++; break;
       case "--report-markdown": args.reportMarkdown = value(i, a); if (takes) i++; break;
       case "--env-file": args.envFile = value(i, a); if (takes) i++; break;
@@ -126,15 +147,19 @@ function usage(): string {
     "      --trigger-rca asks Rocky for a fresh analysis when the group has none, or when its RCA describes",
     "      an earlier, different failure of the same group (Rocky analyzes only a group's first failure).",
     "",
-    "  verify-fix verify --patch <file|dir> --bundle <dir> --target <url> [--project <dir>]",
-    "              or: --candidate-project <dir> --bundle <dir> --target <url>",
-    "                    [--target-revision <sha>] [--env-file <file>] [--env-name <name>]",
-    "                    [--executor scene|hybrid] [--report-json <file>] [--report-markdown <file>] [--json] [--verbose]",
-    "      Grades a candidate fix against a bundle. --patch replaces captured check files for fixture testing.",
-    "      --candidate-project reads only the captured monitoring files plus their relative imports from a real",
-    "      customer project. --target is the exact app deployment under test. Hybrid mode runs HEALTHY and",
-    "      REGRESSION through the project-local Checkly CLI. It keeps REPRODUCTION and DETECTION in the scene proxy.",
-    "      Playwright bundles also need --project. It defaults to --candidate-project when that input is used.",
+    "  verify-fix verify --patch <file|dir> --bundle <dir> [--target <url>] [--project <dir>]",
+    "              or: --candidate-project <dir> --base <git-ref> --bundle <protected-dir> [--target <url>]",
+    "              or: --pr <github-pull-url> --bundle <protected-dir> --target <url> --target-revision <sha>",
+    "                    [--project-path <repo-relative-dir>] [--project <dependency-dir>]",
+    "                    [--target-metadata <file>] [--cloud-approved] [--allow-fork-cloud]",
+    "                    [--env-file <file>] [--env-name <name>] [--executor scene|hybrid]",
+    "                    [--report-json <file>] [--report-markdown <file>] [--json] [--verbose]",
+    "      Grades a candidate fix against a protected incident bundle. --patch remains for fixtures and small experiments.",
+    "      Local mode snapshots HEAD plus staged, unstaged, and non-ignored untracked files before any check runs.",
+    "      PR mode resolves and fetches one exact GitHub head SHA. The full repository digest and Git changes enter the report.",
+    "      --project-path locates a Checkly project in a monorepo. --project supplies already-installed dependencies;",
+    "      verify-fix never runs package lifecycle scripts. --target identifies the running app and stays separate from --pr.",
+    "      Hybrid PR mode requires protected approval. Deployment metadata makes an exact PR/preview binding gate-eligible.",
     "      --env-file gives the check its own variables (KEY=VALUE lines, like `checkly test --env-file`).",
     "",
     "  verify-fix measure --bundle <dir> --target <url> --project <dir> [--runs 20] [--env-file <file>] [--verbose]",
@@ -274,8 +299,17 @@ async function runMeasure(args: Args): Promise<ExitCode> {
 }
 
 async function runVerify(args: Args): Promise<ExitCode> {
-  if (!args.bundle || (!args.patch && !args.candidateProject) || (args.patch && args.candidateProject)) {
-    process.stderr.write("--bundle and exactly one of --patch or --candidate-project are required\n\n" + usage());
+  const candidateInputs = [args.patch, args.candidateProject, args.pr].filter(Boolean).length;
+  if (!args.bundle || candidateInputs !== 1) {
+    process.stderr.write("--bundle and exactly one of --patch, --candidate-project, or --pr are required\n\n" + usage());
+    return 2;
+  }
+  if (args.candidateProject && !args.base) {
+    process.stderr.write("--candidate-project requires --base <git-ref> so changes have a fixed comparison point\n");
+    return 2;
+  }
+  if (args.base && !args.candidateProject) {
+    process.stderr.write("--base is used only with --candidate-project\n");
     return 2;
   }
   if (args.dryRun) {
@@ -290,44 +324,63 @@ async function runVerify(args: Args): Promise<ExitCode> {
     process.stderr.write("--executor hybrid requires the exact deployment --target <url> and --target-revision <sha>\n");
     return 2;
   }
-  const { bundle } = loadBundle(args.bundle);
-  const patch = args.candidateProject ? loadCandidateProject(args.candidateProject, bundle) : loadPatch(args.patch!, bundle);
-  const env = args.envFile ? parseEnvFile(readFileSync(args.envFile, "utf8")) : {};
-  const project = args.project ?? args.candidateProject;
-  if (bundle.playwright && !project) {
-    process.stderr.write("Playwright verification needs --project <dir> or --candidate-project <dir>\n");
-    return 2;
-  }
   if (!["scene", "hybrid"].includes(args.executor)) {
     process.stderr.write("--executor must be scene or hybrid\n");
     return 2;
   }
 
-  const shared = {
-    target: args.target,
-    env,
-    environmentName: args.envName ?? undefined,
-    projectDir: project,
-    browserExecutablePath: process.env.VERIFY_FIX_BROWSER_PATH,
-    verbose: args.verbose,
-  };
-  const executor = args.executor === "hybrid"
-    ? new HybridExecutor({ ...shared, targetRevision: args.targetRevision ?? undefined })
-    : new SceneExecutor(shared);
-
+  let revision: CandidateRevision | null = null;
   try {
+    const { bundle } = loadBundle(args.bundle);
+    if (args.candidateProject) revision = snapshotLocalCandidate(args.candidateProject, args.base!);
+    if (args.pr) revision = snapshotPullRequestCandidate(args.pr, args.projectPath);
+    const patch = revision ? loadCandidateRevision(revision, bundle) : loadPatch(args.patch!, bundle);
+    const env = args.envFile ? parseEnvFile(readFileSync(args.envFile, "utf8")) : {};
+    const project = args.project ?? revision?.runtimeProjectRoot ?? null;
+    if (bundle.playwright && !project) {
+      process.stderr.write("Playwright verification needs --project <dir> containing already-installed dependencies\n");
+      return 2;
+    }
+    const deployment = args.targetMetadata ? loadDeploymentMetadata(args.targetMetadata) : null;
+    const binding = revision ? bindCandidateTarget({
+      revision,
+      target: args.target,
+      targetRevision: args.targetRevision,
+      deployment,
+      executor: args.executor,
+      cloudApproved: args.cloudApproved,
+      allowForkCloud: args.allowForkCloud,
+    }) : null;
+
+    const shared = {
+      target: args.target,
+      env,
+      environmentName: args.envName ?? undefined,
+      projectDir: project,
+      browserExecutablePath: process.env.VERIFY_FIX_BROWSER_PATH,
+      verbose: args.verbose,
+    };
+    const executor = args.executor === "hybrid"
+      ? new HybridExecutor({ ...shared, targetRevision: args.targetRevision ?? undefined })
+      : new SceneExecutor(shared);
+
     const result = await verify({
       bundle,
       patch,
       executor,
       target: args.target,
       targetRevision: args.targetRevision ?? undefined,
-      candidateProject: args.candidateProject ? resolve(args.candidateProject) : null,
+      candidateProject: revision?.metadata.sourceReference ?? null,
+      candidateRevision: revision?.metadata ?? null,
+      targetBinding: binding,
       env,
       environmentName: args.envName ?? undefined,
       projectDir: project,
       verbose: args.verbose,
     });
+
+    revision?.assertUnchanged();
+    if (revision?.metadata.source === "github-pr") assertPullRequestStillCurrent(revision);
 
     if (args.reportJson) writeFileSync(args.reportJson, JSON.stringify(result.report.json, null, 2) + "\n");
     if (args.reportMarkdown) writeFileSync(args.reportMarkdown, result.report.markdown);
@@ -341,6 +394,8 @@ async function runVerify(args: Args): Promise<ExitCode> {
     process.stderr.write(`verify failed: ${(error as Error).message}\n`);
     if (args.verbose && (error as Error).stack) process.stderr.write((error as Error).stack + "\n");
     return 2;
+  } finally {
+    revision?.dispose();
   }
 }
 

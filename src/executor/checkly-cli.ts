@@ -79,8 +79,9 @@ export class ChecklyCliExecutor implements ExperimentExecutor {
     const config = ctx?.config ?? bundle.config;
     const locations = config?.locations.length ? config.locations : bundle.config?.locations ?? [];
     if (locations.length === 0) return this.uncertain(scene, "candidate config has no Checkly location", 0, [], [], [], environment);
-    const files = { ...bundle.files, ...(ctx?.files ?? {}), [bundle.check.file]: patchSource };
-    const checkName = bundle.check.name ?? bundle.check.logicalId;
+    const checkFile = ctx?.checkFile ?? bundle.check.file;
+    const files = { ...(ctx?.files ?? bundle.files), [checkFile]: patchSource };
+    const checkName = ctx?.checkName ?? bundle.check.name ?? bundle.check.logicalId;
     if (!checkName) return this.uncertain(scene, "bundle has no check name for Checkly --grep", 0, [], [], [], environment);
 
     const trace: TraceStep[] = [];
@@ -102,6 +103,7 @@ export class ChecklyCliExecutor implements ExperimentExecutor {
       const results = await Promise.all(locations.map((location) => runChecklySandbox({
         projectDir: this.projectDir!,
         files,
+        assets: ctx?.assets,
         target: this.target!,
         targetRevision: this.targetRevision,
         env: { ...this.env, ...(scene.env ?? {}) },

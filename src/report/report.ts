@@ -4,6 +4,7 @@
 
 import type { Decision, EvidenceRow, ExecutionCost, SceneObservation } from "../types.ts";
 import type { ContractReport } from "../contract/contract.ts";
+import type { CandidateRevisionMetadata, CandidateTargetBinding } from "../candidate/revision.ts";
 
 export interface Report {
   incidents: string;
@@ -17,12 +18,23 @@ function oracleShorthand(row: EvidenceRow): string {
   return row.oracle.length > 42 ? `${row.oracle.slice(0, 39)}…` : row.oracle;
 }
 
+function markdownText(value: string): string {
+  return value.replace(/[\r\n\t]/g, " ").replace(/[<>]/g, "");
+}
+
+function markdownCode(value: string): string {
+  return `\`${markdownText(value).replace(/`/g, "'")}\``;
+}
+
 export interface ReportDetails {
   cost?: ExecutionCost;
   target?: string | null;
   targetRevision?: string | null;
   candidateProject?: string | null;
   candidate?: string | null;
+  candidateRevision?: CandidateRevisionMetadata | null;
+  candidateCheck?: { logicalId: string; name: string | null; file: string | null } | null;
+  targetBinding?: CandidateTargetBinding | null;
 }
 
 export function buildReport(contract: ContractReport, decision: Decision, observations: Map<string, SceneObservation>, details: ReportDetails = {}): Report {
@@ -61,12 +73,43 @@ export function buildReport(contract: ContractReport, decision: Decision, observ
   const top = topEvidence(contract, decision, observations);
   top.forEach((t, i) => lines.push(`${i + 1}. ${t}`));
   lines.push("");
+  if (details.candidateRevision) {
+    const revision = details.candidateRevision;
+    lines.push("**Candidate revision:**");
+    lines.push(`- Source: ${revision.source === "github-pr" ? "GitHub pull request" : "local working tree"} — ${markdownText(revision.sourceReference)}`);
+    lines.push(`- Repository root: ${markdownCode(revision.repositoryRoot)}`);
+    lines.push(`- Checkly project path: ${markdownCode(revision.projectPath)}`);
+    lines.push(`- Base SHA: ${markdownCode(revision.baseSha)}`);
+    lines.push(`- HEAD SHA: ${markdownCode(revision.headSha)}`);
+    lines.push(`- Dirty working tree: ${revision.dirty ? "yes" : "no"}`);
+    lines.push(`- Immutable snapshot: ${revision.digestAlgorithm}:\`${revision.digest}\` (${revision.fileCount} files, ${revision.totalBytes} bytes)`);
+    if (revision.pullRequest) lines.push(`- PR: ${markdownText(revision.pullRequest.url)} (${revision.pullRequest.fork ? "fork" : "same repository"})`);
+    if (details.candidateCheck) {
+      lines.push(`- Incident check logical ID: ${markdownCode(details.candidateCheck.logicalId)}`);
+      lines.push(`- Final incident check: ${details.candidateCheck.file ? markdownCode(details.candidateCheck.file) : "removed"}${details.candidateCheck.name ? ` (${markdownText(details.candidateCheck.name)})` : ""}`);
+    }
+    lines.push(`- Git changes (${revision.changes.length}):`);
+    for (const change of revision.changes) lines.push(`  - ${change.status}: ${markdownCode(`${change.previousPath ? `${change.previousPath} -> ` : ""}${change.path}`)}`);
+    if (revision.changes.length === 0) lines.push("  - none");
+    lines.push("");
+  }
+  if (details.targetBinding) {
+    const binding = details.targetBinding;
+    lines.push("**Source and target binding:**");
+    lines.push(`- Scope: ${binding.scope}`);
+    lines.push(`- Exact candidate revision: ${binding.exactRevision ? "yes" : "no"}`);
+    lines.push(`- Protected cloud approval declared: ${binding.cloudApproved ? "yes" : "no"}`);
+    lines.push(`- Protected gate eligible: ${binding.gateEligible ? "yes" : "no"}`);
+    lines.push(`- Reason: ${binding.reason}`);
+    if (binding.deployment) lines.push(`- Deployment: ${markdownText(binding.deployment.provider)} ${markdownCode(binding.deployment.deploymentId)}`);
+    lines.push("");
+  }
   if (details.target || details.targetRevision || details.candidateProject || details.candidate) {
     lines.push("**Candidate target:**");
-    if (details.candidate) lines.push(`- Candidate: \`${details.candidate}\``);
-    if (details.target) lines.push(`- URL: ${details.target}`);
-    if (details.targetRevision) lines.push(`- Revision: \`${details.targetRevision}\``);
-    if (details.candidateProject) lines.push(`- Project: \`${details.candidateProject}\``);
+    if (details.candidate) lines.push(`- Candidate: ${markdownCode(details.candidate)}`);
+    if (details.target) lines.push(`- URL: ${markdownText(details.target)}`);
+    if (details.targetRevision) lines.push(`- Revision: ${markdownCode(details.targetRevision)}`);
+    if (details.candidateProject) lines.push(`- Project: ${markdownCode(details.candidateProject)}`);
     lines.push("");
   }
   if (checklySessionIds.length > 0 || checklyResultIds.length > 0) {
@@ -109,6 +152,9 @@ export function buildReport(contract: ContractReport, decision: Decision, observ
       target: details.target ?? null,
       targetRevision: details.targetRevision ?? null,
       candidateProject: details.candidateProject ?? null,
+      candidateRevision: details.candidateRevision ?? null,
+      candidateCheck: details.candidateCheck ?? null,
+      targetBinding: details.targetBinding ?? null,
       checklyEvidence: { testSessionIds: checklySessionIds, resultIds: checklyResultIds },
       cost: details.cost ?? null,
       topEvidence: topOut,

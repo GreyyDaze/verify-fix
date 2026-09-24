@@ -1056,12 +1056,11 @@ UNCERTAIN. In either case the verifier skips paid cloud work. A mutation that
 is killed by detection also skips its remote healthy run. The decision table
 is unchanged.
 
-**Candidate project.** `--candidate-project <dir>` reads only paths captured in
-the bundle and their relative imports. It does not scan application files,
-`node_modules`, `.next`, dotenv files, or Vercel state. The app source is tested
-through the exact preview named by `--target`. Hybrid mode also requires
-`--target-revision`. It records the commit in both reports. Fixture tests can
-still use `--patch`.
+**Candidate project.** Phase 6 replaces this Phase 5 reader in production.
+`--candidate-project <dir> --base <git-ref>` now snapshots the complete Git
+working state first. The monitoring runner receives the final check/config tree
+and its real relative imports. The application source is tested through the
+exact deployment named by `--target`. Fixture tests can still use `--patch`.
 
 **Regional users.** Local concurrent runs receive the candidate config's
 `CHECKLY_REGION` values. A code repair may map every configured region to one
@@ -1069,13 +1068,12 @@ stable declared `TEST_USER_<REGION>` variable. Partial mappings, duplicate
 runtime values, hard-coded replacement users, and random users remain failures.
 The values come only from `--env-file` or Checkly.
 
-**CI.** `.github/workflows/gate.yml` starts on a successful Vercel
-`deployment_status`. The preview job accepts only a same-repository PR. It
-checks out the deployment SHA, waits for that exact URL, builds a temporary
-runtime file, then requires hybrid verification exit 0. JSON and Markdown
-reports are uploaded. Protected previews can use Vercel's automation bypass
-secret through a browser header. A protected GitHub environment must approve
-access to account credentials.
+**CI.** `.github/workflows/gate.yml` starts on a successful deployment status.
+Phase 6 splits it into a secret-free preflight and an approved cloud job. The
+workflow, verifier, incident bundle, and policy come from the protected default
+branch. The candidate has a separate checkout. A protected GitHub environment
+must approve cloud credentials. A fork needs that approval plus an explicit
+fork flag. JSON and Markdown reports are uploaded.
 
 The production job accepts only the current `main` commit. It verifies the
 production deployment first. Only then does the workflow run `npx checkly
@@ -1108,16 +1106,158 @@ runs. The `runParallel:false` config repair gave PASS with 15 browser runs. The
 strict per-location user repair gave PASS with 20 browser runs after its final
 source change. The Upstash-compatible session-lease app candidate gave PASS
 with 20 browser runs. Candidates 02–10 and 13 all returned FAILED.
-Candidate 11 returned UNCERTAIN. The suite has 115 tests. All pass.
+Candidate 11 returned UNCERTAIN.
+
+## 9f. Complete candidate revisions — Phase 6
+
+### Purpose
+
+A repair is a complete final repository state. It is not one file and it is not
+an agent's description of a patch. Application code, monitoring code,
+configuration, helpers, package manifests, and lockfiles may all change.
+
+### Inputs
+
+Local work uses:
+
+```bash
+verify-fix verify \
+  --candidate-project examples/slots-booking/web \
+  --base origin/main \
+  --bundle /protected/incidents/booking-drift \
+  --target https://preview.example.com \
+  --project examples/slots-booking/web
+```
+
+A pull request uses:
+
+```bash
+verify-fix verify \
+  --pr https://github.com/OWNER/REPO/pull/123 \
+  --project-path examples/slots-booking/web \
+  --project ./candidate-runtime/examples/slots-booking/web \
+  --bundle ./trusted/incidents/booking-drift \
+  --target https://preview.example.com \
+  --target-revision <exact-pr-head-sha> \
+  --target-metadata "$RUNNER_TEMP/deployment.json" \
+  --cloud-approved \
+  --executor hybrid
+```
+
+`--project-path` is the Checkly project path inside the candidate repository.
+`--project` is a dependency directory prepared by the caller. verify-fix never
+runs `npm install`, package lifecycle scripts, browser installation, or cloud
+provisioning. `--patch` remains only for fixtures and small manual experiments.
+
+### Input to snapshot
+
+`src/candidate/revision.ts` asks Git for the repository root. Local mode resolves
+`--base` and the current `HEAD`. It lists all tracked files plus non-ignored
+untracked files. That includes staged and unstaged content and preserves
+renames and deletions. It copies the final files into one temporary repository.
+
+PR mode accepts only a canonical `https://github.com/.../pull/<number>` URL. It
+uses the authenticated `gh` client from the user's environment to read the base
+SHA and head SHA. It fetches the exact GitHub pull ref. It rejects the run if
+the fetched commit is not the head resolved at the start. It checks the PR head
+again after verification. A moving PR needs a new run.
+
+The snapshot excludes `.git`, dependencies, build output, and ignored files. It
+rejects tracked dotenv/credential files, unsafe links, oversized files, special
+files, and submodules. Safe files become read-only. A SHA-256 digest covers each
+final path, file type, executable bit, and byte. The digest is checked again at
+the end.
+
+### Snapshot to executable monitoring tree
+
+`src/candidate/check-identity.ts` derives the incident check's stable Checkly
+logical ID from the captured config. This also upgrades older bundles that kept
+the project logical ID in the manifest. Candidate display names and paths may
+change. The logical ID must remain.
+
+Git rename information follows a renamed main spec. The final source imports
+follow renamed or new helper files. A missing helper is not restored from the
+incident. Removing the stable incident check is a definite `FAILED` result.
+
+`src/patch.ts` loads the complete final Checkly project from the immutable
+snapshot. That includes the check, Checkly and Playwright configuration,
+package metadata, lockfiles, path-alias helpers, ordinary imports, and binary
+test fixtures. Missing files are not restored. The repository digest also
+covers files outside the Checkly project. Application behavior is observed
+through `--target`.
+
+### Verification logic
+
+The trusted verifier performs static checks first. It compares assertions and
+configuration without executing candidate code. The existing assertion ID law,
+scene definitions, and decision table are unchanged.
+
+If static checks allow execution, local scene children receive only the listed
+runtime variables. They do not inherit Checkly or GitHub credentials. Hybrid
+mode gives Checkly credentials only to the approved Checkly CLI child. Candidate
+package lifecycle scripts never run in verify-fix.
+
+A target URL and a PR URL are different inputs. The PR URL identifies source.
+The target URL identifies a deployment. `--target-metadata` contains the
+provider deployment ID, URL, and revision. A protected report is gate-eligible
+only when all of these are true:
+
+- the source is an immutable PR head;
+- the deployment revision equals that head;
+- the deployment URL equals `--target`;
+- hybrid cloud verification ran;
+- protected approval was declared;
+- a fork received explicit approval.
+
+A local target remains useful evidence. It can never satisfy the protected PR
+gate.
+
+### Security architecture
+
+The default-branch workflow is the protected gate definition. It checks out the
+protected verifier and incident under `trusted/`. It checks out candidate
+runtime dependencies under `candidate-runtime/`. The CLI fetches a third,
+immutable source snapshot from the PR URL. The candidate cannot replace the
+verifier, incident bundle, verdict policy, or workflow that judges it.
+
+The first CI job has no protected secrets. It creates the candidate snapshot and
+runs static verification without a target. A statically acceptable candidate is
+`UNCERTAIN` at this point because no runtime evidence exists. A definite static
+failure blocks immediately. The second job is attached to the protected GitHub
+environment. It installs candidate dependencies with `--ignore-scripts`,
+installs Chromium in a separate step, creates temporary runtime files, and runs
+hybrid verification. PR checks use `CHECKLY_PREVIEW_API_KEY`,
+`CHECKLY_PREVIEW_ACCOUNT_ID`, and preview-only test users. Production
+credentials are never used for PR checks.
+
+### Output
+
+Markdown and JSON reports now include:
+
+- local or PR source mode;
+- repository root and Checkly project path separately;
+- base SHA and head SHA;
+- dirty state;
+- every Git change, including old and new rename paths;
+- complete snapshot digest, file count, and byte count;
+- PR/fork identity;
+- target deployment metadata;
+- exact-revision result;
+- protected-gate eligibility and its reason;
+- the existing scene evidence, Checkly sessions, cost, verdict, and exit code.
+
+The source tree is the runtime truth. The Git diff is only report and policy
+data. The tool never trusts an agent-supplied file list or explanation.
 
 ---
 
 ## 10. Current state
 
-Phases 0–4 are complete. Phase 5 is implemented and validated locally. The
-tool can capture a real Checkly incident, load the generated bundle, run DSL or
-Playwright checks against a chosen target, split scenes between the local proxy
-and Checkly's cloud CLI, grade code/config/app-preview repairs, and return
+Phases 0–4 are complete. Phase 5 and Phase 6 are implemented and validated
+locally. The tool can capture a real Checkly incident, pin a complete local or
+GitHub PR candidate revision, load the protected bundle, run DSL or Playwright
+checks against a chosen target, split scenes between the local proxy and
+Checkly's cloud CLI, grade code/config/app-preview repairs, and return
 PASS/FAILED/UNCERTAIN with exit 0/1/2.
 
 The repository has two real captured Playwright incidents. The overlap bundle
@@ -1126,19 +1266,23 @@ pairs. The drift bundle reproduces its stale locator in 20/20 runs. Their
 manifests say `method: local-runner`, so the determinism gate is open without
 pretending the numbers came from Checkly's cloud.
 
-The automated suite has 115 tests. It uses the real local app for the DSL
+The automated suite has 123 tests. It uses the real local app for the DSL
 suite. It uses fake project-local Playwright and Checkly CLIs for process
-boundaries. One package test installs the exact npm tarball into a customer
-project under the operating-system temp directory, outside this repository.
-The Phase 5 candidates were also run manually through real Chromium against
-the local app.
+boundaries. Candidate-revision tests cover dirty trees, multiple edits, new and
+renamed helpers, deletions, credentials, unsafe links, submodules, stable check
+identity, exact target binding, fork approval, and complete report identity.
+One package test installs the exact npm tarball into a customer project under
+the operating-system temp directory, outside this repository. It exercises
+local candidate snapshots through both bad and good repairs. The Phase 5
+candidates were also run manually through real Chromium against the local app.
 
-The live checkpoint is still open. The user must configure GitHub environment
-approval plus Checkly/Vercel secrets. The corrected drift monitor must then be
-deployed. A fresh overlap incident must be captured after it is green. The
-three real alternatives plus ten fakes must then run through Checkly and
-Vercel. Those actions send real logins and bookings, so they are not run from
-this sandbox.
+The live checkpoint is still open. The user must approve the protected GitHub
+environment with the existing Checkly/Vercel values. The corrected drift
+monitor must then be deployed. A fresh overlap incident must be captured after
+it is green. The three real alternatives plus ten fakes must then run through
+Checkly and Vercel. Phase 6 also needs one new real PR run whose report says
+`targetBinding.gateEligible: true`. Those actions send real logins and bookings,
+so they are not run from this sandbox.
 
 ---
 

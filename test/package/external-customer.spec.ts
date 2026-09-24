@@ -102,6 +102,13 @@ test("the packed CLI runs from an external customer project without repository f
     cpSync(join(incident, "check", "playwright.config.ts"), join(customer, "playwright.config.ts"));
     mkdirSync(join(customer, "tests"), { recursive: true });
     cpSync(BAD_CANDIDATE, join(customer, "tests", "booking.spec.ts"));
+    writeFileSync(join(customer, ".gitignore"), "node_modules/\nverify-fix*.json\n");
+    assert.equal(run("git", ["init", "-q"], customer).status, 0);
+    assert.equal(run("git", ["config", "user.email", "customer@example.com"], customer).status, 0);
+    assert.equal(run("git", ["config", "user.name", "Customer"], customer).status, 0);
+    assert.equal(run("git", ["add", "-A"], customer).status, 0);
+    assert.equal(run("git", ["commit", "-qm", "baseline"], customer).status, 0);
+    const baseRevision = run("git", ["rev-parse", "HEAD"], customer).stdout.trim();
 
     const executable = join(customer, "node_modules", ".bin", process.platform === "win32" ? "verify-fix.cmd" : "verify-fix");
     const report = join(customer, "verify-fix.json");
@@ -109,6 +116,7 @@ test("the packed CLI runs from an external customer project without repository f
       "verify",
       "--bundle", "incidents/booking-drift",
       "--candidate-project", ".",
+      "--base", baseRevision,
       "--project", ".",
       "--executor", "scene",
       "--report-json", "verify-fix.json",
@@ -160,6 +168,7 @@ test("the packed CLI runs from an external customer project without repository f
         "verify",
         "--bundle", "incidents/booking-drift",
         "--candidate-project", ".",
+        "--base", baseRevision,
         "--project", ".",
         "--target", targetUrl,
         "--target-revision", "customer-revision-123",

@@ -28,8 +28,10 @@ export interface PlaywrightSandboxContext {
   projectDir: string;
   configFile: string;
   projects?: string[];
-  /** Every file under bundle check/, after applying the candidate patch. */
+  /** Every UTF-8 file in the final candidate Checkly project. */
   files: Record<string, string>;
+  /** Binary fixtures in the final candidate Checkly project. */
+  assets?: Record<string, Uint8Array>;
   /** Main spec path under check/. */
   checkFile: string;
   /** Reproducible Math.random in the Playwright runner process. */
@@ -169,6 +171,12 @@ export async function runPlaywrightSandbox(ctx: PlaywrightSandboxContext): Promi
       const dest = join(dir, path);
       await mkdir(dirname(dest), { recursive: true });
       await writeFile(dest, content, "utf8");
+    }
+    for (const [rawPath, content] of Object.entries(ctx.assets ?? {})) {
+      const path = safeRelativePath(rawPath);
+      const dest = join(dir, path);
+      await mkdir(dirname(dest), { recursive: true });
+      await writeFile(dest, content);
     }
     if (!existsSync(join(dir, safeRelativePath(ctx.checkFile)))) throw new Error(`main Playwright spec ${ctx.checkFile} is missing from the candidate files`);
     if (!existsSync(join(dir, safeRelativePath(ctx.configFile)))) throw new Error(`Playwright config ${ctx.configFile} is missing from the bundle`);

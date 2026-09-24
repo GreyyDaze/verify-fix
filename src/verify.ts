@@ -13,9 +13,10 @@ import { seedMutants } from "./mutation.ts";
 import { buildReport, type Report } from "./report/report.ts";
 import { detectEnvScopeDodge, regionalUserKeys, SceneExecutor } from "./executor/scene.ts";
 import { HybridExecutor } from "./executor/hybrid.ts";
-import { inlinePatch, newFiles, originalConfigSource, patchedCheckSource, patchedConfig, patchedConfigSource, type PatchSet } from "./patch.ts";
+import { inlinePatch, newFiles, originalConfigSource, patchedAssets, patchedCheckSource, patchedConfig, patchedConfigSource, patchedFiles, type PatchSet } from "./patch.ts";
 import { applyConfigPolicy, diffCheckConfig, parseCheckConfig, type ConfigPolicy } from "./scene/config-diff.ts";
 import { checkEnv, type EnvCheck } from "./scene/env.ts";
+import type { CandidateRevisionMetadata, CandidateTargetBinding } from "./candidate/revision.ts";
 
 export const PR12_HEALTHY_RUNS = 5; // PR-12: ≥5 repeated healthy runs, else flake → UNCERTAIN
 
@@ -37,6 +38,10 @@ export interface VerifyOptions {
   targetRevision?: string;
   /** Report-only path of the project whose candidate files were loaded. */
   candidateProject?: string | null;
+  /** Immutable complete-source identity for local/PR candidate modes. */
+  candidateRevision?: CandidateRevisionMetadata | null;
+  /** Source-to-deployment binding and protected-gate eligibility. */
+  targetBinding?: CandidateTargetBinding | null;
   verbose?: boolean;
 }
 
@@ -83,7 +88,15 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
       envDodge = "regional test-user variables resolve to the same value — overlapping locations still share one account";
     }
   }
-  const ctx: RunContext = { config: runConfig, files: { ...bundle.files, ...patch.files }, phase: "candidate" };
+  const ctx: RunContext = {
+    config: runConfig,
+    files: patchedFiles(bundle, patch),
+    assets: patchedAssets(patch),
+    ...(patch.checkFile ? { checkFile: patch.checkFile } : {}),
+    ...(patch.playwrightConfigFile ? { playwrightConfigFile: patch.playwrightConfigFile } : {}),
+    ...(patch.checkName ? { checkName: patch.checkName } : {}),
+    phase: "candidate",
+  };
   const envCheck = checkEnv(patchSource, provided, declared);
   const added = newFiles(bundle, patch);
 
@@ -100,7 +113,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   const undeclaredEnvReason = envCheck.undeclared.length > 0
     ? `the patch reads undeclared environment variable(s): ${envCheck.undeclared.join(", ")}`
     : null;
-  const preflightRejected = staticallyRejected(bundle, patchSource) ?? envDodge ?? configPolicy.rejected ?? undeclaredEnvReason;
+  const preflightRejected = patch.rejection ?? staticallyRejected(bundle, patchSource) ?? envDodge ?? configPolicy.rejected ?? undeclaredEnvReason;
   if (preflightRejected) {
     if (verbose) console.error(`[verify] static rejection before execution: ${preflightRejected}`);
   } else if (missingEnvReason) {
@@ -179,8 +192,13 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   });
 
   // ── static rejections outrank whatever the scenes said ───────────────────
-  // A dodge or a masking-only config change is a definite finding, not missing
-  // evidence: FAILED even when the scenes were inconclusive.
+  // A removed incident check, dodge, or masking-only config change is a
+  // definite finding, not missing evidence: FAILED even when scenes did not run.
+  if (patch.rejection) {
+    decision.reasons.push(`candidate identity: ${patch.rejection}`);
+    decision.verdict = "FAILED";
+    decision.exitCode = 1;
+  }
   if (envDodge) {
     decision.reasons.push(`env-scope dodge detected: ${envDodge}`);
     decision.verdict = "FAILED";
@@ -211,6 +229,9 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     targetRevision: opts.targetRevision ?? null,
     candidateProject: opts.candidateProject ?? null,
     candidate: patch.path ?? patch.kind,
+    candidateRevision: opts.candidateRevision ?? patch.revision ?? null,
+    candidateCheck: patch.checkLogicalId ? { logicalId: patch.checkLogicalId, name: patch.checkName ?? null, file: patch.checkFile ?? null } : null,
+    targetBinding: opts.targetBinding ?? null,
   });
   return {
     contract,

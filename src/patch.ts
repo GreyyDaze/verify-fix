@@ -1,21 +1,41 @@
-// A candidate fix is a set of files that replace files under the bundle's
-// check/ directory: the spec, checkly.config.ts, or both. `--patch` accepts
-//   a file       → replaces the bundle's main check file, whatever the file is named
-//   a directory  → every file in it replaces the bundle file with the same relative path
-// That is what a coding agent's pull request changes; nothing is applied as a
-// unified diff, so no external tool is needed.
+// Candidate monitoring-tree loader.
+//
+// Production local/PR inputs come from an immutable complete Git revision.
+// The final check/config/import tree is loaded without restoring deletions.
+// `--patch` remains a small compatibility input for fixtures and experiments:
+// a file replaces the main captured check and a directory overlays bundle paths.
 
 import { existsSync, lstatSync, readFileSync, realpathSync, readdirSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";
 import * as ts from "typescript";
 import type { Bundle, BundleConfig } from "./types.ts";
 import { parseCheckConfig } from "./scene/config-diff.ts";
+import type { CandidateRevision, CandidateRevisionMetadata } from "./candidate/revision.ts";
+import { configuredPlaywrightPath, resolveCheckIdentity, sourceExtensionCandidates } from "./candidate/check-identity.ts";
 
 export interface PatchSet {
-  kind: "file" | "directory" | "inline" | "candidate-project";
+  kind: "file" | "directory" | "inline" | "candidate-project" | "candidate-revision";
   path: string | null;
-  /** relative path under check/ → new content */
+  /** relative path under the Checkly project → final UTF-8 content */
   files: Record<string, string>;
+  /** Binary files in a complete candidate project. */
+  assets?: Record<string, Buffer>;
+  /** Complete candidates do not inherit missing files from the incident bundle. */
+  complete?: boolean;
+  /** Main incident check after a Git rename. Null means the incident check was removed. */
+  checkFile?: string | null;
+  /** Candidate Checkly config after a rename. */
+  configFile?: string | null;
+  /** Candidate Playwright config selected by the final Checkly config. */
+  playwrightConfigFile?: string | null;
+  /** Stable logical ID used to locate the incident check. */
+  checkLogicalId?: string;
+  /** Candidate display name matched through the stable Checkly logical ID. */
+  checkName?: string;
+  /** Definite candidate identity failure. The verifier maps this to FAILED. */
+  rejection?: string | null;
+  /** Public immutable source identity included in reports. */
+  revision?: CandidateRevisionMetadata;
 }
 
 export function loadPatch(pathIn: string, bundle: Bundle): PatchSet {
@@ -100,18 +120,157 @@ export function loadCandidateProject(pathIn: string, bundle: Bundle): PatchSet {
   return { kind: "candidate-project", path: root, files };
 }
 
+const PROJECT_METADATA = /^(?:package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|(?:tsconfig|jsconfig)(?:\.[^.]+)*\.json)$/;
+
+function decodeCandidateText(bytes: Buffer): string | null {
+  if (bytes.includes(0)) return null;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build the executable monitoring tree from one immutable candidate revision.
+ *
+ * The revision digest covers the complete repository. Application files are
+ * observed through the supplied deployment. The local and Checkly runners get
+ * the final check/config files, their real import closure, and dependency
+ * metadata. Missing or renamed files are never restored from the incident.
+ */
+export function loadCandidateRevision(revision: CandidateRevision, bundle: Bundle): PatchSet {
+  revision.assertUnchanged();
+  const root = revision.projectRoot;
+  const identity = resolveCheckIdentity(bundle, revision);
+  const files: Record<string, string> = {};
+  const assets: Record<string, Buffer> = {};
+  const pending: string[] = [];
+  const visited = new Set<string>();
+
+  const inside = (path: string): string => {
+    const rel = relative(root, path).split("\\").join("/");
+    if (!rel || rel === ".." || rel.startsWith("../")) throw new Error(`candidate import leaves the immutable project snapshot: ${path}`);
+    return rel;
+  };
+  const add = (path: string | null | undefined) => {
+    if (path && !visited.has(path) && !pending.includes(path)) pending.push(path);
+  };
+  add(identity.identityFile);
+  add(identity.configFile);
+  add(identity.checkFile);
+
+  const configSource = identity.configFile && existsSync(join(root, identity.configFile))
+    ? readFileSync(join(root, identity.configFile), "utf8")
+    : null;
+  let playwrightConfigFile = configuredPlaywrightPath(configSource) ?? bundle.playwright?.configFile ?? null;
+  if (playwrightConfigFile && !existsSync(join(root, playwrightConfigFile))) playwrightConfigFile = null;
+
+  for (const repositoryPath of revision.files) {
+    const prefix = revision.metadata.projectPath === "." ? "" : `${revision.metadata.projectPath}/`;
+    if (prefix && !repositoryPath.startsWith(prefix)) continue;
+    const rel = prefix ? repositoryPath.slice(prefix.length) : repositoryPath;
+    if (!playwrightConfigFile && /(?:^|\/)playwright\.config\.[cm]?[jt]s$/.test(rel)) playwrightConfigFile = rel;
+    if (PROJECT_METADATA.test(rel) || /(?:^|\/)(?:tsconfig|jsconfig)(?:\.[^.]+)*\.json$/.test(rel)) add(rel);
+  }
+  add(playwrightConfigFile);
+
+  const resolveImport = (from: string, specifier: string): string | null => {
+    if (!specifier.startsWith(".")) return null;
+    const base = resolve(root, dirname(from), specifier);
+    inside(base);
+    for (const candidate of sourceExtensionCandidates(inside(base))) {
+      const path = resolve(root, candidate);
+      inside(path);
+      if (!existsSync(path)) continue;
+      if (lstatSync(path).isSymbolicLink()) {
+        const real = realpathSync(path);
+        inside(real);
+      }
+      if (statSync(path).isFile()) return inside(path);
+    }
+    return null;
+  };
+
+  while (pending.length > 0) {
+    const rel = pending.shift()!;
+    if (visited.has(rel)) continue;
+    visited.add(rel);
+    const absolute = resolve(root, rel);
+    inside(absolute);
+    if (!existsSync(absolute) || !statSync(absolute).isFile()) continue;
+    if (lstatSync(absolute).isSymbolicLink()) inside(realpathSync(absolute));
+    const bytes = readFileSync(absolute);
+    const source = decodeCandidateText(bytes);
+    if (source === null) {
+      assets[rel] = bytes;
+      continue;
+    }
+    files[rel] = source;
+    if (/\.[cm]?[jt]sx?$/.test(rel)) {
+      for (const reference of ts.preProcessFile(source, true, true).importedFiles) {
+        const imported = resolveImport(rel, reference.fileName);
+        if (imported) add(imported);
+      }
+    }
+  }
+
+  // The runner receives the complete final Checkly project, not only files the
+  // incident happened to capture. This supports path aliases, fixtures, new
+  // helpers, and configuration imports. The repository digest also covers
+  // files outside this project; application behavior is judged via --target.
+  const prefix = revision.metadata.projectPath === "." ? "" : `${revision.metadata.projectPath}/`;
+  for (const repositoryPath of revision.files) {
+    if (prefix && !repositoryPath.startsWith(prefix)) continue;
+    const rel = prefix ? repositoryPath.slice(prefix.length) : repositoryPath;
+    if (/(?:^|\/)\.env(?:\.|$)/.test(rel)) continue;
+    const absolute = resolve(root, rel);
+    if (!existsSync(absolute) || !statSync(absolute).isFile()) continue;
+    const bytes = readFileSync(absolute);
+    const source = decodeCandidateText(bytes);
+    if (source === null) assets[rel] = bytes;
+    else files[rel] = source;
+  }
+
+  return {
+    kind: "candidate-revision",
+    path: revision.metadata.sourceReference,
+    files,
+    assets,
+    complete: true,
+    checkFile: identity.checkFile,
+    configFile: identity.configFile,
+    playwrightConfigFile,
+    checkLogicalId: identity.logicalId,
+    checkName: identity.name,
+    rejection: identity.rejection,
+    revision: revision.metadata,
+  };
+}
+
 /** A patch given as check source text (tests, embedding). */
 export function inlinePatch(bundle: Bundle, checkSource: string): PatchSet {
   return { kind: "inline", path: null, files: { [bundle.check.file]: checkSource } };
 }
 
 export function patchedCheckSource(bundle: Bundle, patch: PatchSet): string {
+  if (patch.complete) return patch.checkFile ? (patch.files[patch.checkFile] ?? "") : "";
   return patch.files[bundle.check.file] ?? bundle.checkSource;
 }
 
 export function patchedConfigSource(bundle: Bundle, patch: PatchSet): string | null {
+  if (patch.complete) return patch.configFile ? (patch.files[patch.configFile] ?? null) : null;
   const configPath = bundle.configFile ?? "checkly.config.ts";
   return patch.files[configPath] ?? (bundle.configFile ? bundle.files[bundle.configFile] : null);
+}
+
+/** Final monitoring tree. Complete candidates never inherit deleted incident files. */
+export function patchedFiles(bundle: Bundle, patch: PatchSet): Record<string, string> {
+  return patch.complete ? { ...patch.files } : { ...bundle.files, ...patch.files };
+}
+
+export function patchedAssets(patch: PatchSet): Record<string, Buffer> {
+  return { ...(patch.assets ?? {}) };
 }
 
 export function originalConfigSource(bundle: Bundle): string | null {
@@ -120,6 +279,7 @@ export function originalConfigSource(bundle: Bundle): string | null {
 
 /** files in the patch that do not exist in the bundle (new helpers etc.) */
 export function newFiles(bundle: Bundle, patch: PatchSet): string[] {
+  if (patch.complete) return []; // complete revision reports already contain the Git change list
   return Object.keys(patch.files).filter((f) => bundle.files[f] === undefined && f !== bundle.check.file);
 }
 

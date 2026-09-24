@@ -230,6 +230,14 @@ export interface RunContext {
   config: BundleConfig | null;
   /** Complete candidate check tree. Browser specs may import helper files from it. */
   files?: Record<string, string>;
+  /** Binary project fixtures copied without text conversion. */
+  assets?: Record<string, Buffer>;
+  /** Main check path in the final tree. It may differ after a Git rename. */
+  checkFile?: string;
+  /** Playwright config path in the final tree. */
+  playwrightConfigFile?: string;
+  /** Candidate display name resolved through the stable Checkly logical ID. */
+  checkName?: string;
   /** Distinguishes the candidate from generated weakening checks in cost reports. */
   phase?: "candidate" | "mutation";
 }

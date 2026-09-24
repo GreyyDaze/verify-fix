@@ -16,6 +16,7 @@ import type { TraceStep } from "./types.ts";
 export interface ChecklySandboxContext {
   projectDir: string;
   files: Record<string, string>;
+  assets?: Record<string, Uint8Array>;
   target: string;
   targetRevision?: string;
   env?: Record<string, string>;
@@ -172,8 +173,17 @@ export async function runChecklySandbox(ctx: ChecklySandboxContext): Promise<Che
       await mkdir(dirname(destination), { recursive: true });
       await writeFile(destination, content, "utf8");
     }
-    if (!existsSync(join(candidateDir, "checkly.config.ts")) && !existsSync(join(candidateDir, "checkly.config.js")) && !existsSync(join(candidateDir, "checkly.config.mjs"))) {
-      throw new Error("candidate project has no checkly.config.ts/js/mjs");
+    for (const [rawPath, content] of Object.entries(ctx.assets ?? {})) {
+      const path = safeRelativePath(rawPath);
+      if (/(?:^|\/)\.env(?:\.|$)/.test(path) || /(?:^|\/)(?:\.npmrc|\.yarnrc(?:\.yml)?|\.pnpmfile\.cjs)$/.test(path)) {
+        throw new Error(`credential-bearing candidate file is not allowed in the Checkly sandbox: ${path}`);
+      }
+      const destination = join(candidateDir, path);
+      await mkdir(dirname(destination), { recursive: true });
+      await writeFile(destination, content);
+    }
+    if (!["checkly.config.ts", "checkly.config.mts", "checkly.config.js", "checkly.config.mjs", "checkly.config.cjs"].some((file) => existsSync(join(candidateDir, file)))) {
+      throw new Error("candidate project has no supported checkly.config.* file");
     }
     if (!existsSync(join(candidateDir, "package.json"))) throw new Error("candidate project has no package.json");
     if (!existsSync(nodeModules)) throw new Error(`node_modules not found under --project ${projectDir}; install the project's dependencies first`);

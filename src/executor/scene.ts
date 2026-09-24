@@ -159,7 +159,8 @@ export class SceneExecutor implements ExperimentExecutor {
   }
 
   private async runCandidate(bundle: Bundle, patchSource: string, ctx: RunContext | undefined, url: string, env: Record<string, string>, seed: number): Promise<CandidateOutcome> {
-    if (bundle.playwright && /\.(?:spec|test)\.[cm]?[jt]sx?$/.test(bundle.check.file)) {
+    const checkFile = ctx?.checkFile ?? bundle.check.file;
+    if (bundle.playwright && /\.(?:spec|test)\.[cm]?[jt]sx?$/.test(checkFile)) {
       if (!this.projectDir) throw new Error(`Playwright check needs --project <dir> so @playwright/test can be resolved`);
       const out = await runPlaywrightSandbox({
         baseUrl: url,
@@ -167,10 +168,11 @@ export class SceneExecutor implements ExperimentExecutor {
         env,
         timeoutMs: this.sandboxTimeoutMs,
         projectDir: this.projectDir,
-        configFile: bundle.playwright.configFile,
+        configFile: ctx?.playwrightConfigFile ?? bundle.playwright.configFile,
         projects: bundle.playwright.projects,
-        files: { ...bundle.files, ...(ctx?.files ?? {}), [bundle.check.file]: patchSource },
-        checkFile: bundle.check.file,
+        files: { ...(ctx?.files ?? bundle.files), [checkFile]: patchSource },
+        assets: ctx?.assets,
+        checkFile,
         seed,
         browserExecutablePath: this.browserExecutablePath,
       });

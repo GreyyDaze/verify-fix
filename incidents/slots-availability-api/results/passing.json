@@ -1,0 +1,30 @@
+{
+  "id": "01a0d518-6e77-7728-9e03-60739e262737",
+  "runLocation": "us-east-1",
+  "startedAt": "2026-09-24T20:25:44.787Z",
+  "stoppedAt": "2026-09-24T20:25:44.880Z",
+  "hasFailures": false,
+  "hasErrors": false,
+  "attempts": 1,
+  "resultType": "FINAL",
+  "errorGroupIds": [],
+  "errors": [],
+  "runtimeVersion": null,
+  "pages": [],
+  "traceSummary": null,
+  "apiCheckResult": {
+    "request": {
+      "method": "GET",
+      "url": "[REDACTED]/api/v1/availability?slot=09%3A30"
+    },
+    "response": {
+      "status": 200,
+      "contentType": "application/json",
+      "readable": true,
+      "truncated": false
+    },
+    "requestError": null,
+    "assertionCount": 4,
+    "recording": "recordings/passing.api.json"
+  }
+}

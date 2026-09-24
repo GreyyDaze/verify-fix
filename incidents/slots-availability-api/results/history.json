@@ -1,0 +1,50 @@
+[
+ {
+  "id": "01a0d51e-4abe-74c2-a728-619a34e246fd",
+  "runLocation": "eu-west-1",
+  "startedAt": "2026-09-24T20:32:08.514Z",
+  "stoppedAt": "2026-09-24T20:32:08.765Z",
+  "hasFailures": true,
+  "hasErrors": false,
+  "resultType": "FINAL",
+  "attempts": 2,
+  "errorGroupIds": [
+   "b02bd644-32ce-4d11-878b-25fa04b56014"
+  ]
+ },
+ {
+  "id": "01a0d51d-1075-7233-9b41-dfa4a98543b5",
+  "runLocation": "us-east-1",
+  "startedAt": "2026-09-24T20:30:48.492Z",
+  "stoppedAt": "2026-09-24T20:30:48.612Z",
+  "hasFailures": true,
+  "hasErrors": false,
+  "resultType": "FINAL",
+  "attempts": 2,
+  "errorGroupIds": [
+   "b02bd644-32ce-4d11-878b-25fa04b56014"
+  ]
+ },
+ {
+  "id": "01a0d518-6e77-7728-9e03-60739e262737",
+  "runLocation": "us-east-1",
+  "startedAt": "2026-09-24T20:25:44.787Z",
+  "stoppedAt": "2026-09-24T20:25:44.880Z",
+  "hasFailures": false,
+  "hasErrors": false,
+  "resultType": "FINAL",
+  "attempts": 1,
+  "errorGroupIds": []
+ },
+ {
+  "id": "01a0d517-5d41-728e-9854-63483c84f1c6",
+  "runLocation": "us-east-1",
+  "startedAt": "2026-09-24T20:24:34.467Z",
+  "stoppedAt": "2026-09-24T20:24:34.731Z",
+  "hasFailures": false,
+  "hasErrors": false,
+  "resultType": "FINAL",
+  "attempts": 1,
+  "errorGroupIds": []
+ }
+]

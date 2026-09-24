@@ -1,0 +1,96 @@
+{
+  "check": {
+    "id": "5bab986c-15f6-4401-a166-3b2a8c1dcbbc",
+    "name": "slots availability API",
+    "checkType": "API",
+    "repo": "https://github.com/GreyyDaze/verify-fix",
+    "file": "checks/availability.check.ts",
+    "files": [
+      "checkly.config.ts",
+      "checks/availability.check.ts",
+      "checks/availability.setup.ts"
+    ],
+    "logicalId": "slots-availability-api",
+    "deployedId": "5bab986c-15f6-4401-a166-3b2a8c1dcbbc",
+    "projectCommit": "91d9bfd4d76cc18adff8ac98ea1bce68a06cdbcf"
+  },
+  "config": {
+    "frequencyMinutes": 5,
+    "locations": [
+      "us-east-1",
+      "eu-west-1"
+    ],
+    "privateLocations": [],
+    "runParallel": false,
+    "retryStrategy": {
+      "type": "FIXED",
+      "maxRetries": 1,
+      "baseBackoffSeconds": 0,
+      "maxDurationSeconds": 600,
+      "sameRegion": false
+    },
+    "doubleCheck": true,
+    "activated": true,
+    "muted": false,
+    "tags": [
+      "slots-booking",
+      "api"
+    ],
+    "runtimeId": null,
+    "environmentVariables": [
+      {
+        "key": "ENVIRONMENT_URL",
+        "secret": false
+      },
+      {
+        "key": "API_TOKEN",
+        "secret": true
+      }
+    ],
+    "repair": {
+      "intent": null,
+      "aiAutoRepairEnabled": null
+    },
+    "playwright": null,
+    "apiRequest": {
+      "method": "GET",
+      "url": "{{ENVIRONMENT_URL}}/api/v1/availability?slot=09:30",
+      "assertions": [
+        {
+          "regex": null,
+          "source": "STATUS_CODE",
+          "target": "200",
+          "property": "",
+          "comparison": "EQUALS"
+        },
+        {
+          "regex": null,
+          "source": "HEADERS",
+          "target": "application/json",
+          "property": "content-type",
+          "comparison": "EQUALS"
+        },
+        {
+          "regex": null,
+          "source": "JSON_BODY",
+          "target": "09:30",
+          "property": "slot",
+          "comparison": "EQUALS"
+        },
+        {
+          "regex": null,
+          "source": "JSON_BODY",
+          "target": "AVAILABLE",
+          "property": "availability",
+          "comparison": "EQUALS"
+        }
+      ]
+    }
+  },
+  "target": {
+    "resolution": "handlebars",
+    "variable": "ENVIRONMENT_URL",
+    "recordedOrigin": null,
+    "note": "verify --target sets ENVIRONMENT_URL/ENVIRONMENT_NAME for every live scene (Checkly's own convention)"
+  }
+}

@@ -1,0 +1,532 @@
+{
+  "schemaVersion": "v3",
+  "generatedBy": "verify-fix bundle 0.1.0",
+  "generatedAt": "2026-09-24T20:32:16.206Z",
+  "incidentId": "slots-availability-api-870603",
+  "incident": {
+    "title": "slots availability API: Expected availability to be equal to empty array",
+    "description": "Expected availability to be equal to empty array\n\nRocky RCA (CONFIGURATION_ERROR): The API behaved correctly and returned `\"availability\":\"AVAILABLE\"` for the requested slot, but the failing check’s last assertion expected the JSON `availability` field to equal `AVAILABLE` while the actual value was treated as an empty string/array in the assertion engine, causing an assertion mismatch. Since the status code, headers, and business response are valid and match the last passing run, the failure is due to how the assertion on `JSON_BODY.availability` is configured or interpreted, not due to an API or infrastructure issue.",
+    "sourceReference": "checkly:check-result:5bab986c-15f6-4401-a166-3b2a8c1dcbbc/01a0d51e-4abe-74c2-a728-619a34e246fd",
+    "status": "captured"
+  },
+  "check": {
+    "id": "5bab986c-15f6-4401-a166-3b2a8c1dcbbc",
+    "name": "slots availability API",
+    "checkType": "API",
+    "repo": "https://github.com/GreyyDaze/verify-fix",
+    "file": "checks/availability.check.ts",
+    "files": [
+      "checkly.config.ts",
+      "checks/availability.check.ts",
+      "checks/availability.setup.ts"
+    ],
+    "logicalId": "slots-availability-api",
+    "deployedId": "5bab986c-15f6-4401-a166-3b2a8c1dcbbc",
+    "projectCommit": "91d9bfd4d76cc18adff8ac98ea1bce68a06cdbcf"
+  },
+  "config": {
+    "frequencyMinutes": 5,
+    "locations": [
+      "us-east-1",
+      "eu-west-1"
+    ],
+    "privateLocations": [],
+    "runParallel": false,
+    "retryStrategy": {
+      "type": "FIXED",
+      "maxRetries": 1,
+      "baseBackoffSeconds": 0,
+      "maxDurationSeconds": 600,
+      "sameRegion": false
+    },
+    "doubleCheck": true,
+    "activated": true,
+    "muted": false,
+    "tags": [
+      "slots-booking",
+      "api"
+    ],
+    "runtimeId": null,
+    "environmentVariables": [
+      {
+        "key": "ENVIRONMENT_URL",
+        "secret": false
+      },
+      {
+        "key": "API_TOKEN",
+        "secret": true
+      }
+    ],
+    "repair": {
+      "intent": null,
+      "aiAutoRepairEnabled": null
+    },
+    "playwright": null,
+    "apiRequest": {
+      "method": "GET",
+      "url": "{{ENVIRONMENT_URL}}/api/v1/availability?slot=09:30",
+      "assertions": [
+        {
+          "regex": null,
+          "source": "STATUS_CODE",
+          "target": "200",
+          "property": "",
+          "comparison": "EQUALS"
+        },
+        {
+          "regex": null,
+          "source": "HEADERS",
+          "target": "application/json",
+          "property": "content-type",
+          "comparison": "EQUALS"
+        },
+        {
+          "regex": null,
+          "source": "JSON_BODY",
+          "target": "09:30",
+          "property": "slot",
+          "comparison": "EQUALS"
+        },
+        {
+          "regex": null,
+          "source": "JSON_BODY",
+          "target": "AVAILABLE",
+          "property": "availability",
+          "comparison": "EQUALS"
+        }
+      ]
+    }
+  },
+  "target": {
+    "resolution": "handlebars",
+    "variable": "ENVIRONMENT_URL",
+    "recordedOrigin": null,
+    "note": "verify --target sets ENVIRONMENT_URL/ENVIRONMENT_NAME for every live scene (Checkly's own convention)"
+  },
+  "results": {
+    "failing": {
+      "id": "01a0d51e-4abe-74c2-a728-619a34e246fd",
+      "startedAt": "2026-09-24T20:32:08.514Z",
+      "stoppedAt": "2026-09-24T20:32:08.765Z",
+      "runLocation": "eu-west-1",
+      "resultType": "FINAL",
+      "attempts": 2,
+      "errorGroupIds": [
+        "b02bd644-32ce-4d11-878b-25fa04b56014"
+      ],
+      "errors": [],
+      "failingTest": null,
+      "trace": null
+    },
+    "passing": {
+      "id": "01a0d518-6e77-7728-9e03-60739e262737",
+      "startedAt": "2026-09-24T20:25:44.787Z",
+      "stoppedAt": "2026-09-24T20:25:44.880Z",
+      "runLocation": "us-east-1",
+      "resultType": "FINAL",
+      "attempts": 1,
+      "errorGroupIds": [],
+      "errors": [],
+      "failingTest": null,
+      "trace": null
+    }
+  },
+  "rca": {
+    "id": "9e916ca1-6c4a-4fae-a660-11fef95b26a1",
+    "createdAt": "2026-09-24T20:30:46.395Z",
+    "createdBeforeFailingRun": true,
+    "groupErrorMatchesFailingRun": null,
+    "mentionsFailingRunReceived": null,
+    "describesFailingRun": null,
+    "replaced": null,
+    "classification": "CONFIGURATION_ERROR",
+    "rootCause": "The API behaved correctly and returned `\"availability\":\"AVAILABLE\"` for the requested slot, but the failing check’s last assertion expected the JSON `availability` field to equal `AVAILABLE` while the actual value was treated as an empty string/array in the assertion engine, causing an assertion mismatch. Since the status code, headers, and business response are valid and match the last passing run, the failure is due to how the assertion on `JSON_BODY.availability` is configured or interpreted, not due to an API or infrastructure issue.",
+    "userImpact": "Users of the slots-booking API can successfully query the 09:30 slot and receive an `AVAILABLE` response; slot availability functionality is working as intended. The failure is limited to the monitoring configuration and does not indicate any impact on end-user booking flows.",
+    "codeFix": null,
+    "evidence": [
+      {
+        "description": "Both failing and last passing runs call the same URL with the same headers and receive HTTP 200 with identical response headers, indicating the endpoint is healthy and reachable.",
+        "artifacts": [
+          {
+            "name": "HTTP_REQUEST",
+            "type": "REQUEST"
+          }
+        ]
+      },
+      {
+        "description": "Timing phases for the failing run (DNS 1.29ms, TCP 0.57ms, TTFB ~355ms) are within normal bounds for Vercel and significantly below any typical timeout threshold, so performance is not the cause.",
+        "artifacts": [
+          {
+            "name": "TIMING_PHASES",
+            "type": "TIMINGS"
+          }
+        ]
+      },
+      {
+        "description": "In the failing run, the first three assertions (status code, content-type, slot) pass and the fourth JSON_BODY assertion on `availability` shows `target:\"AVAILABLE\"` but `actual:\"\"` with error `Expected JSON array to be equal to empty array`, indicating an assertion parsing/misconfiguration rather than an API response error.",
+        "artifacts": [
+          {
+            "name": "ASSERTIONS",
+            "type": "ASSERTIONS"
+          }
+        ]
+      },
+      {
+        "description": "The last passing result 5 minutes earlier from us-east-1 has the same URL, headers, and status and its fourth assertion reports `actual:\"AVAILABLE\"`, showing that the intended correct API behavior is `availability: \"AVAILABLE\"` and that the regression is only in how the current run’s assertion reads the body.",
+        "artifacts": [
+          {
+            "name": "LAST_PASSING_RESULT",
+            "type": "COMPARISON"
+          }
+        ]
+      },
+      {
+        "description": "No PCAP asset exists for this run, so there is no evidence of low-level network issues affecting the response.",
+        "artifacts": [
+          {
+            "name": "PACKET_CAPTURE",
+            "type": "BINARY"
+          }
+        ]
+      }
+    ],
+    "repairRecommendation": "DO_NOT_REPAIR",
+    "provider": "openai",
+    "model": "gpt-5.1"
+  },
+  "errorGroup": {
+    "id": "b02bd644-32ce-4d11-878b-25fa04b56014",
+    "cleanedErrorMessage": "Expected availability to be equal to empty array",
+    "firstSeen": "2026-09-24T20:30:46.367Z",
+    "lastSeen": "2026-09-24T20:32:10.220Z"
+  },
+  "reproduction": {
+    "mode": "replay:failing.api.json",
+    "matchedRule": null,
+    "matchedText": null,
+    "reason": "API incident response is replayed from the sanitized Checkly result",
+    "decidedBy": "none",
+    "overlappingRuns": []
+  },
+  "failurePoint": null,
+  "recordings": {
+    "failing": null,
+    "passing": null,
+    "apiFailing": "recordings/failing.api.json",
+    "apiPassing": "recordings/passing.api.json",
+    "bodies": "api"
+  },
+  "scenes": [
+    {
+      "sceneId": "healthy-live",
+      "type": "HEALTHY",
+      "mode": "live",
+      "state": "the target behaves as in the last passing run (01a0d518-6e77-7728-9e03-60739e262737, us-east-1); the fixed check must pass",
+      "verdict": {
+        "mustFail": false,
+        "provenance": {
+          "kind": "recorded",
+          "runId": "01a0d518-6e77-7728-9e03-60739e262737",
+          "artifactId": "recordings/passing.api.json"
+        },
+        "envAssumptions": [
+          "locations",
+          "target-resolution",
+          "env-vars"
+        ]
+      },
+      "experiments": [
+        {
+          "durationSec": 60,
+          "repetitions": 5,
+          "expectStable": true
+        }
+      ],
+      "assertionsInvolved": [
+        "assert:f1e6a4ce",
+        "assert:8f1f85d7",
+        "assert:70e79638",
+        "assert:d1dab625"
+      ],
+      "environment": "target"
+    },
+    {
+      "sceneId": "reproduction",
+      "type": "REPRODUCTION",
+      "mode": "replay:failing.api.json",
+      "state": "the sanitized API request and changed response from the failing run are replayed; the fixed check must pass",
+      "verdict": {
+        "mustFail": false,
+        "provenance": {
+          "kind": "recorded",
+          "runId": "01a0d51e-4abe-74c2-a728-619a34e246fd",
+          "artifactId": "recordings/failing.api.json"
+        },
+        "envAssumptions": [
+          "target-resolution",
+          "env-vars"
+        ]
+      },
+      "experiments": [
+        {
+          "durationSec": 120,
+          "repetitions": 5,
+          "expectStable": true
+        }
+      ],
+      "assertionsInvolved": [
+        "assert:f1e6a4ce",
+        "assert:8f1f85d7",
+        "assert:70e79638",
+        "assert:d1dab625"
+      ],
+      "environment": "recording",
+      "notes": [
+        "RCA text matched no rule and no passing overlapping run was found → both modes; the scene is UNCERTAIN if neither reproduces"
+      ]
+    },
+    {
+      "sceneId": "detection",
+      "type": "DETECTION",
+      "mode": "replay:passing.api.json",
+      "state": "the last known-good API response is replayed; a repair for the renamed field MUST fail and must not accept both contracts",
+      "verdict": {
+        "mustFail": true,
+        "provenance": {
+          "kind": "recorded",
+          "runId": "01a0d518-6e77-7728-9e03-60739e262737",
+          "artifactId": "recordings/passing.api.json"
+        },
+        "envAssumptions": [
+          "target-resolution",
+          "env-vars"
+        ]
+      },
+      "experiments": [
+        {
+          "durationSec": 60,
+          "repetitions": 5,
+          "expectStable": true
+        }
+      ],
+      "assertionsInvolved": [
+        "assert:f1e6a4ce",
+        "assert:8f1f85d7",
+        "assert:70e79638",
+        "assert:d1dab625"
+      ],
+      "environment": "recording",
+      "notes": [
+        "the passing result supplies the opposite field contract"
+      ]
+    }
+  ],
+  "assertions": {
+    "checkFile": "checks/availability.check.ts",
+    "assertions": [
+      {
+        "id": "assert:f1e6a4ce",
+        "subject": "statusCode()",
+        "matcher": "equals",
+        "target": "200",
+        "kind": "exact",
+        "onCriticalPath": true,
+        "sourceLine": 8,
+        "falsifiable": true,
+        "guarded": false
+      },
+      {
+        "id": "assert:8f1f85d7",
+        "subject": "headers(\"content-type\")",
+        "matcher": "equals",
+        "target": "\"application/json\"",
+        "kind": "exact",
+        "onCriticalPath": true,
+        "sourceLine": 9,
+        "falsifiable": true,
+        "guarded": false
+      },
+      {
+        "id": "assert:70e79638",
+        "subject": "jsonBody(\"slot\")",
+        "matcher": "equals",
+        "target": "\"09:30\"",
+        "kind": "exact",
+        "onCriticalPath": true,
+        "sourceLine": 10,
+        "falsifiable": true,
+        "guarded": false
+      },
+      {
+        "id": "assert:d1dab625",
+        "subject": "jsonBody(\"availability\")",
+        "matcher": "equals",
+        "target": "\"AVAILABLE\"",
+        "kind": "exact",
+        "onCriticalPath": true,
+        "sourceLine": 11,
+        "falsifiable": true,
+        "guarded": false
+      }
+    ],
+    "steps": [
+      "request.get:1"
+    ],
+    "totalAssertions": 4
+  },
+  "envAssumptions": [
+    {
+      "id": "locations",
+      "text": "the check runs from 2 location(s): us-east-1, eu-west-1",
+      "verified": true,
+      "verifiedBy": "checkly:GET /v1/checks"
+    },
+    {
+      "id": "env-vars",
+      "text": "the check reads environment variables: ENVIRONMENT_URL, API_TOKEN (secret) — names only, values stay in Checkly",
+      "verified": true,
+      "verifiedBy": "checkly:GET /v1/checks"
+    },
+    {
+      "id": "target-resolution",
+      "text": "the API check URL uses {{ENVIRONMENT_URL}} (no fallback): the variable must be set for every target",
+      "verified": true,
+      "verifiedBy": "verify-fix:source-scan"
+    }
+  ],
+  "determinism": {
+    "measured": true,
+    "method": "checkly-cloud",
+    "history": {
+      "window": 4,
+      "finalRuns": 4,
+      "passed": 2,
+      "failed": 2,
+      "passRate": 0.5,
+      "byLocation": {
+        "eu-west-1": {
+          "runs": 1,
+          "passed": 0
+        },
+        "us-east-1": {
+          "runs": 3,
+          "passed": 2
+        }
+      },
+      "from": "2026-09-24T20:24:34.467Z",
+      "to": "2026-09-24T20:32:08.514Z"
+    },
+    "sequential": {
+      "runs": 20,
+      "passed": 0,
+      "passRate": 0,
+      "sessions": [
+        "01a0d51e-8b79-74e7-bb2b-a016cbe03b17",
+        "01a0d51e-acb8-7529-ac96-8b4f6e91e63c",
+        "01a0d51e-d45c-7216-b051-0b0cb5785e3e",
+        "01a0d51e-f734-735c-89a7-66b4d743d7f5",
+        "01a0d51f-197b-72ed-b065-60f66ff88725",
+        "01a0d51f-39bf-73f5-a12c-e677dc9c9cb9",
+        "01a0d51f-58e4-7019-a313-0bb597013e15",
+        "01a0d51f-7869-7278-8ced-414bb982eaa6",
+        "01a0d51f-9b6f-769f-9b5d-750ce2cb5277",
+        "01a0d51f-bde5-7020-8edf-80434cc59769",
+        "01a0d51f-e020-764e-bd09-ffd3ca248337",
+        "01a0d520-0083-74fb-9ee2-16d1a2318d8a",
+        "01a0d520-2745-74cc-a7db-f797155004f0",
+        "01a0d520-4972-7058-a2c7-38fdea1ef5f2",
+        "01a0d520-6d6f-76d8-9fd2-37ae09ea98a9",
+        "01a0d520-8c43-7732-86c3-dfcf40814874",
+        "01a0d520-ab60-714c-accd-34e33f8809e4",
+        "01a0d520-ccbd-76de-a1a0-94fb214bf13e",
+        "01a0d520-ef09-7208-949c-eca68d590c91",
+        "01a0d521-12a4-7652-9c79-799947d77c91"
+      ]
+    },
+    "overlap": null,
+    "lastVerifiedAt": "2026-09-24T20:32:16.206Z"
+  },
+  "runBudget": {
+    "maxPerScene": 10,
+    "used": 0
+  },
+  "oracleProvenance": {
+    "recorded": 3,
+    "codeDerived": 0
+  },
+  "provenance": {
+    "accountIdHash": "c16b931f",
+    "checkId": "5bab986c-15f6-4401-a166-3b2a8c1dcbbc",
+    "failingResultId": "01a0d51e-4abe-74c2-a728-619a34e246fd",
+    "passingResultId": "01a0d518-6e77-7728-9e03-60739e262737",
+    "errorGroupId": "b02bd644-32ce-4d11-878b-25fa04b56014",
+    "rcaId": "9e916ca1-6c4a-4fae-a660-11fef95b26a1",
+    "assets": [
+      {
+        "result": "failing",
+        "name": "logs.json",
+        "type": "log",
+        "bytes": 255,
+        "sha256": "a56b9180fcacb4a7b6e46740e5d95f44a80f3f80cfc41505bc2b62038f635d7b"
+      },
+      {
+        "result": "passing",
+        "name": "logs.json",
+        "type": "log",
+        "bytes": 256,
+        "sha256": "274f19eeb6da5df2ea41e999b96039c2bd4dce13148403ff8fd64c0dd3b0e7af"
+      }
+    ],
+    "apiCalls": [
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/checks/5bab986c-15f6-4401-a166-3b2a8c1dcbbc",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v2/check-results/5bab986c-15f6-4401-a166-3b2a8c1dcbbc",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/check-results/5bab986c-15f6-4401-a166-3b2a8c1dcbbc/01a0d51e-4abe-74c2-a728-619a34e246fd",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/check-results/5bab986c-15f6-4401-a166-3b2a8c1dcbbc/01a0d51e-4abe-74c2-a728-619a34e246fd/assets",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/next/assets/log/eu-west-1/clickhouse%3A%2F%2Fbb1905b1-d2f9-436f-b2db-86d1210c11c0%2F5bab986c-15f6-4401-a166-3b2a8c1dcbbc%2F01a0d51e-4abe-74c2-a728-619a34e246fd",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/check-results/5bab986c-15f6-4401-a166-3b2a8c1dcbbc/01a0d518-6e77-7728-9e03-60739e262737",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/check-results/5bab986c-15f6-4401-a166-3b2a8c1dcbbc/01a0d518-6e77-7728-9e03-60739e262737/assets",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/next/assets/log/us-east-1/clickhouse%3A%2F%2Fbb1905b1-d2f9-436f-b2db-86d1210c11c0%2F5bab986c-15f6-4401-a166-3b2a8c1dcbbc%2F01a0d518-6e77-7728-9e03-60739e262737",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/error-groups/b02bd644-32ce-4d11-878b-25fa04b56014",
+        "status": 200
+      }
+    ]
+  },
+  "notes": [
+    "RCA 9e916ca1-6c4a-4fae-a660-11fef95b26a1: the captured run has no Expected/Received to compare against, so whether the RCA describes this run is not decidable from the outside — read it before trusting it",
+    "REGRESSION scenes (sibling checks) are not generated yet — planned once group listing is wired (Phase 3)"
+  ]
+}

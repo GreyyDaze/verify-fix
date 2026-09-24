@@ -124,6 +124,16 @@ test("API executor deterministically replays the changed response for REPRODUCTI
   assert.match(result.environment ?? "", /failed-result/);
 });
 
+test("API executor replays legacy sanitized origins and Checkly empty GET bodies", async () => {
+  const captured = bundle();
+  captured.api!.failing!.request!.url = "[REDACTED]/api/v1/availability?slot=09%3A30";
+  captured.api!.failing!.request!.body = "";
+  const executor = new ApiSceneExecutor({ target, env: { API_TOKEN: token } });
+  const result = await executor.runScene(captured, candidate, scene("reproduction", "REPRODUCTION", "replay:failing.api.json", false), { config: null, files: { [checkFile]: candidate, [setupFile]: setup } });
+  assert.equal(result.observed, "pass", result.reason ?? "legacy recording should replay");
+  assert.equal(result.repetitions, 2);
+});
+
 test("API executor DETECTION replay rejects a repair that accepts only the renamed field", async () => {
   const executor = new ApiSceneExecutor({ target, env: { API_TOKEN: token } });
   const result = await executor.runScene(bundle(), candidate, scene("detection", "DETECTION", "replay:passing.api.json", true), { config: null, files: { [checkFile]: candidate, [setupFile]: setup } });

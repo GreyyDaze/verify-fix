@@ -68,7 +68,10 @@ test("bundle CLI path captures sanitized API request, response, setup provenance
         groupId: null,
         runtimeId: null,
         runParallel: true,
-        environmentVariables: [{ key: "API_TOKEN", value: secret, secret: true }],
+        environmentVariables: [
+          { key: "ENVIRONMENT_URL", value: "https://slots.example", secret: false },
+          { key: "API_TOKEN", value: secret, secret: true },
+        ],
         request: { method: "GET", url: "{{ENVIRONMENT_URL}}/api/v1/availability?slot=09:30", assertions: [] },
       };
     },
@@ -96,6 +99,8 @@ test("bundle CLI path captures sanitized API request, response, setup provenance
   const passingText = readFileSync(join(out, "recordings/passing.api.json"), "utf8");
   assert.doesNotMatch(`${failingText}${passingText}`, new RegExp(secret));
   const captured = JSON.parse(failingText);
+  assert.equal(captured.request.url, "https://recorded.invalid/api/v1/availability?slot=09%3A30&token=%5BREDACTED%5D");
+  assert.doesNotMatch(`${failingText}${passingText}`, /slots\.example/);
   assert.equal(captured.request.headers.authorization, "[REDACTED]");
   assert.equal(captured.response.json.status, "AVAILABLE");
   assert.equal(captured.setup.file, "checks/availability.setup.ts");

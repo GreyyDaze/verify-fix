@@ -64,15 +64,19 @@ function safeHeaders(value: unknown, response: boolean, secrets: string[]): Reco
   return output;
 }
 
-function safeUrl(raw: string, secrets: string[]): string {
+const SANITIZED_REQUEST_ORIGIN = "https://recorded.invalid";
+
+function safeUrl(raw: string, secrets: string[]): string | null {
   try {
-    const url = new URL(redactText(raw, secrets));
-    url.username = "";
-    url.password = "";
-    for (const name of [...url.searchParams.keys()]) if (SECRET_NAME.test(name)) url.searchParams.set(name, "[REDACTED]");
-    return url.toString();
+    const source = new URL(raw);
+    const safe = new URL(SANITIZED_REQUEST_ORIGIN);
+    safe.pathname = redactText(source.pathname, secrets);
+    for (const [name, value] of source.searchParams) {
+      safe.searchParams.append(name, SECRET_NAME.test(name) ? "[REDACTED]" : redactText(value, secrets));
+    }
+    return safe.toString();
   } catch {
-    return redactText(raw, secrets);
+    return null;
   }
 }
 
@@ -98,13 +102,14 @@ function requestFrom(detail: Record<string, unknown>, api: Record<string, unknow
     return null;
   }
   const method = stringValue(request.method ?? request.requestMethod);
-  const url = stringValue(request.url ?? request.requestUrl ?? request.uri);
+  const rawUrl = stringValue(request.url ?? request.requestUrl ?? request.uri);
+  const url = rawUrl ? safeUrl(rawUrl, secrets) : null;
   if (!method || !url) {
-    reasons.push("API result request has no supported method or URL");
+    reasons.push("API result request has no supported readable absolute URL or method");
     return null;
   }
   const rawBody = bodyText(request.body ?? request.data ?? request.payload);
-  let safeBody = rawBody === null ? null : redactText(rawBody, secrets);
+  let safeBody = rawBody === null || rawBody === "" ? null : redactText(rawBody, secrets);
   if (safeBody) {
     try {
       safeBody = JSON.stringify(redactJson(JSON.parse(safeBody), secrets));
@@ -114,7 +119,7 @@ function requestFrom(detail: Record<string, unknown>, api: Record<string, unknow
   }
   return {
     method: method.toUpperCase(),
-    url: safeUrl(url, secrets),
+    url,
     headers: safeHeaders(request.headers ?? request.requestHeaders, false, secrets),
     body: safeBody,
   };

@@ -156,6 +156,7 @@ test("API recording preserves valid JSON and redacts request secrets", () => {
         method: "GET",
         url: "https://slots.example/api/v1/availability?slot=09%3A30&token=secret-token",
         headers: { Authorization: "Bearer secret-token", cookie: "session=secret-token", "x-request-id": "checkly-1" },
+        body: "",
       },
       response: {
         status: 200,
@@ -164,11 +165,13 @@ test("API recording preserves valid JSON and redacts request secrets", () => {
       },
     },
   } as unknown as CheckResult;
-  const recording = apiRecordingFromResult("check-api", result, ["secret-token"]);
+  const recording = apiRecordingFromResult("check-api", result, ["secret-token", "https://slots.example"]);
   assert.ok(recording?.request);
   assert.equal(recording.request.headers.authorization, "[REDACTED]");
   assert.equal(recording.request.headers.cookie, "[REDACTED]");
-  assert.match(recording.request.url, /token=%5BREDACTED%5D/);
+  assert.equal(recording.request.url, "https://recorded.invalid/api/v1/availability?slot=09%3A30&token=%5BREDACTED%5D");
+  assert.doesNotMatch(recording.request.url, /slots\.example/);
+  assert.equal(recording.request.body, null);
   assert.deepEqual(recording.response?.json, { slot: "09:30", status: "AVAILABLE", token: "[REDACTED]" });
   assert.equal(recording.response?.headers["set-cookie"], "[REDACTED]");
   assert.doesNotMatch(JSON.stringify(recording), /secret-token/);

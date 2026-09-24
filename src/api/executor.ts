@@ -105,14 +105,28 @@ function targetUrl(template: string, target: string): string | null {
   }
 }
 
+function readableRecordedUrl(raw: string): URL {
+  if (raw.startsWith("[REDACTED]/")) return new URL(raw.slice("[REDACTED]".length), "https://recorded.invalid");
+  return new URL(raw);
+}
+
+function normalizedBody(body: string | null | undefined): string | null {
+  return body === "" || body === null || body === undefined ? null : body;
+}
+
+function routeAndQuery(url: URL): string {
+  const query = url.searchParams.toString();
+  return `${url.pathname}${query ? `?${query}` : ""}`;
+}
+
 function requestMatchesRecording(request: SetupRequest, recording: ApiRecording): string | null {
   if (!recording.request) return "the API recording has no sanitized request evidence";
   try {
     const actual = new URL(request.url);
-    const recorded = new URL(recording.request.url);
+    const recorded = readableRecordedUrl(recording.request.url);
     if (request.method !== recording.request.method) return "recorded request method does not match the candidate request";
-    if (`${actual.pathname}${actual.search}` !== `${recorded.pathname}${recorded.search}`) return "recorded route or query does not match the candidate request";
-    if ((request.body ?? null) !== (recording.request.body ?? null)) return "recorded request body does not match the candidate request";
+    if (routeAndQuery(actual) !== routeAndQuery(recorded)) return "recorded route or query does not match the candidate request";
+    if (normalizedBody(request.body) !== normalizedBody(recording.request.body)) return "recorded request body does not match the candidate request";
     return null;
   } catch {
     return "the candidate or recorded request URL is not readable";

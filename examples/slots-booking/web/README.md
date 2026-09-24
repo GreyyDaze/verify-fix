@@ -92,9 +92,7 @@ npx vercel --prod
 CHECKLY_NO_DOTENV=1 npx checkly test \
   --no-record \
   --location us-east-1 \
-  --grep '^slots availability API$' \
-  -e "ENVIRONMENT_URL=$ENVIRONMENT_URL" \
-  -e "API_TOKEN=$API_TOKEN"
+  --grep '^slots availability API$'
 
 # Review the deployment plan. Then deploy both checks in this one Checkly project.
 CHECKLY_NO_DOTENV=1 npx checkly deploy --preview

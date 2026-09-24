@@ -26,7 +26,7 @@ export async function GET(request: Request) {
 
   const available = BOOKING_SLOTS.some((candidate) => candidate === slot);
   return NextResponse.json(
-    { slot, availability: available ? "AVAILABLE" : "UNAVAILABLE" },
+    { slot, status: available ? "AVAILABLE" : "UNAVAILABLE" },
     { headers: { "x-request-id": request.headers.get("x-request-id") ?? "missing" } },
   );
 }

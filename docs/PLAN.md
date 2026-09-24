@@ -62,7 +62,7 @@ Phase 6 local implementation is complete. Its account-backed protected-gate proo
 - **Untrusted agent output.** Ignore the agent's description and claimed file list. Inspect Git and the final source tree directly.
 - **Candidate changes to verify-fix.** Execute a pinned trusted package outside the candidate checkout.
 - **Candidate changes to evidence or policy.** Load the incident bundle and verdict policy from a protected base-controlled location.
-- **Candidate changes to CI.** Use a protected gate definition. Do not let the candidate replace the workflow that judges it.
+- **Candidate changes to CI.** The deployment adapter calls the reusable gate at an immutable reviewed commit. Require the called gate's check names in the repository ruleset and owner review for workflow changes. Do not let the candidate replace or bypass the workflow that judges it.
 - **Executable Checkly configuration.** Treat `checkly.config.*` as untrusted code. Run secret-free checks first. Require approval before cloud credentials enter its process.
 - **Candidate package scripts.** Do not run lifecycle scripts in the trusted verification job. Install the browser through a separate trusted step.
 - **Unsafe project entries.** Reject credential files, unsafe symbolic links, submodules that leave the project, build output, dependencies, and files outside the snapshot root.

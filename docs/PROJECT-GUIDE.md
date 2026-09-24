@@ -1068,12 +1068,15 @@ stable declared `TEST_USER_<REGION>` variable. Partial mappings, duplicate
 runtime values, hard-coded replacement users, and random users remain failures.
 The values come only from `--env-file` or Checkly.
 
-**CI.** `.github/workflows/gate.yml` starts on a successful deployment status.
-Phase 6 splits it into a secret-free preflight and an approved cloud job. The
-workflow, verifier, incident bundle, and policy come from the protected default
-branch. The candidate has a separate checkout. A protected GitHub environment
-must approve cloud credentials. A fork needs that approval plus an explicit
-fork flag. JSON and Markdown reports are uploaded.
+**CI.** `.github/workflows/gate.yml` is a small adapter for successful
+deployment statuses. It calls `.github/workflows/protected-gate.yml` at an
+immutable reviewed commit. That reusable workflow runs the secret-free
+preflight and the approved cloud job. It also loads the pinned verifier,
+incident bundle, and policy outside the candidate checkout. Repository rules
+must require the reusable gate check names and owner review for workflow
+changes. A protected GitHub environment must approve cloud credentials. A fork
+needs that approval plus an explicit fork flag. JSON and Markdown reports are
+uploaded.
 
 The production job accepts only the current `main` commit. It verifies the
 production deployment first. Only then does the workflow run `npx checkly
@@ -1214,11 +1217,14 @@ gate.
 
 ### Security architecture
 
-The default-branch workflow is the protected gate definition. It checks out the
-protected verifier and incident under `trusted/`. It checks out candidate
-runtime dependencies under `candidate-runtime/`. The CLI fetches a third,
-immutable source snapshot from the PR URL. The candidate cannot replace the
-verifier, incident bundle, verdict policy, or workflow that judges it.
+The deployment-status adapter calls the reusable gate by an immutable commit
+SHA. The called workflow checks out the pinned verifier and incident under
+`trusted/`. It checks out candidate runtime dependencies under
+`candidate-runtime/`. The CLI fetches a third, immutable source snapshot from
+the PR URL. GitHub must require the called workflow's check names and must use
+`CODEOWNERS` review for workflow changes. With those repository rules, removing
+or replacing the adapter cannot satisfy the merge gate. Candidate files cannot
+replace the called workflow, verifier, incident bundle, or verdict policy.
 
 The first CI job has no protected secrets. It creates the candidate snapshot and
 runs static verification without a target. A statically acceptable candidate is

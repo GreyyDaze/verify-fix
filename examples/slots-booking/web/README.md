@@ -48,14 +48,17 @@ credentials in the PR environment. The production environment keeps its
 separate `CHECKLY_API_KEY`, `CHECKLY_ACCOUNT_ID`, and production users.
 `VERIFY_FIX_BUNDLE` may select a newer sanitized incident bundle.
 
-The first workflow job has no protected secrets. It resolves the PR head,
-creates a complete immutable snapshot, and performs static checks. The approved
-job then requires the deployment SHA to equal that PR head. It runs a trusted
-verifier and incident bundle from the default branch, not files changed by the
-candidate. Fork PRs remain blocked until the protected reviewer explicitly
-approves them. The workflow creates its dotenv and deployment-metadata files
-under `$RUNNER_TEMP`; no runtime value is committed. The production deploy
-receives the same user variables only after verification passes.
+The deployment adapter calls the protected reusable gate at an immutable commit.
+Require that gate's check names in the GitHub ruleset, and require owner review
+for workflow changes through the repository's `CODEOWNERS` file. Its first job
+has no protected secrets. It resolves the PR head, creates a complete immutable
+snapshot, and performs static checks. The approved job then requires the
+deployment SHA to equal that PR head. The pinned workflow runs a trusted
+verifier and incident bundle outside files changed by the candidate. Fork PRs
+remain blocked until the protected reviewer explicitly approves them. The
+workflow creates its dotenv and deployment-metadata files under `$RUNNER_TEMP`;
+no runtime value is committed. The production deploy receives the same user
+variables only after verification passes.
 
 `playwright.config.ts` reads
 `CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET` only when CI supplies it. It

@@ -3,7 +3,7 @@
 // A mutant "survives" if it masks the detection scene while the good patch
 // fails it — that is proof the oracle is blind there (STING weakness classes).
 
-import { parseInventory } from "./assertion/inventory.ts";
+import { parseInventory, parseProjectInventory } from "./assertion/inventory.ts";
 import type { Assertion } from "./types.ts";
 
 export type MutantFamily = "operator" | "llm";
@@ -92,10 +92,41 @@ function llmDodgeMutant(source: string, a: Assertion): SeededMutant {
   };
 }
 
+function apiMutants(source: string, assertions: Assertion[]): SeededMutant[] {
+  const target = assertions.find((assertion) => assertion.matcher === "equals");
+  if (!target) return [];
+  const lines = source.split("\n");
+  const line = lines[target.sourceLine - 1] ?? "";
+  if (!line.includes(".equals(")) return [];
+
+  const weakLines = [...lines];
+  weakLines[target.sourceLine - 1] = line.replace(".equals(", ".contains(");
+  const removedLines = [...lines];
+  removedLines[target.sourceLine - 1] = `// ${line.trim()}  // removed for deterministic mutation`;
+  return [
+    {
+      name: `mut-op-${target.id}`,
+      family: "operator",
+      source: weakLines.join("\n"),
+      detail: `weakened exact AssertionBuilder.equals on ${target.subject} to contains`,
+    },
+    {
+      name: `mut-contract-remove-${target.id}`,
+      family: "llm",
+      source: removedLines.join("\n"),
+      detail: `deterministic contextual mutation removed API assertion ${target.id}`,
+    },
+  ];
+}
+
 /** Deterministic mutation suite over the candidate check's strongest assertions. */
-export function seedMutants(patchSource: string, checkFile: string): SeededMutant[] {
-  const inv = parseInventory(checkFile, patchSource);
-  const strong = inv.assertions.filter((a) => a.falsifiable && a.kind === "exact");
+export function seedMutants(patchSource: string, checkFile: string, files?: Record<string, string>): SeededMutant[] {
+  const tree = new Map(Object.entries(files ?? { [checkFile]: patchSource }));
+  tree.set(checkFile, patchSource);
+  const inv = parseProjectInventory(checkFile, tree);
+  if (/\bAssertionBuilder\s*\./.test(patchSource)) return apiMutants(patchSource, inv.assertions);
+  const browserInventory = parseInventory(checkFile, patchSource);
+  const strong = browserInventory.assertions.filter((a) => a.falsifiable && a.kind === "exact");
   if (strong.length === 0) return [];
   const target = strong[0];
   const out: SeededMutant[] = [];

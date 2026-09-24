@@ -6,7 +6,7 @@
 
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import type { Bundle, BundleConfig, Scene } from "./types.ts";
+import type { ApiRecording, Bundle, BundleConfig, Scene } from "./types.ts";
 import type { ManifestV3 } from "./bundle/types.ts";
 import { parseCheckConfig } from "./scene/config-diff.ts";
 import { parseMode } from "./scene/modes.ts";
@@ -75,6 +75,13 @@ export function configFromSource(source: string): BundleConfig | null {
   };
 }
 
+function readApiRecording(dir: string, file: string | null | undefined): ApiRecording | null {
+  if (!file) return null;
+  const absolute = join(dir, file);
+  if (!existsSync(absolute)) return null;
+  return JSON.parse(readFileSync(absolute, "utf8")) as ApiRecording;
+}
+
 function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, configFile: string | null): Bundle {
   const file = m.check.file ?? m.check.files[0] ?? null;
   if (!file) throw new Error(`${dir}: v3 manifest names no check file`);
@@ -99,7 +106,7 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
     schemaVersion: "v3",
     incidentId: m.incidentId,
     incident: { title: m.incident.title, description: m.incident.description, sourceReference: m.incident.sourceReference ?? undefined },
-    check: { repo: m.check.repo ?? "", file, name: m.check.name, logicalId: m.check.logicalId ?? "", deployedId: m.check.deployedId },
+    check: { repo: m.check.repo ?? "", file, name: m.check.name, checkType: m.check.checkType, logicalId: m.check.logicalId ?? "", deployedId: m.check.deployedId },
     checkSource,
     files,
     configFile,
@@ -113,6 +120,9 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
     dir,
     playwright: m.config.playwright?.configPath
       ? { configFile: m.config.playwright.configPath.replace(/^\.\//, ""), projects: m.config.playwright.projects }
+      : null,
+    api: m.check.checkType === "API"
+      ? { failing: readApiRecording(dir, m.recordings.apiFailing), passing: readApiRecording(dir, m.recordings.apiPassing) }
       : null,
     scenes,
     envAssumptions: m.envAssumptions,

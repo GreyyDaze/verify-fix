@@ -13,6 +13,7 @@ export interface CandidateCostRow {
   checklyCloudRuns: number;
   localRuns: number;
   browserProcesses: number;
+  httpRequests: number;
   mutationRuns: number;
   totalCompletedRuns: number;
   wallTimeMs: number;
@@ -24,6 +25,7 @@ export interface CostGroup {
   checklyCloudRuns: number;
   localRuns: number;
   browserProcesses: number;
+  httpRequests: number;
   mutationRuns: number;
   totalCompletedRuns: number;
   wallTimeMs: number;
@@ -34,7 +36,7 @@ export interface CostMatrix {
   byVerdict: Record<VerdictValue, CostGroup>;
 }
 
-const emptyGroup = (): CostGroup => ({ candidates: 0, checklyTestSessions: 0, checklyCloudRuns: 0, localRuns: 0, browserProcesses: 0, mutationRuns: 0, totalCompletedRuns: 0, wallTimeMs: 0 });
+const emptyGroup = (): CostGroup => ({ candidates: 0, checklyTestSessions: 0, checklyCloudRuns: 0, localRuns: 0, browserProcesses: 0, httpRequests: 0, mutationRuns: 0, totalCompletedRuns: 0, wallTimeMs: 0 });
 
 export function buildCostMatrix(directory: string): CostMatrix {
   const root = resolve(directory);
@@ -67,6 +69,7 @@ export function buildCostMatrix(directory: string): CostMatrix {
       checklyCloudRuns: cloudRuns,
       localRuns,
       browserProcesses: report.cost.browserProcesses ?? report.cost.localPlaywrightRuns ?? 0,
+      httpRequests: report.cost.httpRequests ?? 0,
       mutationRuns: report.cost.mutationRuns ?? 0,
       totalCompletedRuns: report.cost.runs ?? cloudRuns + localRuns,
       wallTimeMs: report.cost.wallTimeMs ?? 0,
@@ -81,6 +84,7 @@ export function buildCostMatrix(directory: string): CostMatrix {
     group.checklyCloudRuns += row.checklyCloudRuns;
     group.localRuns += row.localRuns;
     group.browserProcesses += row.browserProcesses;
+    group.httpRequests += row.httpRequests;
     group.mutationRuns += row.mutationRuns;
     group.totalCompletedRuns += row.totalCompletedRuns;
     group.wallTimeMs += row.wallTimeMs;
@@ -92,17 +96,17 @@ export function costMatrixMarkdown(matrix: CostMatrix): string {
   const lines = [
     "# verify-fix cost report",
     "",
-    "| candidate | verdict | Checkly sessions | cloud runs | local runs | browser processes | mutation runs | total runs | wall time |",
-    "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
-    ...matrix.rows.map((row) => `| ${row.candidate} | ${row.verdict} | ${row.checklyTestSessions} | ${row.checklyCloudRuns} | ${row.localRuns} | ${row.browserProcesses} | ${row.mutationRuns} | ${row.totalCompletedRuns} | ${(row.wallTimeMs / 1000).toFixed(1)}s |`),
+    "| candidate | verdict | Checkly sessions | cloud runs | local runs | browser processes | HTTP requests | mutation runs | total runs | wall time |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ...matrix.rows.map((row) => `| ${row.candidate} | ${row.verdict} | ${row.checklyTestSessions} | ${row.checklyCloudRuns} | ${row.localRuns} | ${row.browserProcesses} | ${row.httpRequests} | ${row.mutationRuns} | ${row.totalCompletedRuns} | ${(row.wallTimeMs / 1000).toFixed(1)}s |`),
     "",
     "## Totals by verdict",
     "",
-    "| verdict | candidates | Checkly sessions | cloud runs | local runs | browser processes | mutation runs | total runs | wall time |",
-    "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    "| verdict | candidates | Checkly sessions | cloud runs | local runs | browser processes | HTTP requests | mutation runs | total runs | wall time |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ...(["PASS", "FAILED", "UNCERTAIN"] as VerdictValue[]).map((verdict) => {
       const row = matrix.byVerdict[verdict];
-      return `| ${verdict} | ${row.candidates} | ${row.checklyTestSessions} | ${row.checklyCloudRuns} | ${row.localRuns} | ${row.browserProcesses} | ${row.mutationRuns} | ${row.totalCompletedRuns} | ${(row.wallTimeMs / 1000).toFixed(1)}s |`;
+      return `| ${verdict} | ${row.candidates} | ${row.checklyTestSessions} | ${row.checklyCloudRuns} | ${row.localRuns} | ${row.browserProcesses} | ${row.httpRequests} | ${row.mutationRuns} | ${row.totalCompletedRuns} | ${(row.wallTimeMs / 1000).toFixed(1)}s |`;
     }),
     "",
     "No money estimate is included. Account pricing is not captured evidence.",

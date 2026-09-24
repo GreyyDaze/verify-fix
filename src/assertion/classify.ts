@@ -9,6 +9,8 @@ export interface MatcherClass {
 }
 
 const TABLE: Record<string, MatcherClass> = {
+  equals: { kind: "exact", falsifiable: true, note: "Checkly exact equality against a concrete target" },
+  contains: { kind: "property", falsifiable: true, note: "Checkly substring containment; weaker than exact equality" },
   toBe: { kind: "exact", falsifiable: true, note: "exact equality against a concrete target" },
   toEqual: { kind: "exact", falsifiable: true, note: "deep equality against a concrete target" },
   toStrictEqual: { kind: "exact", falsifiable: true, note: "strict deep equality against a concrete target" },

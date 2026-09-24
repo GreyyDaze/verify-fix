@@ -5,7 +5,7 @@
 // envAssumptions + the reproduction-determinism gate (PR-7).
 
 import type { AssertionInventory, Bundle, EvidenceRow, Scene, SceneType } from "../types.ts";
-import { parseInventory, inventoryDiff, type InventoryDiff } from "../assertion/inventory.ts";
+import { parseProjectInventory, inventoryDiff, type InventoryDiff } from "../assertion/inventory.ts";
 
 export interface ContractReport {
   bundle: Bundle;
@@ -31,7 +31,7 @@ export function sceneExpected(scene: Scene): { observed: "pass" | "fail"; oracle
   return { observed: scene.verdict.mustFail ? "fail" : "pass", oracle };
 }
 
-export function buildContract(bundle: Bundle, patchedSource: string): ContractReport {
+export function buildContract(bundle: Bundle, patchedSource: string, patchedFiles?: Map<string, string>, patchedCheckFile?: string): ContractReport {
   const violations: string[] = [];
   for (const scene of bundle.scenes) {
     const p = scene.verdict.provenance;
@@ -46,8 +46,13 @@ export function buildContract(bundle: Bundle, patchedSource: string): ContractRe
     }
   }
 
-  const original = parseInventory(bundle.check.file, bundle.checkSource);
-  const patched = parseInventory(bundle.check.file, patchedSource);
+  const originalFiles = new Map(Object.entries(bundle.files));
+  originalFiles.set(bundle.check.file, bundle.checkSource);
+  const candidateFiles = patchedFiles ? new Map(patchedFiles) : new Map(originalFiles);
+  const candidateCheckFile = patchedCheckFile ?? bundle.check.file;
+  candidateFiles.set(candidateCheckFile, patchedSource);
+  const original = parseProjectInventory(bundle.check.file, originalFiles, bundle.check.logicalId);
+  const patched = parseProjectInventory(candidateCheckFile, candidateFiles, bundle.check.logicalId);
   const diff = inventoryDiff(original, patched);
 
   const unverifiedAssumptions: string[] = [];

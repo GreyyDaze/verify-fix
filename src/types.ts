@@ -84,6 +84,7 @@ export interface RunBudget {
 export interface CheckInfo {
   repo: string;
   file: string;
+  checkType?: "PLAYWRIGHT" | "API" | string;
   /** Display name used by `checkly test --grep` to select only this check. */
   name?: string;
   logicalId: string;
@@ -97,6 +98,41 @@ export interface BundleConfig {
   frequencyMinutes: number | null;
   /** keys only — values never enter a bundle */
   environmentVariables: string[];
+}
+
+export interface SanitizedApiRequest {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body: string | null;
+}
+
+export interface SanitizedApiResponse {
+  status: number;
+  headers: Record<string, string>;
+  contentType: string | null;
+  bodyText: string | null;
+  json: unknown | null;
+  readable: boolean;
+  truncated: boolean;
+}
+
+export interface ApiSetupProvenance {
+  file: string;
+  sha256: string;
+  executed?: boolean;
+  error?: string | null;
+}
+
+export interface ApiRecording {
+  schemaVersion: "api-recording-v1";
+  resultId: string;
+  checkId: string;
+  startedAt: string | null;
+  request: SanitizedApiRequest | null;
+  response: SanitizedApiResponse | null;
+  setup: ApiSetupProvenance | null;
+  unsupportedReasons: string[];
 }
 
 export interface Bundle {
@@ -117,6 +153,8 @@ export interface Bundle {
   dir: string;
   /** Playwright runner details captured from Checkly/project config. */
   playwright?: { configFile: string; projects: string[] } | null;
+  /** Sanitized request/response records for an API incident. */
+  api?: { failing: ApiRecording | null; passing: ApiRecording | null } | null;
   scenes: Scene[];
   envAssumptions: EnvAssumption[];
   determinism: DeterminismEvidence;
@@ -262,6 +300,8 @@ export interface ExecutionCost {
   localRuns: number;
   /** Browser processes started by local Playwright executions. */
   browserProcesses: number;
+  /** Completed API requests, including deterministic response replays. */
+  httpRequests?: number;
   mutationRuns: number;
   wallTimeMs: number;
   byScene: SceneCost[];
@@ -277,6 +317,7 @@ export function emptyExecutionCost(): ExecutionCost {
     checklyResultIds: [],
     localRuns: 0,
     browserProcesses: 0,
+    httpRequests: 0,
     mutationRuns: 0,
     wallTimeMs: 0,
     byScene: [],

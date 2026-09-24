@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server'
+import { BOOKING_SLOTS } from './catalog'
 
 export const dynamic = 'force-dynamic'
-
-const SLOTS = ['09:30', '10:00', '10:30']
 
 /**
  * GET /api/slots
@@ -15,5 +14,5 @@ const SLOTS = ['09:30', '10:00', '10:30']
 export async function GET() {
   const delay = Number(process.env.SLOT_LOAD_DELAY_MS ?? 1500)
   if (delay > 0) await new Promise((r) => setTimeout(r, delay))
-  return NextResponse.json({ slots: SLOTS, delayMs: delay })
+  return NextResponse.json({ slots: BOOKING_SLOTS, delayMs: delay })
 }

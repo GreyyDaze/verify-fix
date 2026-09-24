@@ -38,7 +38,7 @@ export function parseMode(mode: string | undefined | null): ParsedMode {
     if (n >= 2 && n <= 8) return { kind: "live-concurrent", concurrency: n };
     return { kind: "unknown", raw, reason: `concurrency must be 2..8, got ${conc[1]}` };
   }
-  const replay = /^replay:(.+\.har)$/.exec(raw);
+  const replay = /^replay:(.+(?:\.har|\.api\.json))$/.exec(raw);
   if (replay) return { kind: "replay", har: replay[1] };
   if (raw.startsWith("inject:<")) {
     // `inject:<failing request unknown>` — written by the bundle command when the

@@ -37,6 +37,7 @@ test("cost report lists every candidate and groups exact runs and wall time by v
     checklyCloudRuns: 10,
     localRuns: 20,
     browserProcesses: 20,
+    httpRequests: 0,
     mutationRuns: 1,
     totalCompletedRuns: 30,
     wallTimeMs: 30_000,

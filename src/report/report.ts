@@ -125,6 +125,7 @@ export function buildReport(contract: ContractReport, decision: Decision, observ
     lines.push(`- Checkly cloud check runs: ${c.checklyCloudRuns}`);
     lines.push(`- Local runs: ${c.localRuns}`);
     lines.push(`- Browser processes: ${c.browserProcesses}`);
+    lines.push(`- Completed API requests/replays: ${c.httpRequests ?? 0}`);
     lines.push(`- Mutation runs: ${c.mutationRuns}`);
     lines.push(`- Total completed runs: ${c.runs}`);
     lines.push(`- Wall time: ${(c.wallTimeMs / 1000).toFixed(1)}s`);

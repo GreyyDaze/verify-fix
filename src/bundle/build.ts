@@ -23,6 +23,8 @@ import { sanitizeHar } from "./sanitize.ts";
 import { buildManifest, expectedReceived, findOverlappingRuns, groupErrorMatches, rcaFit, rcaMentionsReceived, resultErrors, runOutcome, type FetchedResult } from "./manifest.ts";
 import { measureDeterminism, type MeasureResult, type Runner } from "./measure.ts";
 import type { ManifestV3 } from "./types.ts";
+import { apiRecordingFromResult, setupProvenance } from "../api/recording.ts";
+import { parseApiCheckProject } from "../api/model.ts";
 
 export interface BuildOptions {
   checkId: string;
@@ -88,6 +90,46 @@ function firstExisting(dir: string, names: string[]): string | null {
   return null;
 }
 
+function findApiCheckFiles(root: string, max = 100): string[] {
+  const out: string[] = [];
+  const walk = (dir: string, depth: number) => {
+    if (out.length >= max || depth > 8) return;
+    for (const name of readdirSync(dir)) {
+      if (["node_modules", ".git", ".next", "dist", "build", "test-results", "playwright-report"].includes(name)) continue;
+      const file = join(dir, name);
+      const stat = statSync(file);
+      if (stat.isDirectory()) walk(file, depth + 1);
+      else if (/\.check\.[cm]?[jt]sx?$/.test(name)) out.push(file);
+    }
+  };
+  walk(root, 0);
+  return out.sort();
+}
+
+function relativeModule(root: string, from: string, specifier: string): string | null {
+  const base = resolve(dirname(from), specifier);
+  const candidates = [base, `${base}.ts`, `${base}.tsx`, `${base}.js`, `${base}.mjs`, `${base}.cjs`, join(base, "index.ts"), join(base, "index.tsx"), join(base, "index.js")];
+  const file = candidates.find((candidate) => existsSync(candidate) && statSync(candidate).isFile()) ?? null;
+  return file && !relative(root, file).startsWith("..") ? file : null;
+}
+
+function collectModuleClosure(root: string, initial: string[], sources: Array<{ path: string; content: string }>): void {
+  const seen = new Set(sources.map((source) => source.path.replace(/\\/g, "/")));
+  const queue = [...initial];
+  while (queue.length) {
+    const file = queue.shift()!;
+    const rel = relative(root, file).replace(/\\/g, "/");
+    if (seen.has(rel)) continue;
+    const content = readFileSync(file, "utf8");
+    sources.push({ path: rel, content });
+    seen.add(rel);
+    for (const match of content.matchAll(/(?:import|export)\s+(?:[^'";]+?\s+from\s+)?['"](\.[^'"]+)['"]/g)) {
+      const imported = relativeModule(root, file, match[1]);
+      if (imported) queue.push(imported);
+    }
+  }
+}
+
 interface ProjectSources {
   sources: Array<{ path: string; content: string }>;
   mainSource: string | null;
@@ -145,6 +187,32 @@ export function collectProjectSources(check: ChecklyCheck, projectDir: string | 
       warnings.push(`no checkly.config.* found in ${root}`);
     }
 
+    if (check.checkType === "API") {
+      const candidates = findApiCheckFiles(root);
+      const selected = candidates.find((file) => {
+        const content = readFileSync(file, "utf8");
+        return new RegExp(`name\\s*:\\s*['\"]${check.name.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}['\"]`).test(content);
+      }) ?? (candidates.length === 1 ? candidates[0] : null);
+      if (selected) {
+        collectModuleClosure(root, [selected], sources);
+        mainSource = relative(root, selected).replace(/\\/g, "/");
+        const fileMap = new Map(sources.map((source) => [source.path.replace(/\\/g, "/"), source.content]));
+        const model = parseApiCheckProject(mainSource, fileMap);
+        if (model?.setupFile) {
+          const setup = resolve(root, model.setupFile);
+          if (existsSync(setup)) collectModuleClosure(root, [setup], sources);
+          else warnings.push(`API setup entrypoint ${model.setupFile} was not found`);
+        }
+        if (model?.teardownFile) {
+          const teardown = resolve(root, model.teardownFile);
+          if (existsSync(teardown)) collectModuleClosure(root, [teardown], sources);
+          else warnings.push(`API teardown entrypoint ${model.teardownFile} was not found`);
+        }
+      } else {
+        warnings.push(`no ApiCheck source matching ${check.name} was found in ${root}`);
+      }
+    }
+
     if (check.checkType === "PLAYWRIGHT") {
       const configuredPath = check.playwrightConfigPath ?? playwright.configPath;
       const configured = configuredPath ? resolve(root, configuredPath) : null;
@@ -185,6 +253,7 @@ async function fetchResultWithTrace(
   rawDir: string | null,
   log: (l: string) => void,
   toolVersion: string,
+  secretValues: string[],
 ): Promise<{ fetched: FetchedResult; warnings: string[] }> {
   const warnings: string[] = [];
   let detail: CheckResult | null = null;
@@ -193,15 +262,16 @@ async function fetchResultWithTrace(
   } catch (err) {
     warnings.push(`${label}: could not load result detail (${(err as Error).message})`);
   }
+  const apiRecording = detail ? apiRecordingFromResult(checkId, detail, secretValues) : null;
   let manifestEntries: AssetManifestEntry[] = [];
   try {
-    const m = await client.getAssets(checkId, summary.id, "trace");
+    const m = await client.getAssets(checkId, summary.id, apiRecording ? undefined : "trace");
     manifestEntries = m.assets ?? [];
     if (m.truncated) warnings.push(`${label}: asset manifest truncated (${m.entriesReturned}/${m.entriesTotal})`);
   } catch (err) {
     warnings.push(`${label}: could not list assets (${(err as Error).message})`);
   }
-  if (manifestEntries.length === 0) warnings.push(`${label}: no Playwright trace asset on result ${summary.id} (is trace: 'on' in playwright.config.ts?)`);
+  if (!apiRecording && manifestEntries.length === 0) warnings.push(`${label}: no Playwright trace asset on result ${summary.id} (is trace: 'on' in playwright.config.ts?)`);
 
   const archiveCache = new Map<string, Buffer>();
   const extracts: TraceExtract[] = [];
@@ -221,6 +291,9 @@ async function fetchResultWithTrace(
         buf = await client.download(asset.url);
       }
       assetsOut.push({ result: label, name: asset.name, type: asset.type, bytes: buf.length, sha256: sha256(buf) });
+      // API assets may contain wire-level authorization data. Hash them for
+      // provenance, but never write or parse them into a bundle.
+      if (apiRecording) continue;
       if (rawDir) {
         mkdirSync(rawDir, { recursive: true });
         writeFileSync(join(rawDir, basename(asset.archive?.entryName ?? asset.name) || "trace.zip"), buf);
@@ -249,10 +322,10 @@ async function fetchResultWithTrace(
       },
     };
   }
-  return { fetched: { summary, detail, extract }, warnings };
+  return { fetched: { summary, detail, extract, apiRecording }, warnings };
 }
 
-function trimmedResult(detail: CheckResult | null): Record<string, unknown> | null {
+function trimmedResult(detail: CheckResult | null, apiRecording?: FetchedResult["apiRecording"]): Record<string, unknown> | null {
   if (!detail) return null;
   const r = detail.playwrightCheckResult ?? detail.browserCheckResult ?? detail.multiStepCheckResult ?? null;
   return {
@@ -269,12 +342,13 @@ function trimmedResult(detail: CheckResult | null): Record<string, unknown> | nu
     runtimeVersion: r?.runtimeVersion ?? null,
     pages: r?.pages?.map((p) => ({ url: p.url })) ?? [],
     traceSummary: r?.traceSummary ?? null,
-    apiCheckResult: detail.apiCheckResult
+    apiCheckResult: apiRecording
       ? {
-          request: { method: detail.apiCheckResult.request?.method, url: detail.apiCheckResult.request?.url },
-          response: { status: detail.apiCheckResult.response?.status, statusText: detail.apiCheckResult.response?.statusText },
-          requestError: detail.apiCheckResult.requestError ?? null,
-          assertions: detail.apiCheckResult.assertions ?? [],
+          request: apiRecording.request ? { method: apiRecording.request.method, url: apiRecording.request.url } : null,
+          response: apiRecording.response ? { status: apiRecording.response.status, contentType: apiRecording.response.contentType, readable: apiRecording.response.readable, truncated: apiRecording.response.truncated } : null,
+          requestError: detail.apiCheckResult?.requestError ? "request error present; sensitive message omitted" : null,
+          assertionCount: detail.apiCheckResult?.assertions?.length ?? null,
+          recording: `recordings/${detail.hasFailures || detail.hasErrors ? "failing" : "passing"}.api.json`,
         }
       : null,
   };
@@ -341,12 +415,12 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   let failing: FetchedResult | null = null;
   let passing: FetchedResult | null = null;
   if (failingSummary) {
-    const r = await fetchResultWithTrace(client, check.id, failingSummary, "failing", bodies, assets, rawDir ? join(rawDir, "failing") : null, log, toolVersion);
+    const r = await fetchResultWithTrace(client, check.id, failingSummary, "failing", bodies, assets, rawDir ? join(rawDir, "failing") : null, log, toolVersion, secretValues);
     failing = r.fetched;
     warnings.push(...r.warnings);
   }
   if (passingSummary) {
-    const r = await fetchResultWithTrace(client, check.id, passingSummary, "passing", bodies, assets, rawDir ? join(rawDir, "passing") : null, log, toolVersion);
+    const r = await fetchResultWithTrace(client, check.id, passingSummary, "passing", bodies, assets, rawDir ? join(rawDir, "passing") : null, log, toolVersion, secretValues);
     passing = r.fetched;
     warnings.push(...r.warnings);
   }
@@ -412,6 +486,19 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   // 5. sources
   const proj = collectProjectSources(check, opts.projectDir, failing?.detail ? (failing.detail.playwrightCheckResult ?? failing.detail.browserCheckResult ?? failing.detail.multiStepCheckResult)?.errors ?? [] : []);
   warnings.push(...proj.warnings);
+  if (check.checkType === "API" && proj.mainSource) {
+    const sourceMap = new Map(proj.sources.map((source) => [source.path.replace(/\\/g, "/"), source.content]));
+    const model = parseApiCheckProject(proj.mainSource, sourceMap);
+    if (model?.setupFile) {
+      const source = sourceMap.get(model.setupFile);
+      if (source) {
+        if (failing?.apiRecording) failing.apiRecording.setup = setupProvenance(model.setupFile, source);
+        if (passing?.apiRecording) passing.apiRecording.setup = setupProvenance(model.setupFile, source);
+      } else {
+        warnings.push(`API setup provenance is missing because ${model.setupFile} was not captured`);
+      }
+    }
+  }
   log(`[bundle] sources: ${proj.sources.map((s) => s.path).join(", ") || "none"}; main=${proj.mainSource ?? "none"}`);
 
   // 6. measurement
@@ -424,6 +511,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
         sequentialRuns: opts.measure ?? 0,
         overlapPairs: opts.measureOverlap ?? 0,
         targetUrl: opts.targetUrl,
+        grep: check.name,
         runner: deps.runner,
         log,
       });
@@ -434,6 +522,8 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   const recordings = {
     failing: failing?.extract ? "recordings/failing.har" : null,
     passing: passing?.extract ? "recordings/passing.har" : null,
+    apiFailing: failing?.apiRecording ? "recordings/failing.api.json" : null,
+    apiPassing: passing?.apiRecording ? "recordings/passing.api.json" : null,
     bodies,
   };
   const manifest = buildManifest({
@@ -463,10 +553,12 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   for (const s of proj.sources) files.push({ file: join("check", s.path), text: s.content });
   if (failing?.extract) files.push({ file: "recordings/failing.har", text: JSON.stringify(sanitizeHar(failing.extract.har), null, 1) + "\n" });
   if (passing?.extract) files.push({ file: "recordings/passing.har", text: JSON.stringify(sanitizeHar(passing.extract.har), null, 1) + "\n" });
+  if (failing?.apiRecording) files.push({ file: "recordings/failing.api.json", text: JSON.stringify(failing.apiRecording, null, 2) + "\n" });
+  if (passing?.apiRecording) files.push({ file: "recordings/passing.api.json", text: JSON.stringify(passing.apiRecording, null, 2) + "\n" });
   if (failing?.extract) files.push({ file: "recordings/failing.actions.json", text: JSON.stringify(failing.extract.actions.map(({ params: _p, ...a }) => a), null, 1) + "\n" });
   if (passing?.extract) files.push({ file: "recordings/passing.actions.json", text: JSON.stringify(passing.extract.actions.map(({ params: _p, ...a }) => a), null, 1) + "\n" });
-  if (failing) files.push({ file: "results/failing.json", text: JSON.stringify(trimmedResult(failing.detail) ?? failing.summary, null, 2) + "\n" });
-  if (passing) files.push({ file: "results/passing.json", text: JSON.stringify(trimmedResult(passing.detail) ?? passing.summary, null, 2) + "\n" });
+  if (failing) files.push({ file: "results/failing.json", text: JSON.stringify(trimmedResult(failing.detail, failing.apiRecording) ?? failing.summary, null, 2) + "\n" });
+  if (passing) files.push({ file: "results/passing.json", text: JSON.stringify(trimmedResult(passing.detail, passing.apiRecording) ?? passing.summary, null, 2) + "\n" });
   if (rca || errorGroup) files.push({ file: "rca.json", text: JSON.stringify({ errorGroup: manifest.errorGroup, rca, ...(replacedRca ? { replacedRca } : {}) }, null, 2) + "\n" });
   // the result window the decisions were made from (ids + timestamps only), so
   // the overlap evidence and the pass rate can be re-checked offline

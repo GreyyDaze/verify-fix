@@ -6,6 +6,7 @@
 import type { Assertion, AssertionInventory } from "../types.ts";
 import { assertionId, normalizeSubject } from "./id.ts";
 import { isFalsifiable, isWeakMatcher, matcherClass } from "./classify.ts";
+import { apiInventory, parseApiCheckProject } from "../api/model.ts";
 
 /**
  * Find `expect(<subject>).<matcher>(<target>)` calls on one line with balanced
@@ -210,6 +211,17 @@ export function parseInventory(checkFile: string, source: string): AssertionInve
     }
   }
   return { checkFile, assertions, steps, totalAssertions: assertions.length };
+}
+
+/**
+ * Parse the complete monitoring source tree when the check is declarative.
+ * Imported assertion arrays and constants are resolved by the API model parser.
+ * Browser checks keep the existing single-file parser and assertion identity.
+ */
+export function parseProjectInventory(checkFile: string, files: Map<string, string>, logicalId?: string | null): AssertionInventory {
+  const api = parseApiCheckProject(checkFile, files, logicalId);
+  if (api) return apiInventory(api);
+  return parseInventory(checkFile, files.get(checkFile) ?? files.get(checkFile.replace(/^\.\//, "")) ?? "");
 }
 
 export interface InventoryDiff {

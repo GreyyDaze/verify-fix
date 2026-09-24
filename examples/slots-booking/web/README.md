@@ -13,7 +13,9 @@ not a core dependency.
 app/, lib/              Next.js app
 playwright.config.ts    standard Playwright config (ENVIRONMENT_URL → baseURL, trace: 'on')
 tests/booking.spec.ts   the Playwright test that Checkly runs as the check
-checkly.config.ts       Playwright Check Suite: 5 min, two parallel regions, one declared user per region
+checks/availability.*   authenticated ApiCheck and its setup entrypoint
+app/api/v1/availability exact booking-availability JSON contract
+checkly.config.ts       one project: Playwright suite + ApiCheck, two regions
 ```
 
 ```bash
@@ -25,12 +27,13 @@ npx checkly login && npm run checkly:test     # ad-hoc run on Checkly's cloud (n
 npm run checkly:deploy                        # create/update the scheduled check
 ```
 
-Env vars (all optional, names only — see `.env.example`):
+App env vars (names only — see `.env.example`):
 `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` (or `KV_REST_API_URL` /
 `KV_REST_API_TOKEN`) for the shared session store, `SLOT_LOAD_DELAY_MS` for the
-race window (default 1500). Checkly credentials come from `npx checkly login`
-or `CHECKLY_API_KEY` + `CHECKLY_ACCOUNT_ID` in your shell — never from a file
-in this folder.
+race window (default 1500), and `API_TOKEN` for the authenticated availability
+route. `API_TOKEN` is required for the API example. Checkly credentials come
+from `npx checkly login` or `CHECKLY_API_KEY` + `CHECKLY_ACCOUNT_ID` in your
+shell. Never write these values into this folder.
 
 `checkly.config.ts` sets `bundle.packages.prune: { dependencies: true }` so
 Checkly's runners install only the dev side of this `package.json`
@@ -66,3 +69,72 @@ variables only after verification passes.
 `CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET` only when CI supplies it. It
 sends that value through Vercel's automation header. Public previews need no
 bypass value.
+
+## Phase 6 API baseline on a Mac
+
+Run these commands only from your Mac. Use the real production URL printed by
+Vercel. Do not guess it. The commands keep secrets in the shell and in the two
+providers.
+
+```bash
+cd /path/to/verify-fix/examples/slots-booking/web
+npm ci
+npx checkly login
+
+export API_TOKEN="$(openssl rand -hex 32)"
+export ENVIRONMENT_URL="https://your-real-vercel-production-url"
+
+# Add the same route token to the existing Vercel project.
+printf '%s' "$API_TOKEN" | npx vercel env add API_TOKEN production
+npx vercel --prod
+
+# First prove the ApiCheck against production without changing scheduled checks.
+CHECKLY_NO_DOTENV=1 npx checkly test \
+  --no-record \
+  --location us-east-1 \
+  --grep '^slots availability API$' \
+  -e "ENVIRONMENT_URL=$ENVIRONMENT_URL" \
+  -e "API_TOKEN=$API_TOKEN"
+
+# Review the deployment plan. Then deploy both checks in this one Checkly project.
+CHECKLY_NO_DOTENV=1 npx checkly deploy --preview
+CHECKLY_NO_DOTENV=1 npx checkly deploy --force
+```
+
+Stop here until `slots availability API` has real passing history in Checkly.
+The baseline response is:
+
+```json
+{ "slot": "09:30", "availability": "AVAILABLE" }
+```
+
+The incident step comes later. It changes only the application response field
+to `status`. It does not deploy a matching check change. After the scheduled
+check fails, obtain its real ID without copying account data into the repo:
+
+```bash
+export CHECK_ID="$(npx checkly api /v1/checks | jq -r '.[] | select(.name == "slots availability API") | .id')"
+test -n "$CHECK_ID"
+```
+
+From the repository root, build the trusted package and let its CLI create the
+bundle. The command below records result history, sanitized API evidence, setup
+provenance, asset hashes, and the available RCA. It never writes `API_TOKEN`.
+
+```bash
+cd /path/to/verify-fix
+npm ci
+npm run build
+export VERIFY_FIX_TGZ="$(npm pack --json | jq -r '.[0].filename')"
+npm exec --yes --package="$PWD/$VERIFY_FIX_TGZ" -- verify-fix bundle \
+  --check "$CHECK_ID" \
+  --project "$PWD/examples/slots-booking/web" \
+  --out "$PWD/incidents/slots-availability-api" \
+  --measure 20 \
+  --target "$ENVIRONMENT_URL" \
+  --trigger-rca
+```
+
+Rocky Automatic Repair must remain off. Do not commit a bundle until its secret
+scan and golden test pass. Do not run `checkly deploy` for the repair until the
+exact-revision verify-fix gate passes.

@@ -2,14 +2,15 @@
 // written. No network, no filesystem: everything here is unit-testable and
 // deterministic for the same inputs.
 
-import { parseInventory } from "../assertion/inventory.ts";
+import { parseInventory, parseProjectInventory } from "../assertion/inventory.ts";
 import { fnv1a } from "../assertion/id.ts";
-import type { AssertionInventory } from "../types.ts";
+import type { ApiRecording, AssertionInventory } from "../types.ts";
 import type { ChecklyCheck, CheckResult, CheckResultSummary, ErrorGroup, PlaywrightResultError, RootCauseAnalysis } from "../checkly/types.ts";
 import { stripAnsi, type TraceExtract } from "../trace/trace-to-har.ts";
 import type { HarEntry } from "../trace/har-types.ts";
 import { envVarNamesOnly } from "./sanitize.ts";
 import { classifyRca } from "./rca-mode.ts";
+import { parseApiCheckProject } from "../api/model.ts";
 import type { MeasureResult } from "./measure.ts";
 import type { DeterminismV3, FailurePoint, ManifestV3, OverlappingRun, ResultRef, SceneV3 } from "./types.ts";
 
@@ -17,6 +18,7 @@ export interface FetchedResult {
   summary: CheckResultSummary;
   detail: CheckResult | null;
   extract: TraceExtract | null;
+  apiRecording?: ApiRecording | null;
 }
 
 export interface ManifestInputs {
@@ -39,7 +41,7 @@ export interface ManifestInputs {
     playwright?: { configPath: string | null; projects: string[]; tags: string[] };
   };
   measurement: MeasureResult | null;
-  recordings: { failing: string | null; passing: string | null; bodies: string };
+  recordings: { failing: string | null; passing: string | null; bodies: string; apiFailing?: string | null; apiPassing?: string | null };
   assets: ManifestV3["provenance"]["assets"];
   apiCalls: ManifestV3["provenance"]["apiCalls"];
   accountId: string;
@@ -412,6 +414,9 @@ export function detectTargetResolution(check: ChecklyCheck, sources: Array<{ pat
 }
 
 function buildInventory(sources: Array<{ path: string; content: string }>, mainSource: string | null): AssertionInventory | null {
+  if (mainSource && /\.check\.[cm]?[jt]sx?$/.test(mainSource)) {
+    return parseProjectInventory(mainSource, new Map(sources.map((source) => [source.path, source.content])));
+  }
   const specs = sources.filter((s) => s.path === mainSource || /\.(spec|test)\.[cm]?[jt]sx?$/.test(s.path));
   if (specs.length === 0) return null;
   const merged: AssertionInventory = { checkFile: mainSource ?? specs[0].path, assertions: [], steps: [], totalAssertions: 0 };
@@ -474,9 +479,14 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   const locations = check.locations ?? [];
   const runParallel = Boolean(check.runParallel);
   const inventory = buildInventory(input.sources, input.mainSource);
+  const apiSourceModel = check.checkType === "API" && input.mainSource
+    ? parseApiCheckProject(input.mainSource, new Map(input.sources.map((source) => [source.path, source.content])))
+    : null;
+  const checkLogicalId = apiSourceModel?.logicalId || input.project.logicalId;
   const failurePoint = detectFailurePoint(failing?.extract ?? null, passing?.extract ?? null, failing?.detail ?? null, input.sources);
   const resolution = detectTargetResolution(check, input.sources);
   const recordedOrigin =
+    originOf(failing?.apiRecording?.request?.url ?? passing?.apiRecording?.request?.url ?? null) ??
     originOf(failing?.extract?.baseURL ?? passing?.extract?.baseURL ?? null) ??
     originOf((failing ?? passing)?.extract?.har.log.entries.find((e) => e._resourceType === "document")?.request.url ?? null);
 
@@ -583,7 +593,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
     verifiedBy: "verify-fix:source-scan",
   });
   if (recordedOrigin) {
-    envAssumptions.push({ id: "recorded-origin", text: `recorded runs hit ${recordedOrigin}`, verified: true, verifiedBy: "playwright-trace" });
+    envAssumptions.push({ id: "recorded-origin", text: `recorded runs hit ${recordedOrigin}`, verified: true, verifiedBy: failing?.apiRecording ? "checkly:api-result" : "playwright-trace" });
   }
   if (siblingRuns.length) {
     envAssumptions.push({
@@ -632,6 +642,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   const lastAssertion = inventory?.assertions.at(-1)?.id ?? null;
   const allAssertionIds = inventory?.assertions.map((a) => a.id) ?? [];
   const failureAssertions = assertionsForFailure(inventory, failurePoint);
+  const apiCheck = check.checkType === "API" && Boolean(failing?.apiRecording ?? passing?.apiRecording);
 
   if (passingId) {
     scenes.push({
@@ -639,7 +650,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
       type: "HEALTHY",
       mode: "live",
       state: `the target behaves as in the last passing run (${passingId}, ${passing!.summary.runLocation}); the fixed check must pass`,
-      verdict: { mustFail: false, provenance: { kind: "recorded", runId: passingId, artifactId: "recordings/passing.har" }, envAssumptions: ["locations", "target-resolution"] },
+      verdict: { mustFail: false, provenance: { kind: "recorded", runId: passingId, artifactId: apiCheck ? "recordings/passing.api.json" : "recordings/passing.har" }, envAssumptions: ["locations", "target-resolution", ...(apiCheck && envVars.length ? ["env-vars"] : [])] },
       experiments: [{ durationSec: 60, repetitions: REPS, expectStable: true }],
       assertionsInvolved: allAssertionIds,
       environment: "target",
@@ -659,28 +670,32 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   }
 
   if (failingId) {
-    const mode = cls.mode === "both" ? "live-concurrent:2" : cls.mode;
-    const alt = cls.mode === "both" ? "replay:failing.har" : undefined;
+    const mode = apiCheck ? "replay:failing.api.json" : cls.mode === "both" ? "live-concurrent:2" : cls.mode;
+    const alt = !apiCheck && cls.mode === "both" ? "replay:failing.har" : undefined;
     scenes.push({
       sceneId: "reproduction",
       type: "REPRODUCTION",
       mode,
       ...(alt ? { alternativeMode: alt } : {}),
       state:
-        mode === "live-concurrent:2"
-          ? `two copies of the check run at once on the target, as the overlapping locations did in the failing run${otherLocationOverlap.length ? ` (${failing!.summary.runLocation} + ${otherLocationOverlap[0].runLocation})` : ""}; the fixed check must pass`
-          : mode === "live"
-            ? "one run of the check against the target as it is now (the failure is persistent, not timing-dependent); the fixed check must pass"
-            : "the responses of the failing run are replayed from recordings/failing.har; the fixed check must pass against them",
+        apiCheck
+          ? "the sanitized API request and changed response from the failing run are replayed; the fixed check must pass"
+          : mode === "live-concurrent:2"
+            ? `two copies of the check run at once on the target, as the overlapping locations did in the failing run${otherLocationOverlap.length ? ` (${failing!.summary.runLocation} + ${otherLocationOverlap[0].runLocation})` : ""}; the fixed check must pass`
+            : mode === "live"
+              ? "one run of the check against the target as it is now (the failure is persistent, not timing-dependent); the fixed check must pass"
+              : "the responses of the failing run are replayed from recordings/failing.har; the fixed check must pass against them",
       verdict: {
         mustFail: false,
-        provenance: { kind: "recorded", runId: failingId, artifactId: "recordings/failing.har" },
+        provenance: { kind: "recorded", runId: failingId, artifactId: apiCheck ? "recordings/failing.api.json" : "recordings/failing.har" },
         // "overlapping-run" is the scene's evidence only when a sibling passed
-        envAssumptions: ["locations", "run-parallel", "shared-account", ...(otherLocationOverlap.length ? ["overlapping-run"] : [])].filter((id) => envAssumptions.some((a) => a.id === id)),
+        envAssumptions: apiCheck
+          ? ["target-resolution", ...(envVars.length ? ["env-vars"] : [])]
+          : ["locations", "run-parallel", "shared-account", ...(otherLocationOverlap.length ? ["overlapping-run"] : [])].filter((id) => envAssumptions.some((a) => a.id === id)),
       },
       experiments: [{ durationSec: 120, repetitions: REPS, expectStable: true }],
       assertionsInvolved: failureAssertions,
-      environment: mode === "replay:failing.har" ? "recording" : "target",
+      environment: mode.startsWith("replay:") ? "recording" : "target",
       notes: [reproductionReason],
     });
 
@@ -690,33 +705,45 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
     // failed but the failing step depends on a request (drift → inject a
     // server error there: the repaired check must still notice a broken
     // dependency); nothing derivable (pending, runs as uncertain).
-    const injectRule = req
-      ? `inject:${req.method} ${req.path.replace(/\?.*$/, "")} -> ${req.status}`
-      : dep
-        ? `inject:${dep.method} ${dep.path.replace(/\?.*$/, "")} -> ${DEPENDENCY_FAILURE_STATUS}`
-        : "inject:<failing request unknown>";
+    const injectRule = apiCheck
+      ? passing?.apiRecording
+        ? "replay:passing.api.json"
+        : "inject:<passing API response unavailable>"
+      : req
+        ? `inject:${req.method} ${req.path.replace(/\?.*$/, "")} -> ${req.status}`
+        : dep
+          ? `inject:${dep.method} ${dep.path.replace(/\?.*$/, "")} -> ${DEPENDENCY_FAILURE_STATUS}`
+          : "inject:<failing request unknown>";
     scenes.push({
       sceneId: "detection",
       type: "DETECTION",
       mode: injectRule as SceneV3["mode"],
-      state: req
-        ? `the failing response (${req.method} ${req.path.replace(/\?.*$/, "")} → ${req.status}) is injected on top of a live run; the fixed check MUST still fail (it may not hide the incident)`
-        : dep
-          ? `no request failed in the incident (the check went stale); the step that failed (${dep.stepTitle}${dep.stepLine ? `, line ${dep.stepLine}` : ""}) depends on ${dep.method} ${dep.path.replace(/\?.*$/, "")} (answered ${dep.passingStatus} ${dep.msBeforeStep} ms before it in the passing run) — that call is answered ${DEPENDENCY_FAILURE_STATUS} on top of a live run; the fixed check MUST still fail`
-          : "the recorded failure is injected on top of a live run; the fixed check must still fail",
+      state: apiCheck
+        ? "the last known-good API response is replayed; a repair for the renamed field MUST fail and must not accept both contracts"
+        : req
+          ? `the failing response (${req.method} ${req.path.replace(/\?.*$/, "")} → ${req.status}) is injected on top of a live run; the fixed check MUST still fail (it may not hide the incident)`
+          : dep
+            ? `no request failed in the incident (the check went stale); the step that failed (${dep.stepTitle}${dep.stepLine ? `, line ${dep.stepLine}` : ""}) depends on ${dep.method} ${dep.path.replace(/\?.*$/, "")} (answered ${dep.passingStatus} ${dep.msBeforeStep} ms before it in the passing run) — that call is answered ${DEPENDENCY_FAILURE_STATUS} on top of a live run; the fixed check MUST still fail`
+            : "the recorded failure is injected on top of a live run; the fixed check must still fail",
       verdict: {
         mustFail: true,
-        provenance: req || !dep ? { kind: "recorded", runId: failingId, artifactId: "recordings/failing.har" } : { kind: "recorded", runId: passing?.summary.id ?? failingId, artifactId: "recordings/passing.har" },
-        envAssumptions: ["target-resolution"],
+        provenance: apiCheck
+          ? { kind: "recorded", runId: passing?.summary.id ?? failingId, artifactId: "recordings/passing.api.json" }
+          : req || !dep
+            ? { kind: "recorded", runId: failingId, artifactId: "recordings/failing.har" }
+            : { kind: "recorded", runId: passing?.summary.id ?? failingId, artifactId: "recordings/passing.har" },
+        envAssumptions: ["target-resolution", ...(apiCheck && envVars.length ? ["env-vars"] : [])],
       },
       experiments: [{ durationSec: 60, repetitions: REPS, expectStable: true }],
       assertionsInvolved: failureAssertions,
-      environment: "target+recording",
-      ...(req
-        ? {}
-        : dep
-          ? { notes: [`derived from the passing run's timeline: ${dep.method} ${dep.path.replace(/\?.*$/, "")} is the last API call before the failing step; a ${DEPENDENCY_FAILURE_STATUS} there is a real failure a repaired check may not hide`] }
-          : { notes: ["no failing API request could be identified in the trace and the failing step has no request before it in the passing run; the scene runs as uncertain"] }),
+      environment: apiCheck ? "recording" : "target+recording",
+      ...(apiCheck
+        ? { notes: [passing?.apiRecording ? "the passing result supplies the opposite field contract" : "no passing API response was captured; the scene runs as uncertain"] }
+        : req
+          ? {}
+          : dep
+            ? { notes: [`derived from the passing run's timeline: ${dep.method} ${dep.path.replace(/\?.*$/, "")} is the last API call before the failing step; a ${DEPENDENCY_FAILURE_STATUS} there is a real failure a repaired check may not hide`] }
+            : { notes: ["no failing API request could be identified in the trace and the failing step has no request before it in the passing run; the scene runs as uncertain"] }),
     });
   } else {
     notes.push("no failing result found for this check: REPRODUCTION and DETECTION scenes are absent until an incident is captured (re-run `verify-fix bundle` after a failure)");
@@ -738,7 +765,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
 
   const primaryFile = input.mainSource ?? input.sources[0]?.path ?? null;
   const failingErrors = resultErrors(failing?.detail ?? null);
-  const incidentSlug = (input.project.logicalId ?? check.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  const incidentSlug = (checkLogicalId ?? check.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
   // Stable across re-captures of the same failure. When Checkly filed a
   // different failure under an existing group (its Received differs), the
   // run's Received joins the key so the two incidents do not share an id.
@@ -771,7 +798,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
       repo: input.project.repoUrl,
       file: primaryFile,
       files: input.sources.map((s) => s.path),
-      logicalId: input.project.logicalId,
+      logicalId: checkLogicalId,
       deployedId: check.id,
       projectCommit: input.project.gitCommit,
     },
@@ -840,7 +867,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
     errorGroup: errorGroup
       ? { id: errorGroup.id, cleanedErrorMessage: errorGroup.cleanedErrorMessage, firstSeen: errorGroup.firstSeen, lastSeen: errorGroup.lastSeen }
       : null,
-    reproduction: { mode: cls.mode, matchedRule: cls.matchedRule, matchedText: cls.matchedText, reason: reproductionReason, decidedBy, overlappingRuns },
+    reproduction: { mode: apiCheck ? "replay:failing.api.json" : cls.mode, matchedRule: cls.matchedRule, matchedText: cls.matchedText, reason: apiCheck ? "API incident response is replayed from the sanitized Checkly result" : reproductionReason, decidedBy, overlappingRuns },
     failurePoint,
     recordings: input.recordings,
     scenes,

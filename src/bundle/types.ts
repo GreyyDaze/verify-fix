@@ -6,7 +6,7 @@ import type { SceneType } from "../types.ts";
 import type { AssertionInventory } from "../types.ts";
 import type { ReproductionMode } from "./rca-mode.ts";
 
-export type SceneMode = "live" | "live-concurrent:2" | "replay:failing.har" | "replay:passing.har" | `inject:${string}`;
+export type SceneMode = "live" | "live-concurrent:2" | "replay:failing.har" | "replay:passing.har" | "replay:failing.api.json" | "replay:passing.api.json" | `inject:${string}`;
 
 export interface SceneV3 {
   sceneId: string;
@@ -182,7 +182,7 @@ export interface ManifestV3 {
     overlappingRuns: OverlappingRun[];
   };
   failurePoint: FailurePoint | null;
-  recordings: { failing: string | null; passing: string | null; bodies: string };
+  recordings: { failing: string | null; passing: string | null; bodies: string; apiFailing?: string | null; apiPassing?: string | null };
   scenes: SceneV3[];
   assertions: AssertionInventory | null;
   envAssumptions: Array<{ id: string; text: string; verified: boolean; verifiedBy: string }>;

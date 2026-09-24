@@ -17,6 +17,7 @@ import { inlinePatch, newFiles, originalConfigSource, patchedAssets, patchedChec
 import { applyConfigPolicy, diffCheckConfig, parseCheckConfig, type ConfigPolicy } from "./scene/config-diff.ts";
 import { checkEnv, type EnvCheck } from "./scene/env.ts";
 import type { CandidateRevisionMetadata, CandidateTargetBinding } from "./candidate/revision.ts";
+import { evaluateApiPolicy, type ApiPolicyResult } from "./api/policy.ts";
 
 export const PR12_HEALTHY_RUNS = 5; // PR-12: ≥5 repeated healthy runs, else flake → UNCERTAIN
 
@@ -53,6 +54,7 @@ export interface VerifyResult {
   report: Report;
   envDodge: string | null;
   configPolicy: ConfigPolicy;
+  apiPolicy: ApiPolicyResult | null;
   envCheck: EnvCheck;
   patchedConfig: BundleConfig | null;
   cost: ExecutionCost;
@@ -78,7 +80,21 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   const codeChanged = patchSource !== bundle.checkSource;
   const configPolicy = applyConfigPolicy(diffCheckConfig(originalCfg, patchedCfgView), codeChanged, originalCfg, patchedCfgView);
   const runConfig = patchedConfig(bundle, patch);
-  const declared = [...new Set([...(bundle.config?.environmentVariables ?? []), ...(runConfig?.environmentVariables ?? []), ...configPolicy.declaredEnvKeys])];
+  const candidateFiles = patchedFiles(bundle, patch);
+  const candidateCheckFile = patch.checkFile ?? bundle.check.file;
+  const originalFiles = new Map(Object.entries(bundle.files));
+  originalFiles.set(bundle.check.file, bundle.checkSource);
+  const candidateFileMap = new Map(Object.entries(candidateFiles));
+  candidateFileMap.set(candidateCheckFile, patchSource);
+  const apiPolicy = bundle.check.checkType === "API" || bundle.api
+    ? evaluateApiPolicy(bundle.check.file, originalFiles, candidateCheckFile, candidateFileMap, bundle.check.logicalId)
+    : null;
+  const declared = [...new Set([
+    ...(bundle.config?.environmentVariables ?? []),
+    ...(runConfig?.environmentVariables ?? []),
+    ...configPolicy.declaredEnvKeys,
+    ...(apiPolicy?.candidate?.environmentKeys ?? []),
+  ])];
   let envDodge = detectEnvScopeDodge(bundle.checkSource, patchSource, { locations: runConfig?.locations, declaredEnvKeys: declared });
   const provided = { ...(opts.env ?? {}) };
   const regionalKeys = regionalUserKeys(patchSource, { locations: runConfig?.locations, declaredEnvKeys: declared });
@@ -90,30 +106,38 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   }
   const ctx: RunContext = {
     config: runConfig,
-    files: patchedFiles(bundle, patch),
+    files: candidateFiles,
     assets: patchedAssets(patch),
     ...(patch.checkFile ? { checkFile: patch.checkFile } : {}),
     ...(patch.playwrightConfigFile ? { playwrightConfigFile: patch.playwrightConfigFile } : {}),
     ...(patch.checkName ? { checkName: patch.checkName } : {}),
     phase: "candidate",
   };
-  const envCheck = checkEnv(patchSource, provided, declared);
+  const environmentEntries = apiPolicy
+    ? [candidateCheckFile, apiPolicy.candidate?.setupFile, apiPolicy.candidate?.teardownFile]
+        .filter((file): file is string => Boolean(file))
+        .map((file) => [file, candidateFiles[file]] as const)
+        .filter((entry): entry is readonly [string, string] => typeof entry[1] === "string")
+    : [[candidateCheckFile, patchSource] as const];
+  const environmentSource = environmentEntries.map(([file, source]) => `// ${file}\n${source}`).join("\n");
+  const envCheck = checkEnv(environmentSource || patchSource, provided, declared);
   const added = newFiles(bundle, patch);
 
-  const contract = buildContract(bundle, patchSource);
+  const contract = buildContract(bundle, patchSource, candidateFileMap, candidateCheckFile);
   if (verbose) {
     console.error(`[verify] ${bundle.incidentId}: ${bundle.scenes.length} scenes, determinism gate blocked=${contract.determinismGate.blocked}, config changes=${configPolicy.changes.length}, env missing=${envCheck.missing.map((m) => m.name).join(",") || "none"}`);
   }
 
   const observations = new Map<string, SceneObservation>();
-  const missingEnvReason =
-    envCheck.missing.length > 0
+  const missingEnvReason = apiPolicy?.uncertain
+    ?? (apiPolicy && !opts.target ? "ENVIRONMENT_URL is missing; pass --target so {{ENVIRONMENT_URL}} can be resolved without a fallback" : null)
+    ?? (envCheck.missing.length > 0
       ? `the check reads ${envCheck.missing.map((m) => `${m.form === "handlebars" ? "{{" + m.name + "}}" : "process.env." + m.name} (line ${m.line})`).join(", ")} and no value was provided — pass --env-file; a run with an empty variable would not be the customer's check`
-      : null;
+      : null);
   const undeclaredEnvReason = envCheck.undeclared.length > 0
     ? `the patch reads undeclared environment variable(s): ${envCheck.undeclared.join(", ")}`
     : null;
-  const preflightRejected = patch.rejection ?? staticallyRejected(bundle, patchSource) ?? envDodge ?? configPolicy.rejected ?? undeclaredEnvReason;
+  const preflightRejected = patch.rejection ?? apiPolicy?.rejected ?? staticallyRejected(bundle, patchSource, candidateFileMap, candidateCheckFile) ?? envDodge ?? configPolicy.rejected ?? undeclaredEnvReason;
   if (preflightRejected) {
     if (verbose) console.error(`[verify] static rejection before execution: ${preflightRejected}`);
   } else if (missingEnvReason) {
@@ -153,8 +177,10 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     return observed !== undefined && observed !== "uncertain" && observed === (s.verdict.mustFail ? "fail" : "pass");
   });
   const mutationCtx: RunContext = { ...ctx, phase: "mutation" };
-  for (const m of candidateScenesMatched ? seedMutants(patchSource, bundle.check.file) : []) {
-    const staticKill = staticallyRejected(bundle, m.source);
+  for (const m of candidateScenesMatched ? seedMutants(patchSource, candidateCheckFile, candidateFiles) : []) {
+    const mutantFiles = new Map(candidateFileMap);
+    mutantFiles.set(candidateCheckFile, m.source);
+    const staticKill = staticallyRejected(bundle, m.source, mutantFiles, candidateCheckFile);
     let detObs: SceneObservation | null = null;
     let healthyObs: SceneObservation | null = null;
     let survived: boolean;
@@ -209,7 +235,18 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     decision.verdict = "FAILED";
     decision.exitCode = 1;
   }
+  if (apiPolicy?.rejected) {
+    decision.reasons.push(`API policy: ${apiPolicy.rejected}`);
+    decision.verdict = "FAILED";
+    decision.exitCode = 1;
+  }
   for (const n of configPolicy.notes) decision.reasons.push(`config: ${n}`);
+  for (const n of apiPolicy?.notes ?? []) decision.reasons.push(`API: ${n}`);
+  if (apiPolicy?.uncertain && !patch.rejection && !envDodge && !configPolicy.rejected && !apiPolicy.rejected) {
+    decision.reasons.push(`API evidence unresolved: ${apiPolicy.uncertain}`);
+    decision.verdict = "UNCERTAIN";
+    decision.exitCode = 2;
+  }
   if (envCheck.undeclared.length > 0) {
     decision.reasons.push(`env: the patch reads ${envCheck.undeclared.join(", ")} — not declared on the check; it must be added to the check's environment variables in Checkly (values never enter the bundle)`);
     decision.verdict = "FAILED";
@@ -241,6 +278,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     report,
     envDodge,
     configPolicy,
+    apiPolicy,
     envCheck,
     patchedConfig: runConfig,
     cost,
@@ -249,8 +287,8 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
 
 /** The contract engine's static law applied to a mutant: returns the reason it
  * would be FAILED before any scene runs, or null if only the scenes can tell. */
-export function staticallyRejected(bundle: Bundle, mutantSource: string): string | null {
-  const c = buildContract(bundle, mutantSource);
+export function staticallyRejected(bundle: Bundle, mutantSource: string, files?: Map<string, string>, checkFile?: string): string | null {
+  const c = buildContract(bundle, mutantSource, files, checkFile);
   const core = [...c.diff.removed, ...c.diff.weakened].filter((a) => a.onCriticalPath);
   if (core.length > 0) return `core-path assertion removed/weakened (${core.map((a) => `${a.subject}.${a.matcher}`).join(", ")})`;
   if (c.suppressionCandidates.length > 0) return `suppression candidate (${c.suppressionCandidates.length})`;

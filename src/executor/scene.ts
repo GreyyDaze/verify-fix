@@ -26,6 +26,7 @@ import { fnv1a } from "../assertion/id.ts";
 import { effectiveConcurrency, needsTarget, parseMode, type ParsedMode } from "../scene/modes.ts";
 import { SceneProxy, type ProxyHit } from "../scene/proxy.ts";
 import type { Har } from "../trace/har-types.ts";
+import { ApiSceneExecutor } from "../api/executor.ts";
 
 /** Reproducible per-run randomness seed: same scene + repetition + run → same seed. */
 export function repetitionSeed(sceneId: string, repetition: number, runIndex = 0): number {
@@ -78,6 +79,7 @@ export class SceneExecutor implements ExperimentExecutor {
   private readonly browserExecutablePath: string | undefined;
   private readonly onRepetition: SceneExecutorOptions["onRepetition"];
   private readonly proxy = new SceneProxy();
+  private readonly apiExecutor: ApiSceneExecutor;
   private used = new Map<string, number>();
   private readonly cost: ExecutionCost = emptyExecutionCost();
   private harCache = new Map<string, Har | null>();
@@ -97,6 +99,7 @@ export class SceneExecutor implements ExperimentExecutor {
     this.projectDir = opts.projectDir ?? null;
     this.browserExecutablePath = opts.browserExecutablePath;
     this.onRepetition = opts.onRepetition;
+    this.apiExecutor = new ApiSceneExecutor({ target: this.target, env: this.env, maxRunsPerScene: opts.maxRunsPerScene, verbose: this.verbose });
   }
 
   isLive(): boolean {
@@ -104,13 +107,19 @@ export class SceneExecutor implements ExperimentExecutor {
   }
 
   costReport(): ExecutionCost {
+    const api = this.apiExecutor.costReport();
     return {
       ...this.cost,
-      scenes: this.used.size,
-      runs: this.cost.localRuns,
+      scenes: this.used.size + api.scenes,
+      runs: this.cost.localRuns + api.localRuns,
+      localRuns: this.cost.localRuns + api.localRuns,
+      browserProcesses: this.cost.browserProcesses + api.browserProcesses,
+      httpRequests: (this.cost.httpRequests ?? 0) + (api.httpRequests ?? 0),
+      mutationRuns: this.cost.mutationRuns + api.mutationRuns,
+      wallTimeMs: this.cost.wallTimeMs + api.wallTimeMs,
       checklySessionIds: [...this.cost.checklySessionIds],
       checklyResultIds: [...this.cost.checklyResultIds],
-      byScene: this.cost.byScene.map((row) => ({ ...row })),
+      byScene: [...this.cost.byScene.map((row) => ({ ...row })), ...api.byScene],
     };
   }
 
@@ -189,6 +198,12 @@ export class SceneExecutor implements ExperimentExecutor {
   }
 
   async runScene(bundle: Bundle, patchSource: string, scene: Scene, ctx?: RunContext): Promise<SceneObservation> {
+    if (bundle.check.checkType === "API" || bundle.api) {
+      const observation = await this.apiExecutor.runScene(bundle, patchSource, scene, ctx);
+      this.budgetExhausted ||= this.apiExecutor.budgetExhausted;
+      this.nondeterministicScenes.push(...this.apiExecutor.nondeterministicScenes.filter((id) => !this.nondeterministicScenes.includes(id)));
+      return observation;
+    }
     const mode = parseMode(scene.mode);
     const config = ctx?.config ?? bundle.config;
     const allowed = effectiveConcurrency(config);

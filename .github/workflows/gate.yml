@@ -16,7 +16,7 @@ jobs:
     if: >-
       github.event.deployment_status.state == 'success' &&
       github.event.deployment_status.environment_url != ''
-    uses: GreyyDaze/verify-fix/.github/workflows/protected-gate.yml@185072f9c025fc4d6e4ad19884715350e96fae5a
+    uses: GreyyDaze/verify-fix/.github/workflows/protected-gate.yml@fd2fe8a2b2c8a2974aa3a082fe730f6d621c5d5d
     with:
       deployment_id: ${{ format('{0}', github.event.deployment.id) }}
       deployment_sha: ${{ github.event.deployment.sha }}

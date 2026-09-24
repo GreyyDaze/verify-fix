@@ -62,6 +62,34 @@ Phase 8 starts only after Phase 7 is complete.
 | 8.6 Checkly-native CI flow | Follow Checkly's normal order: keep checks beside application code, deploy the candidate application, test the checked-out candidate checks against `ENVIRONMENT_URL`, merge only after PASS, deploy the application to production, verify the production revision, then run `checkly deploy`. The core accepts any target provider. The Vercel workflow remains one provider adapter. Reports record repository URL, input mode, base SHA, head SHA or local digest, changed files, target URL, target revision, and source-binding strength. |
 | 8.7 Proof matrix | Add external-repository tests for multi-file and multi-hunk changes, new and renamed helpers, deletions, app-only repairs, check-only repairs, combined app/check repairs, configuration and lockfile changes, staged and unstaged edits, untracked files, unsafe links, moving PR heads, target-revision mismatches, fork PRs, and attempts to replace the bundle, verifier, policy, or workflow. The same candidate must produce the same verdict in local and PR modes when both execute the same source and target. Finish with a real GitHub pull request, real preview, real Checkly session, and real protected gate from the user's machine. |
 
+### Important Phase 8 cases
+
+- **Many files and many edit locations.** Read the complete final files. Do not require one diff, one hunk, one file, or an agent-specific response format.
+- **New helper files.** Include new non-ignored files that the candidate monitoring code imports.
+- **Renamed helper files.** Resolve imports from the final tree. Do not fall back to an old path from the incident bundle.
+- **Deleted helper files.** Preserve the deletion. Do not silently restore the captured copy.
+- **Deleted incident check.** Return FAILED when the candidate removes the monitor that reported the incident.
+- **Renamed incident check.** Follow the stable Checkly logical ID. Do not depend only on a file path or display name.
+- **Application-only repair.** Keep the captured monitoring code. Judge the application change through the candidate target URL.
+- **Monitoring-only repair.** Execute the candidate monitoring tree against the supplied target.
+- **Combined repair.** Require the candidate monitoring source and candidate application deployment to belong to the same revision.
+- **Configuration and dependency changes.** Include Checkly configuration, Playwright configuration, package manifests, lockfiles, and imported source in the candidate identity.
+- **Local dirty tree.** Include staged edits, unstaged edits, and non-ignored untracked files in one immutable snapshot.
+- **Local target limitation.** Mark a user-supplied local target as local evidence. Do not let it satisfy the protected merge gate.
+- **Moving pull request.** Pin the head SHA at the start. Reject target metadata for another SHA. Require a new run when the PR head changes.
+- **PR URL and target URL.** Treat them as separate inputs. A PR URL identifies source. Deployment metadata must prove which revision produced the target URL.
+- **Private repository.** Read GitHub authentication from the user's environment. Never write it into project files or reports.
+- **Fork pull request.** Run no protected cloud stage until an authorized reviewer approves access. Never expose production credentials.
+- **Untrusted agent output.** Ignore the agent's description and claimed file list. Inspect Git and the final source tree directly.
+- **Candidate changes to verify-fix.** Execute a pinned trusted package outside the candidate checkout.
+- **Candidate changes to evidence or policy.** Load the incident bundle and verdict policy from a protected base-controlled location.
+- **Candidate changes to CI.** Use a protected gate definition. Do not let the candidate replace the workflow that judges it.
+- **Executable Checkly configuration.** Treat `checkly.config.*` as untrusted code. Run secret-free checks first. Require approval before cloud credentials enter its process.
+- **Candidate package scripts.** Do not run lifecycle scripts in the trusted verification job. Install the browser through a separate trusted step.
+- **Unsafe project entries.** Reject credential files, unsafe symbolic links, submodules that leave the project, build output, dependencies, and files outside the snapshot root.
+- **Monorepo project path.** Record the repository root and Checkly project directory separately. Resolve all candidate paths inside those roots.
+- **Run stability.** Keep the snapshot unchanged until every scene and mutation run finishes. Report one digest for the complete run.
+
 **Done when:** local mode snapshots and verifies a complete dirty working tree without
 requiring a pull request. Pull-request mode resolves and verifies an immutable
 head revision. Both modes support changes across any number of files and any

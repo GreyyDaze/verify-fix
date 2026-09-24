@@ -45,9 +45,10 @@ environment. In each environment, use Checkly's standard names:
 `CHECKLY_ACCOUNT_ID` in GitHub Variables. Optional regional users use
 `TEST_USER_US_EAST_1` and `TEST_USER_EU_WEST_1`. The optional Vercel automation
 bypass secret is also environment-scoped. GitHub environments separate preview
-and production values, so the variable names do not need custom prefixes. Use a
-restricted preview key when one is available. `VERIFY_FIX_BUNDLE` may select a
-newer sanitized incident bundle.
+and production values, so the variable names do not need custom prefixes. This
+repository's controlled proof may use the existing key. Use a restricted
+preview key for arbitrary PRs when one is available. `VERIFY_FIX_BUNDLE` may
+select a newer sanitized incident bundle.
 
 The deployment adapter calls the protected reusable gate at an immutable commit.
 Require that gate's check names in the GitHub ruleset, and require owner review

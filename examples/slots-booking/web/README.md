@@ -3,6 +3,12 @@
 Deployed to Vercel with **Root Directory** = `examples/slots-booking/web`.
 Full description, API table and setup steps: [`../README.md`](../README.md).
 
+This folder is both an example and an integration-test fixture. It stays in
+this repository, but it is excluded from the npm package. The package test
+installs the packed CLI in a separate temporary customer project. The CLI only
+receives a target URL and revision; Vercel is this example's deployment choice,
+not a core dependency.
+
 ```
 app/, lib/              Next.js app
 playwright.config.ts    standard Playwright config (ENVIRONMENT_URL → baseURL, trace: 'on')

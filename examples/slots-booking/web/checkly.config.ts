@@ -43,19 +43,17 @@ export default defineConfig({
         frequency: Frequency.EVERY_5M,
         locations: ['us-east-1', 'eu-west-1'],
 
-        // THE INCIDENT SEED (Phase 2 of the plan):
-        //   runParallel: true  → both locations run at the same moment.
-        //   Both runs log in as the same TEST_USER.
-        //   The app issues one session per account (newest login wins),
-        //   so the slower run books with a superseded token and gets 401.
-        // Real customers do this all the time without realising it.
+        // Keep both locations concurrent. The incident used one shared
+        // TEST_USER, so one login invalidated the other session. The repair
+        // below gives each stable Checkly location its own declared user.
         runParallel: true,
 
-        // Names only. The value below is a non-secret demo account name.
-        // Real credentials would be `secret: true` and never live in git —
-        // see https://www.checklyhq.com/docs/learn/playwright/authentication/
+        // Names only. CI supplies the regional values from its approved
+        // GitHub environment. Nothing secret is committed.
         environmentVariables: [
           { key: 'TEST_USER', value: 'demo' },
+          { key: 'TEST_USER_US_EAST_1', value: process.env.TEST_USER_US_EAST_1 ?? '', secret: true },
+          { key: 'TEST_USER_EU_WEST_1', value: process.env.TEST_USER_EU_WEST_1 ?? '', secret: true },
         ],
       },
     ],

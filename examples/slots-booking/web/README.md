@@ -13,14 +13,14 @@ not a core dependency.
 app/, lib/              Next.js app
 playwright.config.ts    standard Playwright config (ENVIRONMENT_URL → baseURL, trace: 'on')
 tests/booking.spec.ts   the Playwright test that Checkly runs as the check
-checkly.config.ts       Playwright Check Suite: 5 min, us-east-1 + eu-west-1, runParallel, TEST_USER
+checkly.config.ts       Playwright Check Suite: 5 min, two parallel regions, one declared user per region
 ```
 
 ```bash
 npm install
 npm run build && npm run start   # http://localhost:3000
 npm run collision                # proves the one-session-per-account rule
-npx playwright install chromium && ENVIRONMENT_URL=http://localhost:3000 TEST_USER=demo npx playwright test
+npx playwright install chromium && ENVIRONMENT_URL=http://localhost:3000 CHECKLY_REGION=us-east-1 TEST_USER_US_EAST_1=demo npx playwright test
 npx checkly login && npm run checkly:test     # ad-hoc run on Checkly's cloud (never touches scheduled monitors)
 npm run checkly:deploy                        # create/update the scheduled check
 ```

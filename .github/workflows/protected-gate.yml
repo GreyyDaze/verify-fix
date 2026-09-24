@@ -30,7 +30,7 @@ concurrency:
 env:
   NODE_VERSION: "24"
   CANDIDATE_PROJECT_PATH: examples/slots-booking/web
-  VERIFY_FIX_BUNDLE: ${{ vars.VERIFY_FIX_BUNDLE || 'fixtures/bundles/slots-booking-drift' }}
+  VERIFY_FIX_BUNDLE: ${{ vars.VERIFY_FIX_BUNDLE || 'incidents/slots-availability-api' }}
 
 jobs:
   candidate-preflight:
@@ -95,7 +95,7 @@ jobs:
       - name: Check out protected verifier and incident inputs
         uses: actions/checkout@v4
         with:
-          ref: 28a8a5de291379969871776bc489cc1d375b139b
+          ref: 9b39750e61daabc21d80fd7ea3e17d651c3b6088
           path: trusted
           persist-credentials: false
 
@@ -165,7 +165,7 @@ jobs:
       - name: Check out protected verifier and incident inputs
         uses: actions/checkout@v4
         with:
-          ref: 28a8a5de291379969871776bc489cc1d375b139b
+          ref: 9b39750e61daabc21d80fd7ea3e17d651c3b6088
           path: trusted
           persist-credentials: false
 

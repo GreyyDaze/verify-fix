@@ -40,13 +40,14 @@ Checkly's runners install only the dev side of this `package.json`
 
 Create protected GitHub environments named `verify-fix-preview` and
 `verify-fix-production`. Require an authorized reviewer for the preview
-environment. Put a preview-only `CHECKLY_PREVIEW_API_KEY`,
-`VERIFY_FIX_PREVIEW_TEST_USER`, optional preview regional users, and the
-optional Vercel automation bypass secret in GitHub Secrets. Put the matching
-`CHECKLY_PREVIEW_ACCOUNT_ID` in GitHub Variables. Do not reuse production
-credentials in the PR environment. The production environment keeps its
-separate `CHECKLY_API_KEY`, `CHECKLY_ACCOUNT_ID`, and production users.
-`VERIFY_FIX_BUNDLE` may select a newer sanitized incident bundle.
+environment. In each environment, use Checkly's standard names:
+`CHECKLY_API_KEY` and `TEST_USER` in GitHub Secrets, and
+`CHECKLY_ACCOUNT_ID` in GitHub Variables. Optional regional users use
+`TEST_USER_US_EAST_1` and `TEST_USER_EU_WEST_1`. The optional Vercel automation
+bypass secret is also environment-scoped. GitHub environments separate preview
+and production values, so the variable names do not need custom prefixes. Use a
+restricted preview key when one is available. `VERIFY_FIX_BUNDLE` may select a
+newer sanitized incident bundle.
 
 The deployment adapter calls the protected reusable gate at an immutable commit.
 Require that gate's check names in the GitHub ruleset, and require owner review

@@ -214,11 +214,22 @@ jobs:
           if [[ -n "$BYPASS" ]]; then header=(-H "x-vercel-protection-bypass: $BYPASS"); fi
           curl --fail --silent --show-error --retry 18 --retry-delay 5 --retry-all-errors "${header[@]}" "$TARGET_URL/api/health" >/dev/null
 
+      - name: Require approved preview inputs
+        env:
+          CHECKLY_API_KEY: ${{ secrets.CHECKLY_API_KEY }}
+          CHECKLY_ACCOUNT_ID: ${{ vars.CHECKLY_ACCOUNT_ID }}
+          TEST_USER: ${{ secrets.TEST_USER }}
+        shell: bash
+        run: |
+          [[ -n "$CHECKLY_API_KEY" ]] || { echo '::error::CHECKLY_API_KEY is missing from verify-fix-preview'; exit 1; }
+          [[ -n "$CHECKLY_ACCOUNT_ID" ]] || { echo '::error::CHECKLY_ACCOUNT_ID is missing from verify-fix-preview'; exit 1; }
+          [[ -n "$TEST_USER" ]] || { echo '::error::TEST_USER is missing from verify-fix-preview'; exit 1; }
+
       - name: Build protected runtime and deployment metadata
         env:
-          TEST_USER: ${{ secrets.VERIFY_FIX_PREVIEW_TEST_USER }}
-          TEST_USER_US_EAST_1: ${{ secrets.VERIFY_FIX_PREVIEW_TEST_USER_US_EAST_1 }}
-          TEST_USER_EU_WEST_1: ${{ secrets.VERIFY_FIX_PREVIEW_TEST_USER_EU_WEST_1 }}
+          TEST_USER: ${{ secrets.TEST_USER }}
+          TEST_USER_US_EAST_1: ${{ secrets.TEST_USER_US_EAST_1 }}
+          TEST_USER_EU_WEST_1: ${{ secrets.TEST_USER_EU_WEST_1 }}
           BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           TARGET_URL: ${{ inputs.environment_url }}
           TARGET_REVISION: ${{ inputs.deployment_sha }}
@@ -241,8 +252,8 @@ jobs:
       - name: Verify the candidate through the protected gate
         env:
           GH_TOKEN: ${{ github.token }}
-          CHECKLY_API_KEY: ${{ secrets.CHECKLY_PREVIEW_API_KEY }}
-          CHECKLY_ACCOUNT_ID: ${{ vars.CHECKLY_PREVIEW_ACCOUNT_ID }}
+          CHECKLY_API_KEY: ${{ secrets.CHECKLY_API_KEY }}
+          CHECKLY_ACCOUNT_ID: ${{ vars.CHECKLY_ACCOUNT_ID }}
           TARGET_URL: ${{ inputs.environment_url }}
           TARGET_REVISION: ${{ inputs.deployment_sha }}
           PULL_URL: ${{ needs.candidate-preflight.outputs.pull_url }}

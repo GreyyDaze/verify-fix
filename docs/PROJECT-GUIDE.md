@@ -1232,9 +1232,11 @@ runs static verification without a target. A statically acceptable candidate is
 failure blocks immediately. The second job is attached to the protected GitHub
 environment. It installs candidate dependencies with `--ignore-scripts`,
 installs Chromium in a separate step, creates temporary runtime files, and runs
-hybrid verification. PR checks use `CHECKLY_PREVIEW_API_KEY`,
-`CHECKLY_PREVIEW_ACCOUNT_ID`, and preview-only test users. Production
-credentials are never used for PR checks.
+hybrid verification. Both GitHub environments use Checkly's standard
+`CHECKLY_API_KEY`, `CHECKLY_ACCOUNT_ID`, and `TEST_USER` names. Environment
+scoping separates their values without custom variable prefixes. Use a
+restricted preview value when available. Production credentials are not the
+intended long-term input for arbitrary PR checks.
 
 ### Output
 

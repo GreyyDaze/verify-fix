@@ -1089,13 +1089,26 @@ runs, per-scene wall time, and total wall time.
 grouped by PASS, FAILED, and UNCERTAIN. It does not guess money because account
 pricing is not captured evidence.
 
+**Distribution boundary.** The example app remains in this repository because
+real CLI projects commonly keep examples plus end-to-end fixtures beside the
+tool. It is not part of the npm artifact. `npm pack` now builds JavaScript under
+`dist/`; the tarball contains the executable, compiled CLI, and only the two
+TypeScript templates needed by the DSL sandbox. A package integration test
+installs that tarball in a temporary customer project outside this repository.
+It first grades a bad external candidate as FAILED. It then runs the complete
+hybrid path against a customer-named `customer-staging` target and grades the
+good repair as PASS. The target is a generic HTTP origin, not Vercel. The test
+uses fake project-local Playwright and Checkly CLIs for process boundaries, so
+it spends no cloud runs. The package remains `private: true`; publishing and a
+stable package name are separate release decisions.
+
 **Local Phase 5 results.** The source check now uses `booking-status`. Real
 Chromium against `next start` gave PASS for the drift repair with 15 browser
 runs. The `runParallel:false` config repair gave PASS with 15 browser runs. The
 strict per-location user repair gave PASS with 20 browser runs after its final
 source change. The Upstash-compatible session-lease app candidate gave PASS
 with 20 browser runs. Candidates 02–10 and 13 all returned FAILED.
-Candidate 11 returned UNCERTAIN. The suite has 114 tests. All pass.
+Candidate 11 returned UNCERTAIN. The suite has 115 tests. All pass.
 
 ---
 
@@ -1113,10 +1126,12 @@ pairs. The drift bundle reproduces its stale locator in 20/20 runs. Their
 manifests say `method: local-runner`, so the determinism gate is open without
 pretending the numbers came from Checkly's cloud.
 
-The automated suite has 114 tests. It uses the real local app for the DSL
+The automated suite has 115 tests. It uses the real local app for the DSL
 suite. It uses fake project-local Playwright and Checkly CLIs for process
-boundaries. The Phase 5 candidates were also run manually through real
-Chromium against the local app.
+boundaries. One package test installs the exact npm tarball into a customer
+project under the operating-system temp directory, outside this repository.
+The Phase 5 candidates were also run manually through real Chromium against
+the local app.
 
 The live checkpoint is still open. The user must configure GitHub environment
 approval plus Checkly/Vercel secrets. The corrected drift monitor must then be

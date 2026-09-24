@@ -1,2 +1,12 @@
 #!/usr/bin/env node
-import "../src/cli.ts";
+
+// Development executes the TypeScript source directly. The npm package omits
+// src/cli.ts and ships compiled JavaScript under dist instead. This keeps the
+// repository build-free while avoiding Node's ban on type stripping inside
+// node_modules for real package consumers.
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+const source = new URL("../src/cli.ts", import.meta.url);
+const distribution = new URL("../dist/cli.js", import.meta.url);
+await import(existsSync(fileURLToPath(source)) ? source.href : distribution.href);

@@ -9,6 +9,7 @@
 // registered no check or never reached it is `vacuous` — the caller must
 // classify it UNCERTAIN, never pass/fail.
 
+import { existsSync } from "node:fs";
 import { mkdtemp, writeFile, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -88,8 +89,14 @@ export function parseOutcomeLine(raw: string): CollectedOutcome | null {
 export async function runSandbox(checkSource: string, ctx: SandboxContext): Promise<SandboxOutcome> {
   const dir = await mkdtemp(join(tmpdir(), "verify-fix-sandbox-"));
   try {
-    const checkApi = await readFile(join(import.meta.dirname, "check-api.ts"), "utf8");
-    const idSrc = await readFile(join(import.meta.dirname, "assertion", "id.ts"), "utf8");
+    // Source runs read these templates next to this file. The npm artifact runs
+    // compiled JavaScript from dist and carries only these two TypeScript files
+    // under src as sandbox assets.
+    const sourceRoot = existsSync(join(import.meta.dirname, "check-api.ts"))
+      ? import.meta.dirname
+      : join(import.meta.dirname, "..", "src");
+    const checkApi = await readFile(join(sourceRoot, "check-api.ts"), "utf8");
+    const idSrc = await readFile(join(sourceRoot, "assertion", "id.ts"), "utf8");
     const remapped = remapImports(checkSource);
 
     await writeFile(join(dir, "check.ts"), remapped, "utf8");

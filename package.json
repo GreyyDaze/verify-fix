@@ -7,10 +7,18 @@
   "bin": {
     "verify-fix": "bin/verify-fix"
   },
+  "files": [
+    "bin/",
+    "dist/",
+    "src/check-api.ts",
+    "src/assertion/id.ts"
+  ],
   "engines": {
     "node": ">=24"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
     "test": "node --no-warnings --test \"test/**/*.spec.ts\"",
     "typecheck": "tsc --noEmit",
     "verify": "node src/cli.ts"

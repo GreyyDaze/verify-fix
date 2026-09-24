@@ -230,6 +230,7 @@ jobs:
           TEST_USER: ${{ secrets.TEST_USER }}
           TEST_USER_US_EAST_1: ${{ secrets.TEST_USER_US_EAST_1 }}
           TEST_USER_EU_WEST_1: ${{ secrets.TEST_USER_EU_WEST_1 }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
           BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           TARGET_URL: ${{ inputs.environment_url }}
           TARGET_REVISION: ${{ inputs.deployment_sha }}
@@ -244,6 +245,7 @@ jobs:
           [[ -n "$TEST_USER" ]] && printf 'TEST_USER=%s\n' "$TEST_USER" >> "$env_file"
           [[ -n "$TEST_USER_US_EAST_1" ]] && printf 'TEST_USER_US_EAST_1=%s\n' "$TEST_USER_US_EAST_1" >> "$env_file"
           [[ -n "$TEST_USER_EU_WEST_1" ]] && printf 'TEST_USER_EU_WEST_1=%s\n' "$TEST_USER_EU_WEST_1" >> "$env_file"
+          [[ -n "$API_TOKEN" ]] && printf 'API_TOKEN=%s\n' "$API_TOKEN" >> "$env_file"
           [[ -n "$BYPASS" ]] && printf 'CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET=%s\n' "$BYPASS" >> "$env_file"
           node -e 'const fs=require("node:fs"); fs.writeFileSync(process.argv[1], JSON.stringify({provider:"github-deployment",deploymentId:process.env.DEPLOYMENT_ID,revision:process.env.TARGET_REVISION,url:process.env.TARGET_URL,environment:process.env.DEPLOYMENT_ENVIRONMENT}))' "$metadata_file"
           echo "VERIFY_FIX_ENV_FILE=$env_file" >> "$GITHUB_ENV"
@@ -347,6 +349,7 @@ jobs:
           TEST_USER: ${{ secrets.TEST_USER }}
           TEST_USER_US_EAST_1: ${{ secrets.TEST_USER_US_EAST_1 }}
           TEST_USER_EU_WEST_1: ${{ secrets.TEST_USER_EU_WEST_1 }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
         shell: bash
         run: |
           file="$RUNNER_TEMP/verify-fix.env"
@@ -355,6 +358,7 @@ jobs:
           [[ -n "$TEST_USER" ]] && printf 'TEST_USER=%s\n' "$TEST_USER" >> "$file"
           [[ -n "$TEST_USER_US_EAST_1" ]] && printf 'TEST_USER_US_EAST_1=%s\n' "$TEST_USER_US_EAST_1" >> "$file"
           [[ -n "$TEST_USER_EU_WEST_1" ]] && printf 'TEST_USER_EU_WEST_1=%s\n' "$TEST_USER_EU_WEST_1" >> "$file"
+          [[ -n "$API_TOKEN" ]] && printf 'API_TOKEN=%s\n' "$API_TOKEN" >> "$file"
           echo "VERIFY_FIX_ENV_FILE=$file" >> "$GITHUB_ENV"
 
       - name: Verify production source
@@ -388,6 +392,8 @@ jobs:
           TEST_USER: ${{ secrets.TEST_USER }}
           TEST_USER_US_EAST_1: ${{ secrets.TEST_USER_US_EAST_1 }}
           TEST_USER_EU_WEST_1: ${{ secrets.TEST_USER_EU_WEST_1 }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+          ENVIRONMENT_URL: ${{ inputs.environment_url }}
         run: npx checkly deploy --force
 
       - name: Upload production verification evidence

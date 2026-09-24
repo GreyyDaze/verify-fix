@@ -44,8 +44,9 @@ Checkly's runners install only the dev side of this `package.json`
 Create protected GitHub environments named `verify-fix-preview` and
 `verify-fix-production`. Require an authorized reviewer for the preview
 environment. In each environment, use Checkly's standard names:
-`CHECKLY_API_KEY` and `TEST_USER` in GitHub Secrets, and
-`CHECKLY_ACCOUNT_ID` in GitHub Variables. Optional regional users use
+`CHECKLY_API_KEY`, `TEST_USER`, and `API_TOKEN` in GitHub Secrets, and
+`CHECKLY_ACCOUNT_ID` in GitHub Variables. Use the same `API_TOKEN` that Vercel
+holds for the authenticated route. Optional regional users use
 `TEST_USER_US_EAST_1` and `TEST_USER_EU_WEST_1`. The optional Vercel automation
 bypass secret is also environment-scoped. GitHub environments separate preview
 and production values, so the variable names do not need custom prefixes. This
@@ -84,8 +85,11 @@ npx checkly login
 export API_TOKEN="$(openssl rand -hex 32)"
 export ENVIRONMENT_URL="https://your-real-vercel-production-url"
 
-# Add the same route token to the existing Vercel project.
+# Add the same route token to production, previews, and protected gate environments.
 printf '%s' "$API_TOKEN" | npx vercel env add API_TOKEN production
+printf '%s' "$API_TOKEN" | npx vercel env add API_TOKEN preview
+printf '%s' "$API_TOKEN" | gh secret set API_TOKEN --env verify-fix-preview
+printf '%s' "$API_TOKEN" | gh secret set API_TOKEN --env verify-fix-production
 npx vercel --prod
 
 # First prove the ApiCheck against production without changing scheduled checks.

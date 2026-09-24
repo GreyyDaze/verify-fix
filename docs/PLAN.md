@@ -23,7 +23,7 @@ verify-fix/
 | 4 | Playwright runner (`src/playwright-sandbox.ts`): copies the captured check tree plus the patch, resolves the customer's `@playwright/test` from `--project`, forces one worker/no retries/JSON report, and runs every browser through the Phase 3 proxy. Browser assets bypass the concurrency barrier; API/fetch calls enter it. `verify-fix measure --bundle --target --project --runs 20` records local determinism with `method: local-runner`. Playwright locator mutations and exact locator-renaming rules are included; candidate fixtures live in `fixtures/patches/`. | overlap: `runParallel:false` + one location PASS, fakes FAILED, flaky never PASS; drift: correct rename PASS, four fakes FAILED; real browser hits the local app | **done** — 103/103 automated tests; both bundles measured locally (overlap sequential 20/20 + reproduction 20/20, drift reproduction 20/20); all candidate fixtures plus a replay scene graded through Chromium against `next start` |
 | 5 | Live loop + CI gate: hybrid executor sends HEALTHY/REGRESSION to the customer project's `checkly test --record --reporter json --retries 0`; REPRODUCTION/DETECTION stay in the local scene proxy. `--candidate-project` reads PR monitoring files. `gate.yml` binds verification to the exact Vercel deployment SHA/URL. PRs only test. Production runs `checkly deploy --force` after PASS. Every report records cloud/local/mutation runs, browser processes, and wall time. | gate blocks a bad fix on a real PR; three real alternatives PASS; ten fakes FAIL on the real account | **done** — local matrix passed; the protected exact-revision Checkly/Vercel gate passed at commit `01f71b8` in run `36041826149`. |
 | 5.5 | Candidate revision intake: replace the production idea of one agent patch with the complete final project state. Support both a local working tree and a pull request URL. Treat every agent change as untrusted. Bind PR verification to the exact preview revision. | the same multi-file candidate is verified from a fixed local snapshot and from an exact PR head; reports record source identity and all file changes; the candidate cannot replace the verifier, incident, policy, or gate | **done** — immutable dirty-tree and exact GitHub PR snapshots, stable logical-ID matching, rename/deletion/import handling, complete source reports, target metadata binding, fork/approval controls, protected two-stage workflow, package proof, 123/123 local tests, and the successful protected proof at exact commit `01f71b8`. |
-| 6 | Authenticated booking API + Checkly `ApiCheck` in the existing Next.js and Checkly project: `{{ENVIRONMENT_URL}}` with no fallback, real setup, exact contract, real field-rename incident, sanitized API evidence, deterministic API scenes, and complete-candidate verification | real Vercel deployment and Checkly API check produce a fresh `availability` → `status` incident; strict direct and imported-helper repairs PASS; weakening, redirect, response rewriting, retry, and timeout candidates FAIL; missing input is UNCERTAIN | **local implementation done** — endpoint, ApiCheck, setup sandbox, sanitizer, AST inventory, API scenes, policy, complete-candidate tests, and packed CLI proof pass; real baseline, incident, capture, RCA, and protected account proof are next |
+| 6 | Authenticated booking API + Checkly `ApiCheck` in the existing Next.js and Checkly project: `{{ENVIRONMENT_URL}}` with no fallback, real setup, exact contract, real field-rename incident, sanitized API evidence, deterministic API scenes, and complete-candidate verification | real Vercel deployment and Checkly API check produce a fresh `availability` → `status` incident; strict direct and imported-helper repairs PASS; weakening, redirect, response rewriting, retry, and timeout candidates FAIL; missing input is UNCERTAIN | **real incident captured; final gate pending** — the baseline passed, the app-only rename failed on the exact field assertion, the CLI bundle captured 2 passing and 2 failing scheduled results plus 20/20 recurring failures and Rocky RCA, and the strict repair passed HEALTHY/REPRODUCTION/DETECTION with 15 completed requests/replays; the exact-revision protected account gate is next |
 | 7 | Multistep Check support starts only after API support is complete | a meaningful booking workflow incident is captured and verified with the same protected boundaries | blocked on Phase 6 |
 | 8 | CLI initialization plus a copied live learning project: `verify-fix init` prepares the CLI inside an existing Checkly project. The separate create command copies the maintained slots-booking example into a standalone directory. The copied README teaches the complete learner-owned setup and workflow. | packed `verify-fix init` configures an external customer project; the packed creator copies the real example outside this repo; a learner completes GitHub → Vercel → Upstash → Checkly → incident → bundle → repair → PR gate with no mock inside the copied project | blocked on Phase 7 |
 
@@ -107,6 +107,29 @@ project.
 - Only operators confirmed by real Checkly parity sessions are executable.
 - The CLI creates every bundle. No API result, request, response, RCA, trace, or verdict is fabricated.
 - Vercel supplies a URL and exact revision. No Vercel API belongs in the core decision engine.
+
+### Real Phase 6 evidence checkpoint
+
+The real account baseline passed before the application-only field rename. The
+captured bundle is `incidents/slots-availability-api`. It contains two passing
+and two failing scheduled results, sanitized passing and failing API bodies,
+setup SHA-256 provenance, 20/20 recurring measured failures, and the available
+Rocky RCA. The bundle stores only an account hash and redacts the request origin
+and authorization value.
+
+Rocky classified the incident as `CONFIGURATION_ERROR / DO_NOT_REPAIR`. Its
+analysis says the API still returned `availability`, but the captured failing
+response actually contains `status`. The classification is retained as real
+evidence, not accepted as runtime truth. The deterministic verifier uses the
+recorded responses and exact assertions instead. The strict field repair passed
+HEALTHY, REPRODUCTION, and DETECTION with 15 completed API requests/replays and
+oracle strength 1.000.
+
+The live capture also exposed parity details that fixtures had missed. Checkly
+records the sanitized origin as `[REDACTED]`, an empty GET body as `""`, and the
+slot query with percent encoding. The executor now recognizes that safe origin
+marker, normalizes only the empty-body representation and query encoding, and
+continues to compare the route, query, method, body, and setup identity.
 
 **Done when:** the baseline API is green on the real Vercel deployment. The
 real field rename creates a fresh Checkly failure. The CLI captures sanitized

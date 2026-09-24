@@ -8,7 +8,7 @@ export const availabilityAssertions = [
   AssertionBuilder.statusCode().equals(200),
   AssertionBuilder.headers("content-type").equals("application/json"),
   AssertionBuilder.jsonBody("slot").equals(SLOT),
-  AssertionBuilder.jsonBody("availability").equals(EXPECTED_AVAILABILITY),
+  AssertionBuilder.jsonBody("status").equals(EXPECTED_AVAILABILITY),
 ];
 
 new ApiCheck("slots-availability-api", {

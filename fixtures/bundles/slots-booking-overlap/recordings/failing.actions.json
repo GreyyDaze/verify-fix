@@ -1,0 +1,196 @@
+[
+ {
+  "callId": "pw:api@31",
+  "apiName": "Launch browser",
+  "title": "Launch browser",
+  "category": "pw:api",
+  "startTime": 1438.728,
+  "endTime": 1607.112,
+  "error": null,
+  "location": null
+ },
+ {
+  "callId": "pw:api@35",
+  "apiName": "Create context",
+  "title": "Create context",
+  "category": "pw:api",
+  "startTime": 1609.435,
+  "endTime": 1614.121,
+  "error": null,
+  "location": null
+ },
+ {
+  "callId": "pw:api@37",
+  "apiName": "Expose binding",
+  "title": "Expose binding",
+  "category": "pw:api",
+  "startTime": 1619.972,
+  "endTime": 1621.697,
+  "error": null,
+  "location": {
+   "file": "/checkly/node_modules/.pnpm/@checkly+playwright-reporter@file+packages+playwright-reporter_@playwright+test@1.60.0_debug@4.4.3/node_modules/@checkly/playwright-reporter/dist/setup.js",
+   "line": 1,
+   "column": 4634
+  }
+ },
+ {
+  "callId": "pw:api@38",
+  "apiName": "Add init script",
+  "title": "Add init script",
+  "category": "pw:api",
+  "startTime": 1622.063,
+  "endTime": 1622.752,
+  "error": null,
+  "location": {
+   "file": "/checkly/node_modules/.pnpm/@checkly+playwright-reporter@file+packages+playwright-reporter_@playwright+test@1.60.0_debug@4.4.3/node_modules/@checkly/playwright-reporter/dist/setup.js",
+   "line": 1,
+   "column": 4782
+  }
+ },
+ {
+  "callId": "pw:api@40",
+  "apiName": "Create page",
+  "title": "Create page",
+  "category": "pw:api",
+  "startTime": 1623.648,
+  "endTime": 1656.056,
+  "error": null,
+  "location": null
+ },
+ {
+  "callId": "pw:api@41",
+  "apiName": "Navigate",
+  "title": "Navigate url=\"/\"",
+  "category": "pw:api",
+  "startTime": 1656.958,
+  "endTime": 1808.186,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-01LWbv/user/tests/booking.spec.ts",
+   "line": 21,
+   "column": 16
+  }
+ },
+ {
+  "callId": "pw:api@42",
+  "apiName": "Fill \"demo\"",
+  "title": "Fill \"demo\" value=\"demo\"",
+  "category": "pw:api",
+  "startTime": 1810.449,
+  "endTime": 1848.329,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-01LWbv/user/tests/booking.spec.ts",
+   "line": 23,
+   "column": 38
+  }
+ },
+ {
+  "callId": "pw:api@43",
+  "apiName": "Click",
+  "title": "Click",
+  "category": "pw:api",
+  "startTime": 1850.106,
+  "endTime": 1896.061,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-01LWbv/user/tests/booking.spec.ts",
+   "line": 24,
+   "column": 56
+  }
+ },
+ {
+  "callId": "expect@44",
+  "apiName": "Expect \"toHaveText\"",
+  "title": "Expect \"toHaveText\" expected=\"200\"",
+  "category": "expect",
+  "startTime": 1900.289,
+  "endTime": 2001.521,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-01LWbv/user/tests/booking.spec.ts",
+   "line": 27,
+   "column": 52
+  }
+ },
+ {
+  "callId": "expect@45",
+  "apiName": "Expect \"toHaveURL\"",
+  "title": "Expect \"toHaveURL\" expected=\"Object\"",
+  "category": "expect",
+  "startTime": 2002.059,
+  "endTime": 2011.51,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-01LWbv/user/tests/booking.spec.ts",
+   "line": 30,
+   "column": 24
+  }
+ },
+ {
+  "callId": "expect@46",
+  "apiName": "Expect \"toBeVisible\"",
+  "title": "Expect \"toBeVisible\"",
+  "category": "expect",
+  "startTime": 2012.184,
+  "endTime": 2018.884,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-01LWbv/user/tests/booking.spec.ts",
+   "line": 31,
+   "column": 70
+  }
+ },
+ {
+  "callId": "pw:api@47",
+  "apiName": "Click",
+  "title": "Click",
+  "category": "pw:api",
+  "startTime": 2019.737,
+  "endTime": 3842.676,
+  "error": null,
+  "location": {
+   "file": "/tmp/playwright-01LWbv/user/tests/booking.spec.ts",
+   "line": 33,
+   "column": 60
+  }
+ },
+ {
+  "callId": "expect@48",
+  "apiName": "Expect \"toHaveText\"",
+  "title": "Expect \"toHaveText\" expected=\"200\"",
+  "category": "expect",
+  "startTime": 3843.175,
+  "endTime": 13850.25,
+  "error": "Error: expect(locator).toHaveText(expected) failed\n\nLocator:  getByTestId('book-status')\nExpected: \"200\"\nReceived: \"401\"\nTimeout:  10000ms\n\nCall log:\n  - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms\n  - waiting for getByTestId('book-status')\n    23 × locator resolved to <span data-testid=\"book-status\">401</span>\n       - unexpected value \"401\"\n",
+  "location": {
+   "file": "/tmp/playwright-01LWbv/user/tests/booking.spec.ts",
+   "line": 36,
+   "column": 51
+  }
+ },
+ {
+  "callId": "pw:api@52",
+  "apiName": "Evaluate",
+  "title": "Evaluate expression=\"(() => { const flush = globalThis.__checklyFlushVitals__; return typeof flush === \\\"function\\\" ? flush() : undefined })()\"",
+  "category": "pw:api",
+  "startTime": 13899.002,
+  "endTime": 13910.551,
+  "error": null,
+  "location": {
+   "file": "/checkly/node_modules/.pnpm/@checkly+playwright-reporter@file+packages+playwright-reporter_@playwright+test@1.60.0_debug@4.4.3/node_modules/@checkly/playwright-reporter/dist/setup.js",
+   "line": 1,
+   "column": 5151
+  }
+ },
+ {
+  "callId": "pw:api@55",
+  "apiName": "Close context",
+  "title": "Close context",
+  "category": "pw:api",
+  "startTime": 13951.078,
+  "endTime": 13957.887,
+  "error": null,
+  "location": null
+ }
+]

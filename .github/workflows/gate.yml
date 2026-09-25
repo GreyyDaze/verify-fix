@@ -1,0 +1,25 @@
+# This event adapter never checks out or executes candidate code directly.
+# The reusable gate is pinned to an immutable reviewed commit. Keep its check
+# names required in the repository ruleset so a candidate cannot bypass it.
+name: verify-fix gate
+
+on:
+  deployment_status:
+
+permissions:
+  contents: read
+  deployments: read
+  pull-requests: read
+
+jobs:
+  protected-gate:
+    if: >-
+      github.event.deployment_status.state == 'success' &&
+      github.event.deployment_status.environment_url != ''
+    uses: GreyyDaze/verify-fix/.github/workflows/protected-gate.yml@fd2fe8a2b2c8a2974aa3a082fe730f6d621c5d5d
+    with:
+      deployment_id: ${{ format('{0}', github.event.deployment.id) }}
+      deployment_sha: ${{ github.event.deployment.sha }}
+      environment: ${{ github.event.deployment.environment }}
+      environment_url: ${{ github.event.deployment_status.environment_url }}
+    secrets: inherit

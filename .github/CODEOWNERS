@@ -1,0 +1,6 @@
+# Gate definitions and verifier policy require an owner review.
+/.github/workflows/ @GreyyDaze
+/src/candidate/ @GreyyDaze
+/src/assertion/ @GreyyDaze
+/src/verdict.ts @GreyyDaze
+/fixtures/bundles/ @GreyyDaze

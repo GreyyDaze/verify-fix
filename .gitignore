@@ -1,5 +1,7 @@
-# dependencies
+# dependencies and package build output
 node_modules/
+dist/
+*.tgz
 
 # throwaway probes / degenerate sandbox scratch and seeded-COLLISION dumps
 *.err

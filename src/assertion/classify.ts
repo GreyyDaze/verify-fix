@@ -9,6 +9,8 @@ export interface MatcherClass {
 }
 
 const TABLE: Record<string, MatcherClass> = {
+  equals: { kind: "exact", falsifiable: true, note: "Checkly exact equality against a concrete target" },
+  contains: { kind: "property", falsifiable: true, note: "Checkly substring containment; weaker than exact equality" },
   toBe: { kind: "exact", falsifiable: true, note: "exact equality against a concrete target" },
   toEqual: { kind: "exact", falsifiable: true, note: "deep equality against a concrete target" },
   toStrictEqual: { kind: "exact", falsifiable: true, note: "strict deep equality against a concrete target" },
@@ -21,6 +23,7 @@ const TABLE: Record<string, MatcherClass> = {
   toBeChecked: { kind: "exact", falsifiable: true, note: "element checked expectation" },
   toHaveValue: { kind: "exact", falsifiable: true, note: "form value expectation" },
   toHaveAttribute: { kind: "exact", falsifiable: true, note: "attribute expectation" },
+  toHaveURL: { kind: "exact", falsifiable: true, note: "Playwright URL expectation" },
   toHaveUrl: { kind: "exact", falsifiable: true, note: "url expectation" },
   toBeGreaterThan: { kind: "property", falsifiable: false, note: "range check, never falsified by shape of problem (STING weak-assertion class)" },
   toBeGreaterThanOrEqual: { kind: "property", falsifiable: false, note: "range check; can survive arithmetic/field-drop mutants if used on non-negatives" },
@@ -55,6 +58,9 @@ export function isFalsifiable(matcher: string, target: string): boolean {
   const cls = matcherClass(matcher);
   if (!cls.falsifiable) return false;
   if (matcher === "toBeTruthy" || matcher === "toBeDefined") return false;
+  // These zero-argument Playwright matchers assert a concrete state. An empty
+  // argument list is their normal strong form, not a missing oracle target.
+  if (target.trim() === "" && ["toBeVisible", "toBeEnabled", "toBeChecked"].includes(matcher)) return true;
   if (target.trim() === "" && cls.kind === "exact") return false;
   return true;
 }

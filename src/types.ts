@@ -13,7 +13,17 @@ export type ExitCode = 0 | 1 | 2;
 
 export type VerdictValue = "PASS" | "FAILED" | "UNCERTAIN";
 
-export type ObservationValue = "pass" | "fail";
+/** What an oracle expects of a scene: binary by construction (PR-3). */
+export type OracleExpectation = "pass" | "fail";
+
+/**
+ * What an executor actually observed. `uncertain` is the third, mandatory
+ * value: the run produced no admissible evidence (the check never contacted
+ * the armed app, repetitions disagreed, the budget was exhausted, the sandbox
+ * crashed). It is never a match and never a mismatch — the decision table
+ * maps it to UNCERTAIN so a hitless run can never satisfy an oracle.
+ */
+export type ObservationValue = "pass" | "fail" | "uncertain";
 
 export interface SceneVerdict {
   /** true = the fixed check must FAIL in this state; false = must PASS. */
@@ -25,13 +35,23 @@ export interface SceneVerdict {
 export interface Scene {
   sceneId: string;
   type: SceneType;
-  /** How the app is put into this state (deterministic entrypoint). */
+  /** What state the target is in for this scene (prose, for the report). */
   state: string;
-  /** Deterministic entrypoint understood by the app-under-test (see state-driver). */
-  stateDriver?: { kind: "mock-override" | "app-probe"; params: Record<string, string> };
+  /**
+   * How the scene layer puts the target into that state (src/scene/modes.ts):
+   * `live`, `live-concurrent:N`, `replay:<file>.har`, `inject:<METHOD> <path> -> <status>`.
+   */
+  mode: string;
+  /** REPRODUCTION scenes may name a second way to reproduce (used when the first cannot run). */
+  alternativeMode?: string;
+  /** where the evidence comes from (report column) */
+  environment?: "target" | "recording" | "target+recording";
+  /** scene-specific variables layered over the run environment (e.g. a second user for a regression scene) */
+  env?: Record<string, string>;
   verdict: SceneVerdict;
   experiments: Array<{ durationSec: number; repetitions: number; expectStable: boolean }>;
   assertionsInvolved: string[];
+  notes?: string[];
 }
 
 export interface EnvAssumption {
@@ -44,8 +64,15 @@ export interface EnvAssumption {
 export interface DeterminismEvidence {
   targetRuns: number;
   achieved: number;
+  /** Legacy capture fields, kept for v2 bundles and reports. */
   sequentialPassRate: number;
   overlapFailRate: number;
+  /** Rate at which the original check reproduced the incident's own mode. */
+  reproductionFailRate?: number;
+  /** One-at-a-time healthy rate. Only required for concurrency incidents. */
+  baselinePassRate?: number | null;
+  /** Where the measured numbers came from. */
+  method?: "checkly-cloud" | "local-runner" | null;
   lastVerifiedAt: string;
 }
 
@@ -57,17 +84,77 @@ export interface RunBudget {
 export interface CheckInfo {
   repo: string;
   file: string;
+  checkType?: "PLAYWRIGHT" | "API" | string;
+  /** Display name used by `checkly test --grep` to select only this check. */
+  name?: string;
   logicalId: string;
   deployedId: string | null;
 }
 
+/** The check's scheduling/config as it ran (from checkly.config.ts / the construct / the API). */
+export interface BundleConfig {
+  runParallel: boolean;
+  locations: string[];
+  frequencyMinutes: number | null;
+  /** keys only — values never enter a bundle */
+  environmentVariables: string[];
+}
+
+export interface SanitizedApiRequest {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body: string | null;
+}
+
+export interface SanitizedApiResponse {
+  status: number;
+  headers: Record<string, string>;
+  contentType: string | null;
+  bodyText: string | null;
+  json: unknown | null;
+  readable: boolean;
+  truncated: boolean;
+}
+
+export interface ApiSetupProvenance {
+  file: string;
+  sha256: string;
+  executed?: boolean;
+  error?: string | null;
+}
+
+export interface ApiRecording {
+  schemaVersion: "api-recording-v1";
+  resultId: string;
+  checkId: string;
+  startedAt: string | null;
+  request: SanitizedApiRequest | null;
+  response: SanitizedApiResponse | null;
+  setup: ApiSetupProvenance | null;
+  unsupportedReasons: string[];
+}
+
 export interface Bundle {
-  schemaVersion: "v2";
+  schemaVersion: "v2" | "v3";
   incidentId: string;
   incident: { title: string; description: string; sourceReference?: string };
   check: CheckInfo;
   /** The check source AS IT RAN when the failure was recorded (the "original"). */
   checkSource: string;
+  /** every file under check/ (path → content); a directory patch may replace any of them */
+  files: Record<string, string>;
+  /** the config file among `files`, when there is one (checkly.config.ts) */
+  configFile: string | null;
+  config: BundleConfig | null;
+  /** origin the failing run was recorded against (null = unknown); never used as a live target by itself */
+  recordedOrigin: string | null;
+  /** absolute path of the bundle directory (recordings are resolved against it) */
+  dir: string;
+  /** Playwright runner details captured from Checkly/project config. */
+  playwright?: { configFile: string; projects: string[] } | null;
+  /** Sanitized request/response records for an API incident. */
+  api?: { failing: ApiRecording | null; passing: ApiRecording | null } | null;
   scenes: Scene[];
   envAssumptions: EnvAssumption[];
   determinism: DeterminismEvidence;
@@ -129,8 +216,15 @@ export interface SceneObservation {
   repetitions: number;
   /** every claim here must reduce to traced steps + assertion outcomes */
   trace: TraceStep[];
-  source: "synthetic" | "checkly";
-  checklyRunIds?: string[];
+  source: "scene" | "checkly";
+  /** what the run talked to: "target <host> (mode)" or "recording <file>" */
+  environment?: string;
+  /** Recorded Checkly test sessions used as evidence. */
+  checklySessionIds?: string[];
+  /** Individual Checkly result ids inside those sessions. */
+  checklyResultIds?: string[];
+  /** Mandatory when observed === "uncertain": why no pass/fail could be admitted. */
+  reason?: string;
 }
 
 export interface TraceStep {
@@ -145,11 +239,16 @@ export interface TraceStep {
 
 export type EvidenceRow = {
   experiment: string;
+  /** where the evidence came from: the target host, a recording, or both (D3) */
+  environment: string;
   oracle: string;
   observed: ObservationValue;
-  expected: ObservationValue;
+  expected: OracleExpectation;
+  /** true only when observed is a real pass/fail equal to expected. */
   matched: boolean;
   strength: number;
+  /** set when observed === "uncertain": the executor's stated reason. */
+  note?: string;
 };
 
 export interface Decision {
@@ -163,15 +262,79 @@ export interface Decision {
 
 // ---- executor interface (interface = proves principled Checkly swap, PR-1) ----
 
+/** What the executor knows about the candidate beyond its check code. */
+export interface RunContext {
+  /** the check config after the patch (scheduling decides the concurrency a scene runs at) */
+  config: BundleConfig | null;
+  /** Complete candidate check tree. Browser specs may import helper files from it. */
+  files?: Record<string, string>;
+  /** Binary project fixtures copied without text conversion. */
+  assets?: Record<string, Buffer>;
+  /** Main check path in the final tree. It may differ after a Git rename. */
+  checkFile?: string;
+  /** Playwright config path in the final tree. */
+  playwrightConfigFile?: string;
+  /** Candidate display name resolved through the stable Checkly logical ID. */
+  checkName?: string;
+  /** Distinguishes the candidate from generated weakening checks in cost reports. */
+  phase?: "candidate" | "mutation";
+}
+
+export interface SceneCost {
+  sceneId: string;
+  executor: "scene" | "checkly";
+  repetitions: number;
+  checkRuns: number;
+  wallTimeMs: number;
+  phase: "candidate" | "mutation";
+}
+
+export interface ExecutionCost {
+  scenes: number;
+  runs: number;
+  checklyTestSessions: number;
+  checklyCloudRuns: number;
+  checklySessionIds: string[];
+  checklyResultIds: string[];
+  /** Local check executions. Concurrent checks count separately. */
+  localRuns: number;
+  /** Browser processes started by local Playwright executions. */
+  browserProcesses: number;
+  /** Completed API requests, including deterministic response replays. */
+  httpRequests?: number;
+  mutationRuns: number;
+  wallTimeMs: number;
+  byScene: SceneCost[];
+}
+
+export function emptyExecutionCost(): ExecutionCost {
+  return {
+    scenes: 0,
+    runs: 0,
+    checklyTestSessions: 0,
+    checklyCloudRuns: 0,
+    checklySessionIds: [],
+    checklyResultIds: [],
+    localRuns: 0,
+    browserProcesses: 0,
+    httpRequests: 0,
+    mutationRuns: 0,
+    wallTimeMs: 0,
+    byScene: [],
+  };
+}
+
 export interface ExperimentExecutor {
-  readonly kind: "synthetic" | "checkly";
+  readonly kind: "scene" | "checkly" | "hybrid";
   /** Run the fixed check code in one scene state and observe its outcome. */
-  runScene(bundle: Bundle, patchSource: string, scene: Scene): Promise<SceneObservation>;
+  runScene(bundle: Bundle, patchSource: string, scene: Scene, ctx?: RunContext): Promise<SceneObservation>;
   /** True when the executor can produce live observed runs (PR-1). */
   isLive(): boolean;
-  costReport(): { scenes: number; runs: number };
+  costReport(): ExecutionCost;
   /** True when the per-scene run budget was hit (PR-10 → UNCERTAIN). */
   budgetExhausted: boolean;
   /** Scene ids whose repeated observations disagreed (flake → UNCERTAIN). */
   nondeterministicScenes: string[];
+  /** Executors with listeners or temporary state may release it here. */
+  close?(): Promise<void>;
 }

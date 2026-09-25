@@ -6,7 +6,7 @@
 // prints exactly the operations a live run would perform. The definitive live
 // proof is a build-time task once credentials exist (prod PRD §11.2).
 
-import type { Bundle, ExperimentExecutor, Scene, SceneObservation, TraceStep } from "../types.ts";
+import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExecutor, type Scene, type SceneObservation, type TraceStep } from "../types.ts";
 import { sceneExpected } from "../contract/contract.ts";
 
 const API_BASE = process.env.CHECKLY_API_BASE ?? "https://api.checklyhq.com/v1";
@@ -41,8 +41,8 @@ export class ChecklyExecutor implements ExperimentExecutor {
     return Boolean(this.apiKey) && !this.dryRunOnly;
   }
 
-  costReport(): { scenes: number; runs: number } {
-    return { scenes: this.used, runs: this.used };
+  costReport(): ExecutionCost {
+    return { ...emptyExecutionCost(), scenes: this.used, runs: this.used, checklyTestSessions: this.used, checklyCloudRuns: this.used };
   }
 
   private checkCreds(): void {
@@ -88,14 +88,23 @@ export class ChecklyExecutor implements ExperimentExecutor {
     this.checkCreds();
     if (this.used >= this.maxRunsPerScene) {
       this.budgetExhausted = true;
-      return { sceneId: scene.sceneId, observed: "pass", repetitions: 0, trace: [], source: "checkly" };
+      // no run happened → no observation (never a pass)
+      return { sceneId: scene.sceneId, observed: "uncertain", repetitions: 0, trace: [], source: "checkly", reason: "run budget exhausted" };
     }
     const deployed = await this.api<{ id?: string }>("PUT", `/v1/check-checks/${bundle.check.deployedId ?? "verify-fix-dry-run"}`, this.bodyFor(bundle, patchSource, scene));
     const checkId = deployed.id ?? `${bundle.check.logicalId}-${scene.sceneId}`;
     const run = await this.api<{ result_id?: string; id?: string }>("POST", `/v1/check-checks/${checkId}/runs`, {});
     this.used += 1;
     if (this.dryRunOnly || !this.apiKey) {
-      return { sceneId: scene.sceneId, observed: "pass", repetitions: 1, trace: [{ index: 0, kind: "step", what: "dry-run: live result pending", outcome: "ok" }], source: "checkly" };
+      // A dry run performs no live check: there is no observation to admit.
+      return {
+        sceneId: scene.sceneId,
+        observed: "uncertain",
+        repetitions: 0,
+        trace: [{ index: 0, kind: "step", what: "dry-run: no live result", outcome: "skipped" }],
+        source: "checkly",
+        reason: "checkly dry-run: no live run was performed",
+      };
     }
     const resultId = run.result_id ?? run.id ?? "dry-run";
     const result = await this.api<{ successful?: boolean; checkResult?: Array<{ status?: string; name?: string }> }>(
@@ -114,7 +123,7 @@ export class ChecklyExecutor implements ExperimentExecutor {
       repetitions: 1,
       trace,
       source: "checkly",
-      checklyRunIds: [resultId],
+      checklyResultIds: [resultId],
     };
   }
 }

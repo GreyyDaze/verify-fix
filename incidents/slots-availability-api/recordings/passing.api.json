@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "api-recording-v1",
+  "resultId": "01a0d518-6e77-7728-9e03-60739e262737",
+  "checkId": "5bab986c-15f6-4401-a166-3b2a8c1dcbbc",
+  "startedAt": "2026-09-24T20:25:44.787Z",
+  "request": {
+    "method": "GET",
+    "url": "[REDACTED]/api/v1/availability?slot=09%3A30",
+    "headers": {
+      "authorization": "[REDACTED]",
+      "user-agent": "Checkly/1.0 (https://www.checklyhq.com)",
+      "x-request-id": "checkly-1790281544713"
+    },
+    "body": ""
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "cache-control": "public, max-age=0, must-revalidate",
+      "content-type": "application/json",
+      "x-request-id": "checkly-1790281544713"
+    },
+    "contentType": "application/json",
+    "bodyText": "{\"slot\":\"09:30\",\"availability\":\"AVAILABLE\"}",
+    "json": {
+      "slot": "09:30",
+      "availability": "AVAILABLE"
+    },
+    "readable": true,
+    "truncated": false
+  },
+  "setup": {
+    "file": "checks/availability.setup.ts",
+    "sha256": "8a960dd4e43efc5280c2e774bf87192a27c5e9bca2242ddc222fb077f1f1047a"
+  },
+  "unsupportedReasons": []
+}

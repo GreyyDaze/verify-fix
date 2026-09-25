@@ -1,0 +1,405 @@
+# Reusable protected gate. The small deployment-status caller invokes this
+# file at an immutable commit. Candidate source is always a separate checkout.
+name: verify-fix protected gate
+
+on:
+  workflow_call:
+    inputs:
+      deployment_id:
+        required: true
+        type: string
+      deployment_sha:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      environment_url:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  deployments: read
+  pull-requests: read
+
+concurrency:
+  group: verify-fix-${{ inputs.deployment_sha }}-${{ inputs.environment }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "24"
+  CANDIDATE_PROJECT_PATH: examples/slots-booking/web
+  VERIFY_FIX_BUNDLE: ${{ vars.VERIFY_FIX_BUNDLE || 'incidents/slots-availability-api' }}
+
+jobs:
+  candidate-preflight:
+    name: secret-free candidate preflight
+    if: >-
+      inputs.environment_url != '' && inputs.environment != 'Production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      pull_url: ${{ steps.pull-request.outputs.url }}
+      pull_number: ${{ steps.pull-request.outputs.number }}
+      head_repository: ${{ steps.pull-request.outputs.head_repository }}
+      fork: ${{ steps.pull-request.outputs.fork }}
+    steps:
+      - name: Validate deployment metadata and resolve its pull request
+        id: pull-request
+        uses: actions/github-script@v7
+        env:
+          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
+          DEPLOYMENT_URL: ${{ inputs.environment_url }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+        with:
+          script: |
+            const deploymentId = Number(process.env.DEPLOYMENT_ID)
+            const { data: deployment } = await github.rest.repos.getDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deploymentId,
+            })
+            if (deployment.sha !== process.env.DEPLOYMENT_SHA || deployment.environment !== process.env.DEPLOYMENT_ENVIRONMENT) {
+              core.setFailed('Caller deployment metadata does not match GitHub.')
+              return
+            }
+            const { data: statuses } = await github.rest.repos.listDeploymentStatuses({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deploymentId,
+              per_page: 100,
+            })
+            const status = statuses.find((item) => item.state === 'success' && item.environment_url === process.env.DEPLOYMENT_URL)
+            if (!status) {
+              core.setFailed('GitHub has no successful deployment status for this exact URL.')
+              return
+            }
+            const sha = process.env.DEPLOYMENT_SHA
+            const { data: pulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: sha,
+            })
+            const pull = pulls.find((item) => item.state === 'open' && item.head.sha === sha)
+            if (!pull) {
+              core.setFailed('No open pull request owns this exact preview revision.')
+              return
+            }
+            core.setOutput('url', pull.html_url)
+            core.setOutput('number', String(pull.number))
+            core.setOutput('head_repository', pull.head.repo?.full_name ?? `${context.repo.owner}/${context.repo.repo}`)
+            core.setOutput('fork', String(pull.head.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`))
+
+      - name: Check out protected verifier and incident inputs
+        uses: actions/checkout@v4
+        with:
+          ref: 9b39750e61daabc21d80fd7ea3e17d651c3b6088
+          path: trusted
+          persist-credentials: false
+
+      - name: Check out the exact candidate for dependency lookup
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.pull-request.outputs.head_repository }}
+          ref: ${{ inputs.deployment_sha }}
+          path: candidate-runtime
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: trusted/package-lock.json
+
+      - name: Install the protected verifier without lifecycle scripts
+        working-directory: trusted
+        run: npm ci --ignore-scripts
+
+      - name: Require the runtime checkout to match the deployment
+        env:
+          DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
+        working-directory: candidate-runtime
+        run: test "$(git rev-parse HEAD)" = "$DEPLOYMENT_SHA"
+
+      - name: Inspect the immutable candidate without secrets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PULL_URL: ${{ steps.pull-request.outputs.url }}
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set +e
+          node trusted/bin/verify-fix verify \
+            --bundle "trusted/$VERIFY_FIX_BUNDLE" \
+            --pr "$PULL_URL" \
+            --project-path "$CANDIDATE_PROJECT_PATH" \
+            --project "candidate-runtime/$CANDIDATE_PROJECT_PATH" \
+            --executor scene \
+            --report-json artifacts/verify-fix-preflight.json \
+            --report-markdown artifacts/verify-fix-preflight.md
+          code=$?
+          set -e
+          # No target was supplied, so a statically acceptable repair is
+          # UNCERTAIN here. A definite static rejection is FAILED and blocks.
+          test "$code" = 2
+          test "$(jq -r .candidateRevision.headSha artifacts/verify-fix-preflight.json)" = "${{ inputs.deployment_sha }}"
+          test "$(jq -r .candidateRevision.immutable artifacts/verify-fix-preflight.json)" = true
+
+      - name: Upload secret-free preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-fix-preflight-${{ inputs.deployment_sha }}
+          path: artifacts/verify-fix-preflight.*
+          if-no-files-found: warn
+
+  preview-gate:
+    name: protected preview gate
+    needs: candidate-preflight
+    runs-on: ubuntu-latest
+    environment: verify-fix-preview
+    timeout-minutes: 45
+    steps:
+      - name: Check out protected verifier and incident inputs
+        uses: actions/checkout@v4
+        with:
+          ref: 9b39750e61daabc21d80fd7ea3e17d651c3b6088
+          path: trusted
+          persist-credentials: false
+
+      - name: Check out the exact candidate for runtime dependencies
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.candidate-preflight.outputs.head_repository }}
+          ref: ${{ inputs.deployment_sha }}
+          path: candidate-runtime
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            trusted/package-lock.json
+            candidate-runtime/${{ env.CANDIDATE_PROJECT_PATH }}/package-lock.json
+
+      - name: Install the protected verifier without lifecycle scripts
+        working-directory: trusted
+        run: npm ci --ignore-scripts
+
+      - name: Install candidate dependencies without lifecycle scripts
+        working-directory: candidate-runtime/${{ env.CANDIDATE_PROJECT_PATH }}
+        run: npm ci --ignore-scripts
+
+      - name: Install Chromium in a separate approved step
+        working-directory: candidate-runtime/${{ env.CANDIDATE_PROJECT_PATH }}
+        run: npx playwright install --with-deps chromium
+
+      - name: Require the runtime checkout to match the deployment
+        env:
+          DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
+        working-directory: candidate-runtime
+        run: test "$(git rev-parse HEAD)" = "$DEPLOYMENT_SHA"
+
+      - name: Wait for the exact preview
+        env:
+          TARGET_URL: ${{ inputs.environment_url }}
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        shell: bash
+        run: |
+          node -e "const u=new URL(process.env.TARGET_URL); if(u.protocol!=='https:') throw new Error('preview URL must use HTTPS')"
+          header=()
+          if [[ -n "$BYPASS" ]]; then header=(-H "x-vercel-protection-bypass: $BYPASS"); fi
+          curl --fail --silent --show-error --retry 18 --retry-delay 5 --retry-all-errors "${header[@]}" "$TARGET_URL/api/health" >/dev/null
+
+      - name: Require approved preview inputs
+        env:
+          CHECKLY_API_KEY: ${{ secrets.CHECKLY_API_KEY }}
+          CHECKLY_ACCOUNT_ID: ${{ vars.CHECKLY_ACCOUNT_ID }}
+          TEST_USER: ${{ secrets.TEST_USER }}
+        shell: bash
+        run: |
+          [[ -n "$CHECKLY_API_KEY" ]] || { echo '::error::CHECKLY_API_KEY is missing from verify-fix-preview'; exit 1; }
+          [[ -n "$CHECKLY_ACCOUNT_ID" ]] || { echo '::error::CHECKLY_ACCOUNT_ID is missing from verify-fix-preview'; exit 1; }
+          [[ -n "$TEST_USER" ]] || { echo '::error::TEST_USER is missing from verify-fix-preview'; exit 1; }
+
+      - name: Build protected runtime and deployment metadata
+        env:
+          TEST_USER: ${{ secrets.TEST_USER }}
+          TEST_USER_US_EAST_1: ${{ secrets.TEST_USER_US_EAST_1 }}
+          TEST_USER_EU_WEST_1: ${{ secrets.TEST_USER_EU_WEST_1 }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          TARGET_URL: ${{ inputs.environment_url }}
+          TARGET_REVISION: ${{ inputs.deployment_sha }}
+          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+        shell: bash
+        run: |
+          env_file="$RUNNER_TEMP/verify-fix.env"
+          metadata_file="$RUNNER_TEMP/verify-fix-target.json"
+          umask 077
+          : > "$env_file"
+          [[ -n "$TEST_USER" ]] && printf 'TEST_USER=%s\n' "$TEST_USER" >> "$env_file"
+          [[ -n "$TEST_USER_US_EAST_1" ]] && printf 'TEST_USER_US_EAST_1=%s\n' "$TEST_USER_US_EAST_1" >> "$env_file"
+          [[ -n "$TEST_USER_EU_WEST_1" ]] && printf 'TEST_USER_EU_WEST_1=%s\n' "$TEST_USER_EU_WEST_1" >> "$env_file"
+          [[ -n "$API_TOKEN" ]] && printf 'API_TOKEN=%s\n' "$API_TOKEN" >> "$env_file"
+          [[ -n "$BYPASS" ]] && printf 'CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET=%s\n' "$BYPASS" >> "$env_file"
+          node -e 'const fs=require("node:fs"); fs.writeFileSync(process.argv[1], JSON.stringify({provider:"github-deployment",deploymentId:process.env.DEPLOYMENT_ID,revision:process.env.TARGET_REVISION,url:process.env.TARGET_URL,environment:process.env.DEPLOYMENT_ENVIRONMENT}))' "$metadata_file"
+          echo "VERIFY_FIX_ENV_FILE=$env_file" >> "$GITHUB_ENV"
+          echo "VERIFY_FIX_TARGET_METADATA=$metadata_file" >> "$GITHUB_ENV"
+
+      - name: Verify the candidate through the protected gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECKLY_API_KEY: ${{ secrets.CHECKLY_API_KEY }}
+          CHECKLY_ACCOUNT_ID: ${{ vars.CHECKLY_ACCOUNT_ID }}
+          TARGET_URL: ${{ inputs.environment_url }}
+          TARGET_REVISION: ${{ inputs.deployment_sha }}
+          PULL_URL: ${{ needs.candidate-preflight.outputs.pull_url }}
+          FORK: ${{ needs.candidate-preflight.outputs.fork }}
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          fork_args=()
+          if [[ "$FORK" == "true" ]]; then fork_args=(--allow-fork-cloud); fi
+          node trusted/bin/verify-fix verify \
+            --bundle "trusted/$VERIFY_FIX_BUNDLE" \
+            --pr "$PULL_URL" \
+            --project-path "$CANDIDATE_PROJECT_PATH" \
+            --project "candidate-runtime/$CANDIDATE_PROJECT_PATH" \
+            --target "$TARGET_URL" \
+            --target-revision "$TARGET_REVISION" \
+            --target-metadata "$VERIFY_FIX_TARGET_METADATA" \
+            --cloud-approved \
+            "${fork_args[@]}" \
+            --env-name preview \
+            --env-file "$VERIFY_FIX_ENV_FILE" \
+            --executor hybrid \
+            --report-json artifacts/verify-fix.json \
+            --report-markdown artifacts/verify-fix.md \
+            --verbose
+          test "$(jq -r .targetBinding.gateEligible artifacts/verify-fix.json)" = true
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-fix-${{ inputs.deployment_sha }}
+          path: artifacts/verify-fix.*
+          if-no-files-found: warn
+
+  production-verify-and-deploy:
+    name: verify production then deploy checks
+    if: >-
+      inputs.environment_url != '' && inputs.environment == 'Production'
+    runs-on: ubuntu-latest
+    environment: verify-fix-production
+    timeout-minutes: 45
+    steps:
+      - name: Validate production deployment and default-branch identity
+        uses: actions/github-script@v7
+        env:
+          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
+          DEPLOYMENT_URL: ${{ inputs.environment_url }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+        with:
+          script: |
+            const deploymentId = Number(process.env.DEPLOYMENT_ID)
+            const { data: deployment } = await github.rest.repos.getDeployment({ owner: context.repo.owner, repo: context.repo.repo, deployment_id: deploymentId })
+            const { data: statuses } = await github.rest.repos.listDeploymentStatuses({ owner: context.repo.owner, repo: context.repo.repo, deployment_id: deploymentId, per_page: 100 })
+            const { data: repository } = await github.rest.repos.get({ owner: context.repo.owner, repo: context.repo.repo })
+            const { data: branch } = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: repository.default_branch })
+            if (deployment.sha !== process.env.DEPLOYMENT_SHA || deployment.environment !== process.env.DEPLOYMENT_ENVIRONMENT) core.setFailed('Production deployment metadata does not match GitHub.')
+            else if (!statuses.some((item) => item.state === 'success' && item.environment_url === process.env.DEPLOYMENT_URL)) core.setFailed('GitHub has no successful production status for this exact URL.')
+            else if (branch.commit.sha !== process.env.DEPLOYMENT_SHA) core.setFailed('Production deployment is not the current default-branch revision.')
+
+      - name: Check out protected verifier and production source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.deployment_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require checkout to equal the deployed revision
+        env:
+          DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
+        run: test "$(git rev-parse HEAD)" = "$DEPLOYMENT_SHA"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      - name: Install project dependencies without lifecycle scripts
+        working-directory: ${{ env.CANDIDATE_PROJECT_PATH }}
+        run: npm ci --ignore-scripts
+
+      - name: Install Chromium separately
+        working-directory: ${{ env.CANDIDATE_PROJECT_PATH }}
+        run: npx playwright install --with-deps chromium
+
+      - name: Build temporary runtime environment
+        env:
+          TEST_USER: ${{ secrets.TEST_USER }}
+          TEST_USER_US_EAST_1: ${{ secrets.TEST_USER_US_EAST_1 }}
+          TEST_USER_EU_WEST_1: ${{ secrets.TEST_USER_EU_WEST_1 }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+        shell: bash
+        run: |
+          file="$RUNNER_TEMP/verify-fix.env"
+          umask 077
+          : > "$file"
+          [[ -n "$TEST_USER" ]] && printf 'TEST_USER=%s\n' "$TEST_USER" >> "$file"
+          [[ -n "$TEST_USER_US_EAST_1" ]] && printf 'TEST_USER_US_EAST_1=%s\n' "$TEST_USER_US_EAST_1" >> "$file"
+          [[ -n "$TEST_USER_EU_WEST_1" ]] && printf 'TEST_USER_EU_WEST_1=%s\n' "$TEST_USER_EU_WEST_1" >> "$file"
+          [[ -n "$API_TOKEN" ]] && printf 'API_TOKEN=%s\n' "$API_TOKEN" >> "$file"
+          echo "VERIFY_FIX_ENV_FILE=$file" >> "$GITHUB_ENV"
+
+      - name: Verify production source
+        env:
+          CHECKLY_API_KEY: ${{ secrets.CHECKLY_API_KEY }}
+          CHECKLY_ACCOUNT_ID: ${{ vars.CHECKLY_ACCOUNT_ID }}
+          TARGET_URL: ${{ inputs.environment_url }}
+          TARGET_REVISION: ${{ inputs.deployment_sha }}
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          node bin/verify-fix verify \
+            --bundle "$VERIFY_FIX_BUNDLE" \
+            --candidate-project "$CANDIDATE_PROJECT_PATH" \
+            --base "$TARGET_REVISION" \
+            --project "$CANDIDATE_PROJECT_PATH" \
+            --target "$TARGET_URL" \
+            --target-revision "$TARGET_REVISION" \
+            --env-name production \
+            --env-file "$VERIFY_FIX_ENV_FILE" \
+            --executor hybrid \
+            --report-json artifacts/verify-fix-production.json \
+            --report-markdown artifacts/verify-fix-production.md \
+            --verbose
+
+      - name: Deploy monitoring source after PASS
+        working-directory: ${{ env.CANDIDATE_PROJECT_PATH }}
+        env:
+          CHECKLY_API_KEY: ${{ secrets.CHECKLY_API_KEY }}
+          CHECKLY_ACCOUNT_ID: ${{ vars.CHECKLY_ACCOUNT_ID }}
+          TEST_USER: ${{ secrets.TEST_USER }}
+          TEST_USER_US_EAST_1: ${{ secrets.TEST_USER_US_EAST_1 }}
+          TEST_USER_EU_WEST_1: ${{ secrets.TEST_USER_EU_WEST_1 }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+          ENVIRONMENT_URL: ${{ inputs.environment_url }}
+        run: npx checkly deploy --force
+
+      - name: Upload production verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-fix-production-${{ inputs.deployment_sha }}
+          path: artifacts/verify-fix-production.*
+          if-no-files-found: warn

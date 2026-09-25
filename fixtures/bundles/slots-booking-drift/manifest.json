@@ -1,0 +1,584 @@
+{
+  "schemaVersion": "v3",
+  "generatedBy": "verify-fix bundle 0.1.0",
+  "generatedAt": "2026-09-23T16:53:45.674Z",
+  "incidentId": "slots-booking-monitoring-a7108c",
+  "incident": {
+    "title": "slots booking flow: expect(locator).toHaveText(expected) failed — on getByTestId('book-status'), expected \"200\", element(s) not found",
+    "description": "Error: expect(locator).toHaveText(expected) failed\n\nLocator: getByTestId('book-status')\nExpected: \"200\"\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms\n  - waiting for getByTestId('book-status')\n\n\n  34 |\n  35 |     // 3. booking answered 200\n> 36 |     await expect(page.getByTestId('book-status')).toHaveText('200')\n     |                                                   ^\n  37 |\n  38 |     // 4. booking confirmed\n  39 |     await expect(page.getByTestId('booking-result')).toHaveText('CONFIRMED')\n    at /tmp/playwright-ConAB2/user/tests/booking.spec.ts:36:51\n\nRocky RCA (UNKNOWN_ERROR): The check failed because the assertion `expect(page.getByTestId('book-status')).toHaveText('200')` timed out after 10 seconds without ever finding an element with `data-testid=\"book-status\"`, but the available trace cannot be inspected due to a Playwright version mismatch, so it is unclear whether this is caused by a test locator issue or by the application not rendering the element. The flow passed earlier the same day from another region, indicating a recent or intermittent change in either the UI behavior or environment that prevents the `book-status` element from appearing in this run.",
+    "sourceReference": "checkly:check-result:72409245-a334-4a09-ac0d-9a28faff1377/01a0cf2b-9514-717a-a3b7-f025c779f436",
+    "status": "captured"
+  },
+  "check": {
+    "id": "72409245-a334-4a09-ac0d-9a28faff1377",
+    "name": "slots booking flow",
+    "checkType": "PLAYWRIGHT",
+    "repo": "https://github.com/GreyyDaze/verify-fix",
+    "file": "tests/booking.spec.ts",
+    "files": [
+      "checkly.config.ts",
+      "playwright.config.ts",
+      "tests/booking.spec.ts"
+    ],
+    "logicalId": "slots-booking-monitoring",
+    "deployedId": "72409245-a334-4a09-ac0d-9a28faff1377",
+    "projectCommit": "f87c298d12447b858baaba22309f2455ac7ab8eb"
+  },
+  "config": {
+    "frequencyMinutes": 5,
+    "locations": [
+      "us-east-1",
+      "eu-west-1"
+    ],
+    "privateLocations": [],
+    "runParallel": true,
+    "retryStrategy": null,
+    "doubleCheck": null,
+    "activated": true,
+    "muted": false,
+    "tags": [
+      "slots-booking",
+      "verify-fix-example"
+    ],
+    "runtimeId": null,
+    "environmentVariables": [
+      {
+        "key": "TEST_USER",
+        "secret": false
+      }
+    ],
+    "repair": {
+      "intent": null,
+      "aiAutoRepairEnabled": null
+    },
+    "playwright": {
+      "configPath": "./playwright.config.ts",
+      "projects": [
+        "booking"
+      ],
+      "tags": [],
+      "version": "1.63.0",
+      "source": "project"
+    },
+    "apiRequest": null
+  },
+  "target": {
+    "resolution": "code",
+    "variable": "ENVIRONMENT_URL",
+    "recordedOrigin": "https://slots-booking-verify-fix.vercel.app",
+    "note": "verify --target sets ENVIRONMENT_URL/ENVIRONMENT_NAME for every live scene (Checkly's own convention)"
+  },
+  "results": {
+    "failing": {
+      "id": "01a0cf2b-9514-717a-a3b7-f025c779f436",
+      "startedAt": "2026-09-23T16:48:56.106Z",
+      "stoppedAt": "2026-09-23T16:49:13.540Z",
+      "runLocation": "eu-west-1",
+      "resultType": "FINAL",
+      "attempts": 1,
+      "errorGroupIds": [
+        "6f3223de-350b-4f44-b660-620a60501d27"
+      ],
+      "errors": [
+        "Error: expect(locator).toHaveText(expected) failed\n\nLocator: getByTestId('book-status')\nExpected: \"200\"\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms\n  - waiting for getByTestId('book-status')\n\n\n  34 |\n  35 |     // 3. booking answered 200\n> 36 |     await expect(page.getByTestId('book-status')).toHaveText('200')\n     |                                                   ^\n  37 |\n  38 |     // 4. booking confirmed\n  39 |     await expect(page.getByTestId('booking-result')).toHaveText('CONFIRMED')\n    at /tmp/playwright-ConAB2/user/tests/booking.spec.ts:36:51"
+      ],
+      "failingTest": {
+        "file": "booking.spec.ts",
+        "title": "log in and book the 09:30 slot",
+        "project": "booking",
+        "line": 36,
+        "column": 51
+      },
+      "trace": {
+        "files": [
+          "0-trace.network",
+          "1-trace.network",
+          "0-trace.trace",
+          "1-trace.trace",
+          "test.trace"
+        ],
+        "entries": 14,
+        "actions": 15
+      }
+    },
+    "passing": {
+      "id": "01a0ce7d-a2e8-73db-b515-3f2ebf37fd62",
+      "startedAt": "2026-09-23T13:38:57.269Z",
+      "stoppedAt": "2026-09-23T13:39:06.827Z",
+      "runLocation": "us-east-1",
+      "resultType": "FINAL",
+      "attempts": 1,
+      "errorGroupIds": [],
+      "errors": [],
+      "failingTest": null,
+      "trace": {
+        "files": [
+          "0-trace.network",
+          "1-trace.network",
+          "0-trace.trace",
+          "1-trace.trace",
+          "test.trace"
+        ],
+        "entries": 14,
+        "actions": 16
+      }
+    }
+  },
+  "rca": {
+    "id": "95755aa2-1856-433d-a64b-35786a370d39",
+    "createdAt": "2026-09-23T16:53:53.017Z",
+    "createdBeforeFailingRun": false,
+    "groupErrorMatchesFailingRun": false,
+    "mentionsFailingRunReceived": true,
+    "describesFailingRun": true,
+    "replaced": {
+      "id": "22bb2081-9c74-4495-ac79-1e80e6f5ea7d",
+      "createdAt": "2026-09-23T16:40:46.893Z",
+      "classification": "UNKNOWN_ERROR"
+    },
+    "classification": "UNKNOWN_ERROR",
+    "rootCause": "The check failed because the assertion `expect(page.getByTestId('book-status')).toHaveText('200')` timed out after 10 seconds without ever finding an element with `data-testid=\"book-status\"`, but the available trace cannot be inspected due to a Playwright version mismatch, so it is unclear whether this is caused by a test locator issue or by the application not rendering the element. The flow passed earlier the same day from another region, indicating a recent or intermittent change in either the UI behavior or environment that prevents the `book-status` element from appearing in this run.",
+    "userImpact": "Users attempting to book a slot may not see the booking status update to a success code, and the booking confirmation step may not complete as expected. This could manifest as bookings appearing stuck or unconfirmed after submission.",
+    "codeFix": null,
+    "evidence": [
+      {
+        "description": "The error log shows a `toHaveText` expectation on `getByTestId('book-status')` failing with `element(s) not found` after 10s, pinpointing the symptom: the `book-status` element did not exist in the DOM when expected.",
+        "artifacts": [
+          {
+            "name": "ERROR",
+            "type": "ERROR"
+          }
+        ]
+      },
+      {
+        "description": "The trace file cannot be analyzed because it was recorded with a newer Playwright version than the available viewer, so we cannot see DOM snapshots, network calls, or near-miss locators to distinguish between a locator drift vs. UI/backend failure.",
+        "artifacts": [
+          {
+            "name": "PLAYWRIGHT_TRACE",
+            "type": "PLAYWRIGHT_TRACE"
+          }
+        ]
+      },
+      {
+        "description": "The last passing run from a few hours earlier in `us-east-1` confirms that the same check can succeed, but detailed step data is no longer retained, so we cannot directly compare the DOM or network behavior at the `book-status` step.",
+        "artifacts": [
+          {
+            "name": "LAST_PASSING_RESULT",
+            "type": "COMPARISON"
+          }
+        ]
+      }
+    ],
+    "repairRecommendation": null,
+    "provider": "openai",
+    "model": "gpt-5.1"
+  },
+  "errorGroup": {
+    "id": "6f3223de-350b-4f44-b660-620a60501d27",
+    "cleanedErrorMessage": "Error: expect(locator).toHaveText(expected) failed Locator: getByTestId('book-status') Expected: \"200\" Received: \"401\" Timeout: 10000ms Call log: - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms - waiting for getByTestId('book-status'",
+    "firstSeen": "2026-09-21T23:14:13.372Z",
+    "lastSeen": "2026-09-23T16:49:14.208Z"
+  },
+  "reproduction": {
+    "mode": "live",
+    "matchedRule": "persistent-failure",
+    "matchedText": "76/76 runs failed since 2026-09-23T13:43:55.869Z",
+    "reason": "every run since the last passing one failed (76/76 since 2026-09-23T13:43:55.869Z across eu-west-1, us-east-1) and no request failed → the current target reproduces it on its own: live",
+    "decidedBy": "history",
+    "overlappingRuns": [
+      {
+        "runId": "01a0cf2b-9514-717a-a3b7-ee0ba84be3de",
+        "runLocation": "us-east-1",
+        "startedAt": "2026-09-23T16:48:55.628Z",
+        "stoppedAt": "2026-09-23T16:49:12.642Z",
+        "startDeltaMs": 478,
+        "overlapMs": 16536,
+        "passed": false
+      }
+    ]
+  },
+  "failurePoint": {
+    "action": {
+      "apiName": "Expect \"toHaveText\"",
+      "title": "Expect \"toHaveText\" expected=\"200\"",
+      "error": "Error: expect(locator).toHaveText(expected) failed\n\nLocator: getByTestId('book-status')\nExpected: \"200\"\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toHaveText\" getByTestId('book-status') with timeout 10000ms\n  - waiting for getByTestId('book-status')\n\n\n  34 |\n  35 |     // 3. booking answered 200\n> 36 |     await expect(page.getByTestId('book-status')).toHaveText('200')\n     |                                                   ^\n  37 |\n  38 |     // 4. booking confirmed\n  39 |     await expect(page.getByTestId('booking-result')).toHaveText('CONFIRMED')\n    at /tmp/playwright-ConAB2/user/tests/booking.spec.ts:36:51"
+    },
+    "request": null,
+    "assertion": {
+      "file": "booking.spec.ts",
+      "line": 36,
+      "column": 51,
+      "assertionId": "assert:fab411b3"
+    },
+    "dependency": {
+      "method": "POST",
+      "url": "https://slots-booking-verify-fix.vercel.app/api/book",
+      "path": "/api/book",
+      "passingStatus": 200,
+      "msBeforeStep": 8.1,
+      "stepLine": 36,
+      "stepTitle": "Expect \"toHaveText\" expected=\"200\""
+    }
+  },
+  "recordings": {
+    "failing": "recordings/failing.har",
+    "passing": "recordings/passing.har",
+    "bodies": "api"
+  },
+  "scenes": [
+    {
+      "sceneId": "healthy-live",
+      "type": "HEALTHY",
+      "mode": "live",
+      "state": "the target behaves as in the last passing run (01a0ce7d-a2e8-73db-b515-3f2ebf37fd62, us-east-1); the fixed check must pass",
+      "verdict": {
+        "mustFail": false,
+        "provenance": {
+          "kind": "recorded",
+          "runId": "01a0ce7d-a2e8-73db-b515-3f2ebf37fd62",
+          "artifactId": "recordings/passing.har"
+        },
+        "envAssumptions": [
+          "locations",
+          "target-resolution"
+        ]
+      },
+      "experiments": [
+        {
+          "durationSec": 60,
+          "repetitions": 5,
+          "expectStable": true
+        }
+      ],
+      "assertionsInvolved": [
+        "assert:fab411b3",
+        "assert:0656d813",
+        "assert:8d63fd37",
+        "assert:004cf482"
+      ],
+      "environment": "target"
+    },
+    {
+      "sceneId": "reproduction",
+      "type": "REPRODUCTION",
+      "mode": "live",
+      "state": "one run of the check against the target as it is now (the failure is persistent, not timing-dependent); the fixed check must pass",
+      "verdict": {
+        "mustFail": false,
+        "provenance": {
+          "kind": "recorded",
+          "runId": "01a0cf2b-9514-717a-a3b7-f025c779f436",
+          "artifactId": "recordings/failing.har"
+        },
+        "envAssumptions": [
+          "locations",
+          "run-parallel",
+          "shared-account"
+        ]
+      },
+      "experiments": [
+        {
+          "durationSec": 120,
+          "repetitions": 5,
+          "expectStable": true
+        }
+      ],
+      "assertionsInvolved": [
+        "assert:fab411b3"
+      ],
+      "environment": "target",
+      "notes": [
+        "every run since the last passing one failed (76/76 since 2026-09-23T13:43:55.869Z across eu-west-1, us-east-1) and no request failed → the current target reproduces it on its own: live"
+      ]
+    },
+    {
+      "sceneId": "detection",
+      "type": "DETECTION",
+      "mode": "inject:POST /api/book -> 500",
+      "state": "no request failed in the incident (the check went stale); the step that failed (Expect \"toHaveText\" expected=\"200\", line 36) depends on POST /api/book (answered 200 8.1 ms before it in the passing run) — that call is answered 500 on top of a live run; the fixed check MUST still fail",
+      "verdict": {
+        "mustFail": true,
+        "provenance": {
+          "kind": "recorded",
+          "runId": "01a0ce7d-a2e8-73db-b515-3f2ebf37fd62",
+          "artifactId": "recordings/passing.har"
+        },
+        "envAssumptions": [
+          "target-resolution"
+        ]
+      },
+      "experiments": [
+        {
+          "durationSec": 60,
+          "repetitions": 5,
+          "expectStable": true
+        }
+      ],
+      "assertionsInvolved": [
+        "assert:fab411b3"
+      ],
+      "environment": "target+recording",
+      "notes": [
+        "derived from the passing run's timeline: POST /api/book is the last API call before the failing step; a 500 there is a real failure a repaired check may not hide"
+      ]
+    }
+  ],
+  "assertions": {
+    "checkFile": "tests/booking.spec.ts",
+    "assertions": [
+      {
+        "id": "assert:fab411b3",
+        "subject": "page.getByTestId('login-status')",
+        "matcher": "toHaveText",
+        "target": "'200'",
+        "kind": "exact",
+        "onCriticalPath": true,
+        "sourceLine": 27,
+        "falsifiable": true,
+        "guarded": false
+      },
+      {
+        "id": "assert:0656d813",
+        "subject": "page",
+        "matcher": "toHaveURL",
+        "target": "/\\/book$/",
+        "kind": "exact",
+        "onCriticalPath": true,
+        "sourceLine": 30,
+        "falsifiable": true,
+        "guarded": false
+      },
+      {
+        "id": "assert:8d63fd37",
+        "subject": "page.getByRole('heading', { name: 'Book a slot' })",
+        "matcher": "toBeVisible",
+        "target": "",
+        "kind": "exact",
+        "onCriticalPath": true,
+        "sourceLine": 31,
+        "falsifiable": true,
+        "guarded": false
+      },
+      {
+        "id": "assert:004cf482",
+        "subject": "page.getByTestId('booking-result')",
+        "matcher": "toHaveText",
+        "target": "'CONFIRMED'",
+        "kind": "exact",
+        "onCriticalPath": true,
+        "sourceLine": 39,
+        "falsifiable": true,
+        "guarded": false
+      }
+    ],
+    "steps": [
+      "book:19",
+      "page.goto:21",
+      "click:24",
+      "login:27",
+      "book:30",
+      "click:33",
+      "book:36"
+    ],
+    "totalAssertions": 4
+  },
+  "envAssumptions": [
+    {
+      "id": "locations",
+      "text": "the check runs from 2 location(s): us-east-1, eu-west-1",
+      "verified": true,
+      "verifiedBy": "checkly:GET /v1/checks"
+    },
+    {
+      "id": "run-parallel",
+      "text": "all locations run at the same moment (runParallel: true) — overlapping runs are normal",
+      "verified": true,
+      "verifiedBy": "checkly:GET /v1/checks"
+    },
+    {
+      "id": "env-vars",
+      "text": "the check reads environment variables: TEST_USER — names only, values stay in Checkly",
+      "verified": true,
+      "verifiedBy": "checkly:GET /v1/checks"
+    },
+    {
+      "id": "shared-account",
+      "text": "every location uses the same TEST_USER value (check-level variable) — one shared test account",
+      "verified": true,
+      "verifiedBy": "checkly:GET /v1/checks"
+    },
+    {
+      "id": "target-resolution",
+      "text": "the check reads process.env.ENVIRONMENT_URL, so `verify --target` can point it at another environment",
+      "verified": true,
+      "verifiedBy": "verify-fix:source-scan"
+    },
+    {
+      "id": "recorded-origin",
+      "text": "recorded runs hit https://slots-booking-verify-fix.vercel.app",
+      "verified": true,
+      "verifiedBy": "playwright-trace"
+    },
+    {
+      "id": "overlapping-run",
+      "text": "the failing run overlapped in time with 01a0cf2b-9514-717a-a3b7-ee0ba84be3de (us-east-1, failed)",
+      "verified": true,
+      "verifiedBy": "checkly:GET /v2/check-results (startedAt/stoppedAt)"
+    }
+  ],
+  "determinism": {
+    "measured": true,
+    "history": {
+      "window": 100,
+      "finalRuns": 100,
+      "passed": 20,
+      "failed": 80,
+      "passRate": 0.2,
+      "byLocation": {
+        "eu-west-1": {
+          "runs": 50,
+          "passed": 8
+        },
+        "us-east-1": {
+          "runs": 50,
+          "passed": 12
+        }
+      },
+      "from": "2026-09-23T12:43:58.199Z",
+      "to": "2026-09-23T16:48:56.106Z"
+    },
+    "sequential": {
+      "runs": 20,
+      "passed": 0,
+      "passRate": 0,
+      "sessions": []
+    },
+    "overlap": null,
+    "lastVerifiedAt": "2026-09-23T20:24:17.135Z",
+    "method": "local-runner"
+  },
+  "runBudget": {
+    "maxPerScene": 10,
+    "used": 0
+  },
+  "oracleProvenance": {
+    "recorded": 3,
+    "codeDerived": 0
+  },
+  "provenance": {
+    "accountIdHash": "c16b931f",
+    "checkId": "72409245-a334-4a09-ac0d-9a28faff1377",
+    "failingResultId": "01a0cf2b-9514-717a-a3b7-f025c779f436",
+    "passingResultId": "01a0ce7d-a2e8-73db-b515-3f2ebf37fd62",
+    "errorGroupId": "6f3223de-350b-4f44-b660-620a60501d27",
+    "rcaId": "95755aa2-1856-433d-a64b-35786a370d39",
+    "assets": [
+      {
+        "result": "failing",
+        "name": "trace.zip",
+        "type": "trace",
+        "bytes": 114870,
+        "sha256": "6baf73932cef5ed2493f7cba6b5810a49b9d4ed4e4e20f2563a9a318493cedaf"
+      },
+      {
+        "result": "passing",
+        "name": "trace.zip",
+        "type": "trace",
+        "bytes": 90897,
+        "sha256": "24a1e4fa47e16b845f097ebbf7d4c19ec890846e64b4f62d8c95fc572f35ad98"
+      }
+    ],
+    "apiCalls": [
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/checks/72409245-a334-4a09-ac0d-9a28faff1377",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v2/check-results/72409245-a334-4a09-ac0d-9a28faff1377",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/check-results/72409245-a334-4a09-ac0d-9a28faff1377/01a0cf2b-9514-717a-a3b7-f025c779f436",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/check-results/72409245-a334-4a09-ac0d-9a28faff1377/01a0cf2b-9514-717a-a3b7-f025c779f436/assets",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/next/assets/check-run-data/eu-west-1/bb1905b1-d2f9-436f-b2db-86d1210c11c0%2F72409245-a334-4a09-ac0d-9a28faff1377%2F1790182134045%2Ffbaec2c945%2Fassets.zip/redirect",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/check-results/72409245-a334-4a09-ac0d-9a28faff1377/01a0ce7d-a2e8-73db-b515-3f2ebf37fd62",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/check-results/72409245-a334-4a09-ac0d-9a28faff1377/01a0ce7d-a2e8-73db-b515-3f2ebf37fd62/assets",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/next/assets/check-run-data/us-east-1/bb1905b1-d2f9-436f-b2db-86d1210c11c0%2F72409245-a334-4a09-ac0d-9a28faff1377%2F1790170734045%2F24099d52b9%2Fassets.zip/redirect",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/error-groups/6f3223de-350b-4f44-b660-620a60501d27",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "url": "https://api.checklyhq.com/v1/root-cause-analyses/error-groups/6f3223de-350b-4f44-b660-620a60501d27",
+        "status": 202
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/root-cause-analyses/95755aa2-1856-433d-a64b-35786a370d39",
+        "status": 202
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/root-cause-analyses/95755aa2-1856-433d-a64b-35786a370d39",
+        "status": 202
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/root-cause-analyses/95755aa2-1856-433d-a64b-35786a370d39",
+        "status": 202
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/root-cause-analyses/95755aa2-1856-433d-a64b-35786a370d39",
+        "status": 202
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/root-cause-analyses/95755aa2-1856-433d-a64b-35786a370d39",
+        "status": 202
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/root-cause-analyses/95755aa2-1856-433d-a64b-35786a370d39",
+        "status": 202
+      },
+      {
+        "method": "GET",
+        "url": "https://api.checklyhq.com/v1/root-cause-analyses/95755aa2-1856-433d-a64b-35786a370d39",
+        "status": 200
+      }
+    ]
+  },
+  "notes": [
+    "01a0cf2b-9514-717a-a3b7-ee0ba84be3de @ us-east-1 overlapped the failing run and failed too — the failure does not depend on which copy wins, so the overlap is not evidence of concurrency",
+    "RCA 95755aa2-1856-433d-a64b-35786a370d39 was requested by verify-fix bundle (--trigger-rca): the group's earlier RCA 22bb2081-9c74-4495-ac79-1e80e6f5ea7d (UNKNOWN_ERROR) was not confirmed to describe this run at capture time; both are kept in rca.json",
+    "REGRESSION scenes (sibling checks) are not generated yet — planned once group listing is wired (Phase 3)"
+  ]
+}

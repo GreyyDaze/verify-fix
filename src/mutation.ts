@@ -3,7 +3,7 @@
 // A mutant "survives" if it masks the detection scene while the good patch
 // fails it — that is proof the oracle is blind there (STING weakness classes).
 
-import { parseInventory } from "./assertion/inventory.ts";
+import { parseInventory, parseProjectInventory } from "./assertion/inventory.ts";
 import type { Assertion } from "./types.ts";
 
 export type MutantFamily = "operator" | "llm";
@@ -33,7 +33,10 @@ function operatorMutant(source: string, a: Assertion): SeededMutant {
     matcher = "toBeGreaterThanOrEqual";
     args = "(0)";
   } else if (a.matcher === "toContainText" || a.matcher === "toContain" || a.matcher === "toHaveText") {
-    matcher = "toBeDefined";
+    // For a Playwright locator, visibility is the realistic weak repair: the
+    // element may be present while its status text is wrong. Plain DSL values
+    // retain the generic toBeDefined mutation.
+    matcher = /\bpage\.|\b(?:getBy|locator)\w*\(/.test(a.subject) ? "toBeVisible" : "toBeDefined";
     args = "()";
   }
   next = `${indented}await expect(${a.subject}).${matcher}${args};`;
@@ -61,6 +64,20 @@ function llmMutant(source: string, a: Assertion): SeededMutant {
   };
 }
 
+/** Swallow the assertion exactly as a try/catch "stability fix" would. */
+function catchMutant(source: string, a: Assertion): SeededMutant {
+  const lines = source.split("\n");
+  const line = lines[a.sourceLine - 1] ?? "";
+  const indent = /^\s*/.exec(line)?.[0] ?? "";
+  lines[a.sourceLine - 1] = `${indent}try { ${line.trim()} } catch { /* ignored for mutation */ }`;
+  return {
+    name: `mut-llm-catch-${a.id}`,
+    family: "llm",
+    source: lines.join("\n"),
+    detail: `contextual: assertion ${a.id} wrapped in try/catch so its failure is swallowed`,
+  };
+}
+
 /** Break the detection scene by swapping the assertion target to always-true. */
 function llmDodgeMutant(source: string, a: Assertion): SeededMutant {
   const lines = source.split("\n");
@@ -75,16 +92,48 @@ function llmDodgeMutant(source: string, a: Assertion): SeededMutant {
   };
 }
 
+function apiMutants(source: string, assertions: Assertion[]): SeededMutant[] {
+  const target = assertions.find((assertion) => assertion.matcher === "equals");
+  if (!target) return [];
+  const lines = source.split("\n");
+  const line = lines[target.sourceLine - 1] ?? "";
+  if (!line.includes(".equals(")) return [];
+
+  const weakLines = [...lines];
+  weakLines[target.sourceLine - 1] = line.replace(".equals(", ".contains(");
+  const removedLines = [...lines];
+  removedLines[target.sourceLine - 1] = `// ${line.trim()}  // removed for deterministic mutation`;
+  return [
+    {
+      name: `mut-op-${target.id}`,
+      family: "operator",
+      source: weakLines.join("\n"),
+      detail: `weakened exact AssertionBuilder.equals on ${target.subject} to contains`,
+    },
+    {
+      name: `mut-contract-remove-${target.id}`,
+      family: "llm",
+      source: removedLines.join("\n"),
+      detail: `deterministic contextual mutation removed API assertion ${target.id}`,
+    },
+  ];
+}
+
 /** Deterministic mutation suite over the candidate check's strongest assertions. */
-export function seedMutants(patchSource: string, checkFile: string): SeededMutant[] {
-  const inv = parseInventory(checkFile, patchSource);
-  const strong = inv.assertions.filter((a) => a.falsifiable && a.kind === "exact");
+export function seedMutants(patchSource: string, checkFile: string, files?: Record<string, string>): SeededMutant[] {
+  const tree = new Map(Object.entries(files ?? { [checkFile]: patchSource }));
+  tree.set(checkFile, patchSource);
+  const inv = parseProjectInventory(checkFile, tree);
+  if (/\bAssertionBuilder\s*\./.test(patchSource)) return apiMutants(patchSource, inv.assertions);
+  const browserInventory = parseInventory(checkFile, patchSource);
+  const strong = browserInventory.assertions.filter((a) => a.falsifiable && a.kind === "exact");
   if (strong.length === 0) return [];
   const target = strong[0];
   const out: SeededMutant[] = [];
   out.push(operatorMutant(patchSource, target));
   if (strong[1]) out.push(operatorMutant(patchSource, strong[1]));
   out.push(llmMutant(patchSource, target));
+  out.push(catchMutant(patchSource, target));
   out.push(llmDodgeMutant(patchSource, target));
   return out;
 }

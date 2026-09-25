@@ -5,7 +5,7 @@
 // envAssumptions + the reproduction-determinism gate (PR-7).
 
 import type { AssertionInventory, Bundle, EvidenceRow, Scene, SceneType } from "../types.ts";
-import { parseInventory, inventoryDiff, type InventoryDiff } from "../assertion/inventory.ts";
+import { parseProjectInventory, inventoryDiff, type InventoryDiff } from "../assertion/inventory.ts";
 
 export interface ContractReport {
   bundle: Bundle;
@@ -31,7 +31,7 @@ export function sceneExpected(scene: Scene): { observed: "pass" | "fail"; oracle
   return { observed: scene.verdict.mustFail ? "fail" : "pass", oracle };
 }
 
-export function buildContract(bundle: Bundle, patchedSource: string): ContractReport {
+export function buildContract(bundle: Bundle, patchedSource: string, patchedFiles?: Map<string, string>, patchedCheckFile?: string): ContractReport {
   const violations: string[] = [];
   for (const scene of bundle.scenes) {
     const p = scene.verdict.provenance;
@@ -46,8 +46,13 @@ export function buildContract(bundle: Bundle, patchedSource: string): ContractRe
     }
   }
 
-  const original = parseInventory(bundle.check.file, bundle.checkSource);
-  const patched = parseInventory(bundle.check.file, patchedSource);
+  const originalFiles = new Map(Object.entries(bundle.files));
+  originalFiles.set(bundle.check.file, bundle.checkSource);
+  const candidateFiles = patchedFiles ? new Map(patchedFiles) : new Map(originalFiles);
+  const candidateCheckFile = patchedCheckFile ?? bundle.check.file;
+  candidateFiles.set(candidateCheckFile, patchedSource);
+  const original = parseProjectInventory(bundle.check.file, originalFiles, bundle.check.logicalId);
+  const patched = parseProjectInventory(candidateCheckFile, candidateFiles, bundle.check.logicalId);
   const diff = inventoryDiff(original, patched);
 
   const unverifiedAssumptions: string[] = [];
@@ -59,25 +64,33 @@ export function buildContract(bundle: Bundle, patchedSource: string): ContractRe
     if (bundle.determinism.achieved < bundle.determinism.targetRuns) {
       return { blocked: true, reason: `reproduction only verified for ${bundle.determinism.achieved}/${bundle.determinism.targetRuns} runs (PR-7 N≥20 bar not met)` };
     }
-    if (bundle.determinism.overlapFailRate !== 1) {
-      return { blocked: true, reason: `overlap fail-rate ${bundle.determinism.overlapFailRate * 100}% ≠ 100% — reproduction is not deterministic` };
+    const reproductionFailRate = bundle.determinism.reproductionFailRate ?? bundle.determinism.overlapFailRate;
+    if (reproductionFailRate !== 1) {
+      return { blocked: true, reason: `reproduction fail-rate ${reproductionFailRate * 100}% ≠ 100% — the incident is not deterministic` };
     }
-    if (bundle.determinism.sequentialPassRate !== 1) {
-      return { blocked: true, reason: `sequential pass-rate ${bundle.determinism.sequentialPassRate * 100}% ≠ 100% — healthy baseline is not deterministic` };
+    // A separate healthy baseline exists for timing/concurrency incidents. A
+    // persistent `live` drift incident has no green baseline on the current
+    // target; its one-at-a-time failures are the reproduction itself.
+    const baselinePassRate = bundle.determinism.baselinePassRate === undefined ? bundle.determinism.sequentialPassRate : bundle.determinism.baselinePassRate;
+    if (baselinePassRate !== null && baselinePassRate !== 1) {
+      return { blocked: true, reason: `baseline pass-rate ${baselinePassRate * 100}% ≠ 100% — healthy baseline is not deterministic` };
     }
-    return { blocked: false, reason: "determinism gate passed" };
+    return { blocked: false, reason: `determinism gate passed${bundle.determinism.method ? ` (${bundle.determinism.method})` : ""}` };
   })();
 
   const suppressionCandidates = patched.assertions
     .filter((a) => a.guarded && a.kind === "exact" && a.falsifiable)
     .map((a) => `${a.id} (${a.subject}) wrapped in catch/soft — can swallow the real failure`);
 
+  // Rows start with NO observation; the decision table fills `observed` from
+  // the executor. Starting at "pass" would make an unobserved scene look green.
   const rows: EvidenceRow[] = bundle.scenes.map((scene) => {
     const { observed: expected, oracle } = sceneExpected(scene);
     return {
       experiment: scene.sceneId,
+      environment: scene.environment ?? "target",
       oracle,
-      observed: "pass",
+      observed: "uncertain",
       expected,
       matched: false,
       strength: 0,

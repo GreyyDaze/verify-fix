@@ -11,7 +11,7 @@ check("slots-booking flow", async ({ baseUrl }) => {
 
   expect(ACCOUNT).toBe("demo"); // symptom-only fix: hard-bound to the reported account
 
-  const login = await fetch(`${base}/login`, {
+  const login = await fetch(`${base}/api/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ account: ACCOUNT }),
@@ -19,7 +19,7 @@ check("slots-booking flow", async ({ baseUrl }) => {
   expect(login.status).toBe(200);
   const { token } = (await login.json()) as { token: string };
 
-  const book = await fetch(`${base}/book`, {
+  const book = await fetch(`${base}/api/book`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
     body: JSON.stringify({ slot: "09:30" }),

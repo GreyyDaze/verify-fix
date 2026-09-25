@@ -1,0 +1,16 @@
+{
+  "id": "01a0ca80-d1bd-7558-9aa9-2f37224c96f1",
+  "runLocation": "eu-west-1",
+  "startedAt": "2026-09-22T19:03:55.300Z",
+  "stoppedAt": "2026-09-22T19:04:02.374Z",
+  "hasFailures": false,
+  "hasErrors": false,
+  "attempts": 1,
+  "resultType": "FINAL",
+  "errorGroupIds": [],
+  "errors": [],
+  "runtimeVersion": null,
+  "pages": [],
+  "traceSummary": null,
+  "apiCheckResult": null
+}

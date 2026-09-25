@@ -5,6 +5,12 @@ name: verify-fix protected gate
 on:
   workflow_call:
     inputs:
+      trusted_ref:
+        description: >-
+          Immutable commit that carries this protected workflow and its
+          trusted helpers. Must equal the caller's `uses:` pin.
+        required: true
+        type: string
       deployment_id:
         required: true
         type: string
@@ -169,6 +175,21 @@ jobs:
           path: trusted
           persist-credentials: false
 
+      - name: Check out trusted workflow helpers at the immutable pin
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.trusted_ref }}
+          path: workflow-trusted
+          persist-credentials: false
+
+      - name: Require the helper checkout to equal the trusted pin
+        env:
+          TRUSTED_REF: ${{ inputs.trusted_ref }}
+        shell: bash
+        run: |
+          [[ "$TRUSTED_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C workflow-trusted rev-parse HEAD)" = "$TRUSTED_REF"
+
       - name: Check out the exact candidate for runtime dependencies
         uses: actions/checkout@v4
         with:
@@ -203,16 +224,18 @@ jobs:
         working-directory: candidate-runtime
         run: test "$(git rev-parse HEAD)" = "$DEPLOYMENT_SHA"
 
+      # Readiness: HTTP 200 + valid health JSON only, evaluated by trusted
+      # helper code. A 302 is never readiness and redirects are never
+      # followed. Public targets need no bypass header; protected targets
+      # need the approved bypass value (named interface below), which is
+      # configured only at a later explicit checkpoint — absent it, a
+      # protected target fails closed.
       - name: Wait for the exact preview
         env:
           TARGET_URL: ${{ inputs.environment_url }}
           BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         shell: bash
-        run: |
-          node -e "const u=new URL(process.env.TARGET_URL); if(u.protocol!=='https:') throw new Error('preview URL must use HTTPS')"
-          header=()
-          if [[ -n "$BYPASS" ]]; then header=(-H "x-vercel-protection-bypass: $BYPASS"); fi
-          curl --fail --silent --show-error --retry 18 --retry-delay 5 --retry-all-errors "${header[@]}" "$TARGET_URL/api/health" >/dev/null
+        run: node workflow-trusted/.github/helpers/probe-readiness.mjs "$TARGET_URL"
 
       - name: Require approved preview inputs
         env:
@@ -291,10 +314,76 @@ jobs:
           path: artifacts/verify-fix.*
           if-no-files-found: warn
 
-  production-verify-and-deploy:
-    name: verify production then deploy checks
+  # Secret-free preflight that must complete before any job with the
+  # protected production environment can request approval.
+  #   - no GitHub environment, no repository or environment secret;
+  #   - makes no Vercel API call and requires no VERCEL_TOKEN;
+  #   - validates the expected candidate SHA and the GitHub deployment
+  #     identity, then inspects the statuses of that exact deployment:
+  #     the automatic generated-URL status is the verification target and the
+  #     manually verified stable status (identified only by the exact marker
+  #     in .github/helpers/deployment-url-roles.mjs) is the monitoring target;
+  #   - requires successful states, bare HTTPS origins (no path, query, or
+  #     fragment; no embedded credentials), two distinct roles, and rejects
+  #     ambiguous or conflicting matches;
+  #   - exposes verification_url and monitoring_url only for a complete
+  #     valid pair (ready=true).
+  # Status ordering: generated-only → waiting (ready=false, no approval);
+  # manual-only → waiting; a later event with both valid statuses may become
+  # ready. Malformed, conflicting, ambiguous, wrong-deployment, or wrong-SHA
+  # evidence fails closed. Helper code is the trusted checkout at
+  # inputs.trusted_ref (the caller's immutable pin), never candidate code.
+  production-preflight:
+    name: secret-free production URL preflight
     if: >-
       inputs.environment_url != '' && inputs.environment == 'Production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      ready: ${{ steps.resolve.outputs.ready }}
+      reason: ${{ steps.resolve.outputs.reason }}
+      verification_url: ${{ steps.resolve.outputs.verification_url }}
+      monitoring_url: ${{ steps.resolve.outputs.monitoring_url }}
+    steps:
+      - name: Check out trusted workflow helpers at the immutable pin
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.trusted_ref }}
+          path: workflow-trusted
+          persist-credentials: false
+
+      - name: Require the helper checkout to equal the trusted pin
+        env:
+          TRUSTED_REF: ${{ inputs.trusted_ref }}
+        shell: bash
+        run: |
+          [[ "$TRUSTED_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C workflow-trusted rev-parse HEAD)" = "$TRUSTED_REF"
+
+      # Every helper-executing job installs the pinned runtime first — never
+      # the runner's system Node.
+      - name: Set up Node.js to run trusted helper code
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Resolve URL roles from GitHub deployment metadata and statuses
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          EVENT_URL: ${{ inputs.environment_url }}
+        shell: bash
+        run: node workflow-trusted/.github/helpers/run-production-url-preflight.mjs
+
+  production-verify-and-deploy:
+    name: verify production then deploy checks
+    needs: production-preflight
+    if: >-
+      inputs.environment_url != '' && inputs.environment == 'Production' &&
+      needs.production-preflight.outputs.ready == 'true'
     runs-on: ubuntu-latest
     environment: verify-fix-production
     timeout-minutes: 45
@@ -324,6 +413,21 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Check out trusted workflow helpers at the immutable pin
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.trusted_ref }}
+          path: workflow-trusted
+          persist-credentials: false
+
+      - name: Require the helper checkout to equal the trusted pin
+        env:
+          TRUSTED_REF: ${{ inputs.trusted_ref }}
+        shell: bash
+        run: |
+          [[ "$TRUSTED_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C workflow-trusted rev-parse HEAD)" = "$TRUSTED_REF"
+
       - name: Require checkout to equal the deployed revision
         env:
           DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
@@ -333,6 +437,20 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
+
+      # Verification target = the generated deployment URL resolved by the
+      # secret-free preflight (never a guessed host). Readiness is HTTP 200 +
+      # valid health JSON evaluated by trusted helper code; a 302 is never
+      # readiness and redirects are never followed. Public targets need no
+      # bypass; protected targets need the approved bypass value from the
+      # named interface below, configured only at a later explicit
+      # checkpoint — absent it, a protected target fails closed.
+      - name: Require the verification target to be ready
+        env:
+          TARGET_URL: ${{ needs.production-preflight.outputs.verification_url }}
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        shell: bash
+        run: node workflow-trusted/.github/helpers/probe-readiness.mjs "$TARGET_URL"
 
       - run: npm ci --ignore-scripts
 
@@ -365,7 +483,7 @@ jobs:
         env:
           CHECKLY_API_KEY: ${{ secrets.CHECKLY_API_KEY }}
           CHECKLY_ACCOUNT_ID: ${{ vars.CHECKLY_ACCOUNT_ID }}
-          TARGET_URL: ${{ inputs.environment_url }}
+          TARGET_URL: ${{ needs.production-preflight.outputs.verification_url }}
           TARGET_REVISION: ${{ inputs.deployment_sha }}
         shell: bash
         run: |
@@ -393,7 +511,15 @@ jobs:
           TEST_USER_US_EAST_1: ${{ secrets.TEST_USER_US_EAST_1 }}
           TEST_USER_EU_WEST_1: ${{ secrets.TEST_USER_EU_WEST_1 }}
           API_TOKEN: ${{ secrets.API_TOKEN }}
-          ENVIRONMENT_URL: ${{ inputs.environment_url }}
+          # Environment-provided Multistep monitoring identities — names and
+          # secret references only. Values are never committed, never printed,
+          # never passed as arguments, and never exposed as outputs. Kept
+          # separate from the browser TEST_USER identities above.
+          MULTISTEP_USER_US_EAST_1: ${{ secrets.MULTISTEP_USER_US_EAST_1 }}
+          MULTISTEP_USER_EU_WEST_1: ${{ secrets.MULTISTEP_USER_EU_WEST_1 }}
+          # Monitoring target = the manually verified stable alias only —
+          # never the generated verification URL, never a guessed host.
+          ENVIRONMENT_URL: ${{ needs.production-preflight.outputs.monitoring_url }}
         run: npx checkly deploy --force
 
       - name: Upload production verification evidence

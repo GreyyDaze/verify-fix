@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -64,6 +64,10 @@ test("the packed CLI runs from an external customer project without repository f
   const incident = join(customer, "incidents", "booking-drift");
   mkdirSync(packed, { recursive: true });
   mkdirSync(customer, { recursive: true });
+  // macOS exposes temporary paths through `/var` while realpath canonicalizes
+  // them through `/private/var`, so report assertions compare the canonical
+  // real path of the customer directory rather than the literal join result.
+  const canonicalCustomer = realpathSync(customer);
 
   try {
     const cliPackage = pack(REPO_ROOT, packed);
@@ -126,8 +130,8 @@ test("the packed CLI runs from an external customer project without repository f
     assert.ok(existsSync(report), `the installed CLI must write its report:\n${verify.stdout}\n${verify.stderr}`);
     const outcome = JSON.parse(readFileSync(report, "utf8")) as { verdict: string; candidate?: string; candidateProject?: string };
     assert.equal(outcome.verdict, "FAILED");
-    assert.equal(outcome.candidate, customer);
-    assert.equal(outcome.candidateProject, customer);
+    assert.equal(outcome.candidate, canonicalCustomer);
+    assert.equal(outcome.candidateProject, canonicalCustomer);
 
     // Prove the installed package also runs the complete hybrid path against
     // a customer-chosen environment. Nothing here assumes Vercel.
@@ -188,7 +192,7 @@ test("the packed CLI runs from an external customer project without repository f
       assert.equal(result.verdict, "PASS");
       assert.equal(result.target, targetUrl);
       assert.equal(result.targetRevision, "customer-revision-123");
-      assert.equal(result.candidateProject, customer);
+      assert.equal(result.candidateProject, canonicalCustomer);
       assert.ok(result.checklyEvidence.testSessionIds.length > 0);
       assert.ok(result.cost.localRuns > 0);
       assert.ok(result.cost.checklyCloudRuns > 0);

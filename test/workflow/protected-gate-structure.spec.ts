@@ -174,29 +174,41 @@ test("URL roles stay separated: verification is gated+verified, monitoring is de
     deployJob,
     /TARGET_URL: \$\{\{ needs\.production-preflight\.outputs\.verification_url \}\}/,
   );
-  // Monitoring origin: the deploy step only.
-  assert.match(
-    deployJob,
-    /ENVIRONMENT_URL: \$\{\{ needs\.production-preflight\.outputs\.monitoring_url \}\}/,
-  );
+  // Monitoring origin: the preview and force deploy steps only.
   const deployCode = codeLines(deployJob).join("\n");
-  const monitoringLine = deployCode
+  const environmentUrlLines = deployCode
     .split("\n")
-    .find((line) => line.includes("ENVIRONMENT_URL:"));
-  assert.ok(monitoringLine);
-  assert.ok(
-    !deployCode
-      .replace(monitoringLine, "")
-      .includes("needs.production-preflight.outputs.monitoring_url"),
-    "monitoring_url must appear only in the deploy step",
+    .filter((line) => line.includes("ENVIRONMENT_URL:"));
+  assert.equal(
+    environmentUrlLines.length,
+    2,
+    "exactly the preview and force steps bind ENVIRONMENT_URL",
   );
-  assert.ok(
-    !deployCode.includes("outputs.monitoring_url") ||
-      deployCode.indexOf("outputs.monitoring_url") === deployCode.lastIndexOf(
-        "outputs.monitoring_url",
-      ),
-    "monitoring_url used exactly once in the deploy job",
+  const monitoringLines = deployCode
+    .split("\n")
+    .filter((line) => line.includes("outputs.monitoring_url"));
+  assert.equal(
+    monitoringLines.length,
+    2,
+    "monitoring_url appears only in the preview and force ENVIRONMENT_URL bindings",
   );
+  for (const line of monitoringLines) {
+    assert.match(
+      line,
+      /^ {10}ENVIRONMENT_URL: \$\{\{ needs\.production-preflight\.outputs\.monitoring_url \}\}$/,
+      `monitoring_url may only be a deploy ENVIRONMENT_URL binding: ${line}`,
+    );
+  }
+  for (const line of environmentUrlLines) {
+    assert.ok(
+      line.includes("needs.production-preflight.outputs.monitoring_url"),
+      `ENVIRONMENT_URL must come from the stable monitoring alias: ${line}`,
+    );
+    assert.ok(
+      !line.includes("verification_url") && !line.includes("inputs.environment_url"),
+      `ENVIRONMENT_URL must never be a verification or raw event URL: ${line}`,
+    );
+  }
 
   // Preview probes only its raw event URL — no URL-role outputs reach it.
   assert.match(preview, /TARGET_URL: \$\{\{ inputs\.environment_url \}\}/);
@@ -274,7 +286,11 @@ test("multistep monitoring identities are wired only into the production Checkly
     }
   }
   const identityLines = protectedGate.split("\n").filter((line) => line.includes("MULTISTEP_USER"));
-  assert.equal(identityLines.length, 2, "exactly one env entry per identity in the whole workflow");
+  assert.equal(
+    identityLines.length,
+    4,
+    "exactly one env entry per identity in each of the two production deploy steps",
+  );
   for (const line of identityLines) {
     // No value is committed: each line is exactly the bare name paired with
     // its OWN secret reference — nothing more.
@@ -327,4 +343,145 @@ test("multistep monitoring identities never reach preflights, outputs, helpers, 
     { cwd: repoRoot, encoding: "utf8" },
   );
   assert.equal(helperDiff, "", "helper boundaries must be unchanged by this wiring");
+});
+
+test("production Checkly deploy previews immediately before force with identical monitoring inputs", () => {
+  const deployJob = jobs["production-verify-and-deploy"];
+  assert.ok(deployJob, "production-verify-and-deploy job must exist");
+
+  // Exactly one preview and one force deploy command exist workflow-wide.
+  const previewLines = protectedGate
+    .split("\n")
+    .filter((line) => line.includes("checkly deploy --preview"));
+  const forceLines = protectedGate
+    .split("\n")
+    .filter((line) => line.includes("checkly deploy --force"));
+  assert.equal(previewLines.length, 1, "exactly one checkly deploy --preview");
+  assert.equal(forceLines.length, 1, "exactly one checkly deploy --force");
+
+  // Both commands exist only inside the protected production job.
+  for (const jobName of ["candidate-preflight", "production-preflight", "preview-gate"]) {
+    const block = jobs[jobName];
+    assert.ok(block, `${jobName} must exist`);
+    assert.doesNotMatch(block!, /checkly deploy --preview/, `${jobName} must not preview-deploy`);
+    assert.doesNotMatch(block!, /checkly deploy --force/, `${jobName} must not force-deploy`);
+  }
+
+  const previewIdx = deployJob.indexOf("run: npx checkly deploy --preview");
+  const forceIdx = deployJob.indexOf("run: npx checkly deploy --force");
+  assert.ok(previewIdx !== -1, "the preview step must exist in the production job");
+  assert.ok(forceIdx !== -1, "the force step must exist in the production job");
+  assert.ok(previewIdx < forceIdx, "preview must execute before force");
+
+  // Immediate execution-order adjacency: no other step starts between the
+  // preview run line and the force step header, and the preview cannot be
+  // skipped on failure.
+  const forceHeaderIdx = deployJob.lastIndexOf("- name:", forceIdx);
+  assert.ok(forceHeaderIdx > previewIdx, "force step header must follow the preview run");
+  const between = deployJob.slice(previewIdx, forceHeaderIdx);
+  assert.doesNotMatch(
+    between,
+    /^\s*-\s+(name|uses|run):/m,
+    "no step may sit between preview and force",
+  );
+
+  // Both steps inherit the job-level production-preflight success gate and
+  // run only after the verify-fix verification command has passed.
+  assert.match(deployJob, /needs: production-preflight/);
+  assert.match(deployJob, /needs\.production-preflight\.outputs\.ready == 'true'/);
+  const verifyIdx = deployJob.search(/^\s+node bin\/verify-fix verify/m);
+  assert.ok(verifyIdx !== -1, "the verify-fix verification command must exist");
+  assert.ok(
+    verifyIdx < previewIdx && verifyIdx < forceIdx,
+    "both deploy commands must run only after verify-fix verification",
+  );
+
+  // Command arguments are fixed literals — no interpolation, no secrets,
+  // nothing printed alongside them.
+  const previewLine = deployJob.slice(previewIdx).split("\n")[0]!;
+  const forceLine = deployJob.slice(forceIdx).split("\n")[0]!;
+  assert.equal(previewLine.trim(), "run: npx checkly deploy --preview");
+  assert.equal(forceLine.trim(), "run: npx checkly deploy --force");
+
+  const previewHeaderIdx = deployJob.lastIndexOf("- name:", previewIdx);
+  assert.ok(previewHeaderIdx !== -1 && previewHeaderIdx < previewIdx);
+  const previewSegment = deployJob.slice(previewHeaderIdx, previewIdx);
+  const forceSegment = deployJob.slice(forceHeaderIdx, forceIdx);
+  assert.doesNotMatch(previewSegment, /continue-on-error/, "preview must pass before force starts");
+  assert.doesNotMatch(previewSegment, /echo .*secrets\./, "preview must never print secrets");
+  assert.doesNotMatch(forceSegment, /echo .*secrets\./, "force must never print secrets");
+
+  // Identical environment: same names, same order, same reference values.
+  const envEntries = (segment: string): string[][] => {
+    const envStart = segment.indexOf("env:");
+    assert.ok(envStart !== -1, "deploy step must declare env");
+    const envText = segment.slice(envStart);
+    return [...envText.matchAll(/^\s{10}([A-Z][A-Z0-9_]*):[ \t]*(.*)$/gm)].map((m) => [
+      m[1]!,
+      m[2]!.trim(),
+    ]);
+  };
+  const previewEnv = envEntries(previewSegment);
+  const forceEnv = envEntries(forceSegment);
+  assert.deepEqual(
+    previewEnv,
+    forceEnv,
+    "preview and force must receive identical environment names and values",
+  );
+
+  const names = previewEnv.map(([name]) => name);
+  for (const required of [
+    "CHECKLY_API_KEY",
+    "CHECKLY_ACCOUNT_ID",
+    "TEST_USER",
+    "TEST_USER_US_EAST_1",
+    "TEST_USER_EU_WEST_1",
+    "API_TOKEN",
+    "MULTISTEP_USER_US_EAST_1",
+    "MULTISTEP_USER_EU_WEST_1",
+    "ENVIRONMENT_URL",
+  ]) {
+    assert.ok(names.includes(required), `both deploy steps must receive ${required}`);
+  }
+  for (const [name, value] of previewEnv) {
+    if (name === "ENVIRONMENT_URL") {
+      assert.equal(
+        value,
+        "${{ needs.production-preflight.outputs.monitoring_url }}",
+        "ENVIRONMENT_URL must be the stable monitoring alias for both commands",
+      );
+    } else {
+      assert.match(
+        value,
+        /^\$\{\{ (secrets|vars)\.[A-Z0-9_]+ \}\}$/,
+        `${name} must be a plain secret or variable reference`,
+      );
+    }
+    assert.ok(
+      !value.includes("verification_url") && !value.includes("inputs.environment_url"),
+      `${name} must never bind a verification or raw event URL`,
+    );
+  }
+
+  // No secret reference enters a preflight, a helper, a caller input, or a
+  // job output.
+  for (const jobName of ["candidate-preflight", "production-preflight"]) {
+    const code = codeLines(jobs[jobName]!).join("\n");
+    assert.ok(!code.includes("secrets."), `${jobName} must stay secret-free`);
+  }
+  assert.ok(
+    !/secrets\.[A-Z0-9_]+/.test(gate),
+    "the caller must not pass secret references as inputs",
+  );
+  for (const [jobName, block] of Object.entries(jobs)) {
+    const outputs = block.match(/^    outputs:\n((?:^      .*\n?)*)/m);
+    if (outputs) {
+      assert.ok(!outputs[1].includes("secrets."), `${jobName} outputs must not carry secrets`);
+    }
+  }
+  const helpersDir = fileURLToPath(new URL("../../.github/helpers/", import.meta.url));
+  for (const file of readdirSync(helpersDir)) {
+    const source = readFileSync(`${helpersDir}${file}`, "utf8");
+    assert.ok(!source.includes("secrets."), `${file} must not reference secrets`);
+  }
 });

@@ -502,6 +502,30 @@ jobs:
             --report-markdown artifacts/verify-fix-production.md \
             --verbose
 
+      # Deployment preview runs first and must PASS before the force step can
+      # start (a failed step halts this job). Identical environment names and
+      # values as the force step, same stable monitoring URL — never the
+      # generated verification URL.
+      - name: Preview monitoring source before force
+        working-directory: ${{ env.CANDIDATE_PROJECT_PATH }}
+        env:
+          CHECKLY_API_KEY: ${{ secrets.CHECKLY_API_KEY }}
+          CHECKLY_ACCOUNT_ID: ${{ vars.CHECKLY_ACCOUNT_ID }}
+          TEST_USER: ${{ secrets.TEST_USER }}
+          TEST_USER_US_EAST_1: ${{ secrets.TEST_USER_US_EAST_1 }}
+          TEST_USER_EU_WEST_1: ${{ secrets.TEST_USER_EU_WEST_1 }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+          # Environment-provided Multistep monitoring identities — names and
+          # secret references only. Values are never committed, never printed,
+          # never passed as arguments, and never exposed as outputs. Kept
+          # separate from the browser TEST_USER identities above.
+          MULTISTEP_USER_US_EAST_1: ${{ secrets.MULTISTEP_USER_US_EAST_1 }}
+          MULTISTEP_USER_EU_WEST_1: ${{ secrets.MULTISTEP_USER_EU_WEST_1 }}
+          # Monitoring target = the manually verified stable alias only —
+          # never the generated verification URL, never a guessed host.
+          ENVIRONMENT_URL: ${{ needs.production-preflight.outputs.monitoring_url }}
+        run: npx checkly deploy --preview
+
       - name: Deploy monitoring source after PASS
         working-directory: ${{ env.CANDIDATE_PROJECT_PATH }}
         env:

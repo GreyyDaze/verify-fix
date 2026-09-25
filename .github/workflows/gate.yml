@@ -16,8 +16,14 @@ jobs:
     if: >-
       github.event.deployment_status.state == 'success' &&
       github.event.deployment_status.environment_url != ''
-    uses: GreyyDaze/verify-fix/.github/workflows/protected-gate.yml@fd2fe8a2b2c8a2974aa3a082fe730f6d621c5d5d
+    uses: GreyyDaze/verify-fix/.github/workflows/protected-gate.yml@d142de1d305514ce961bfe91556da717c047bc48
     with:
+      # Keep this pin byte-identical to the `uses:` ref above; both lines
+      # always move together. The protected workflow checks out its trusted
+      # helpers at exactly this ref — never a candidate ref. This ref is the
+      # trusted Stage 2 snapshot carrying the protected workflow and its
+      # helpers.
+      trusted_ref: d142de1d305514ce961bfe91556da717c047bc48
       deployment_id: ${{ format('{0}', github.event.deployment.id) }}
       deployment_sha: ${{ github.event.deployment.sha }}
       environment: ${{ github.event.deployment.environment }}

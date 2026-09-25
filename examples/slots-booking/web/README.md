@@ -73,6 +73,14 @@ bypass value.
 
 ## Phase 6 API baseline on a Mac
 
+_Status: complete and historical. The baseline, the incident, the repair, and
+the protected preview and production proofs below have all been carried out.
+This walkthrough is preserved as historical provenance: current main already
+contains the `status` contract and the repaired check, so recreating the old
+baseline requires the recorded historical revisions or a new controlled
+incident. Do not run these commands blindly against current production, and do
+not overwrite `incidents/slots-availability-api`._
+
 Run these commands only from your Mac. Use the real production URL printed by
 Vercel. Do not guess it. The commands keep secrets in the shell and in the two
 providers.
@@ -104,15 +112,20 @@ CHECKLY_NO_DOTENV=1 npx checkly deploy --force
 ```
 
 Stop here until `slots availability API` has real passing history in Checkly.
-The baseline response is:
+The baseline response — the historical contract the incident was built from —
+is:
 
 ```json
 { "slot": "09:30", "availability": "AVAILABLE" }
 ```
 
-The incident step comes later. It changes only the application response field
-to `status`. It does not deploy a matching check change. After the scheduled
-check fails, obtain its real ID without copying account data into the repo:
+The current contract after the completed Phase 6 repair is
+`{ "slot": "09:30", "status": "AVAILABLE" }`.
+
+The incident step (plan Phase 6) has been completed: it changed only the
+application response field to `status` and did not deploy a matching check
+change. After the scheduled check failed, obtain its real ID without copying
+account data into the repo:
 
 ```bash
 export CHECK_ID="$(npx checkly api /v1/checks | jq -r '.[] | select(.name == "slots availability API") | .id')"
@@ -140,3 +153,10 @@ npm exec --yes --package="$PWD/$VERIFY_FIX_TGZ" -- verify-fix bundle \
 Rocky Automatic Repair must remain off. Do not commit a bundle until its secret
 scan and golden test pass. Do not run `checkly deploy` for the repair until the
 exact-revision verify-fix gate passes.
+
+That gate has since passed for the Phase 6 repair: the protected preview proof
+and the production proof (through the manually verified stable alias, after the
+generated-URL attempt failed only on Vercel's HTTP 302 Deployment Protection)
+both succeeded, and `checkly deploy` ran only after PASS. Phase 7 is planned to
+add exactly one Multistep booking-workflow check to this same project; no other
+changes are planned here.

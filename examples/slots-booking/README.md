@@ -1,22 +1,29 @@
-# Example 1 — slots-booking (browser check)
+# Example 1 — slots-booking (browser + API checks)
 
-A real, deployable app with a real Checkly check. This is the customer side of
-the verify-fix story: the tool never touches this folder; it only reads what
-Checkly recorded about it.
+A real, deployable app with real Checkly checks. This is the customer side of
+the verify-fix story: verify-fix does not mutate the customer project — it
+reads candidate source, monitoring configuration, imports, dependencies, and
+recorded evidence.
 
 ```
 examples/slots-booking/
 ├── web/                    ONE project, one package.json (Vercel "Root Directory")
-│   ├── app/, lib/          Next.js app → deployed to Vercel
+│   ├── app/, lib/          Next.js app → deployed to Vercel (incl. the Phase 6 API route)
 │   ├── playwright.config.ts
 │   ├── tests/booking.spec.ts   the Playwright test that becomes the check
-│   └── checkly.config.ts   Checkly Playwright Check Suite → `npx checkly deploy`
+│   ├── checks/availability.check.ts  auto-discovered ApiCheck construct
+│   ├── checks/availability.setup.ts  its setup entrypoint
+│   └── checkly.config.ts   defines the Checkly project and Playwright suite → `npx checkly deploy`
 └── README.md               this file
 ```
 
 The check lives inside the app project, the layout Checkly's Playwright Check
 Suite quickstart assumes ("an existing repository that already contains
-Playwright tests"). Playwright Check Suites install *your* `package.json` on
+Playwright tests"). The same Checkly project contains both checks:
+`checkly.config.ts` defines the project and the Playwright suite, and Checkly
+discovers the ApiCheck construct from `checks/availability.check.ts`, so a
+single `npx checkly deploy` keeps the whole project in sync. Playwright Check
+Suites install *your* `package.json` on
 Checkly's runners, so `checkly.config.ts` sets
 `bundle.packages.prune: { dependencies: true }`: the bundled copy of
 `package.json` loses `next`, `react`, `@upstash/redis`, the shipped lockfile is
@@ -45,6 +52,7 @@ delay is the race window.
 | `POST /api/login` | `{ account }` → `{ token, version }`, bumps the version |
 | `GET /api/slots` | `{ slots }` after `SLOT_LOAD_DELAY_MS` (default 1500) |
 | `POST /api/book` | Bearer token + `{ slot }` → `200 CONFIRMED` or `401` if superseded |
+| `GET /api/v1/availability` | bearer `API_TOKEN` + `?slot=` → `{ slot, status }` (the Phase 6 API contract) |
 | `GET /api/session` | diagnostic: token version vs current version |
 | `GET /api/health` | `{ ok, store: "memory" \| "upstash" }` |
 
@@ -67,6 +75,29 @@ with the old token → `401` → alarm 3 and 4 fail. Nothing is broken for real
 users; the check is fighting itself. That is a very common real-world Checkly
 incident, and it is the incident the tool must learn to bundle, replay and
 judge fixes against.
+
+## Phase 6 — the authenticated availability API (complete)
+
+The same project now holds two checks: the browser suite above and one
+**ApiCheck** (`web/checks/availability.check.ts`) on
+`GET /api/v1/availability?slot=09:30`. The route requires a bearer token from
+`API_TOKEN` — the value lives only in the environment (Vercel, GitHub
+secrets/variables, your shell) and never in this repository — and answers
+`{ "slot": "09:30", "status": "AVAILABLE" }`. The setup entrypoint
+(`web/checks/availability.setup.ts`) attaches the `Authorization` and
+`x-request-id` headers before every request.
+
+Phase 6 is complete: the field-rename incident (`availability` → `status`,
+app-only, check left stale) was captured with the packed CLI into
+`incidents/slots-availability-api`, the strict repair was verified through the
+protected preview and production proofs, and `checkly deploy` ran only after
+PASS. The `status` contract above is current; `availability` was the
+historical baseline the incident was built from. Commands, environment
+preparation, and the gate procedure live in
+[`web/README.md`](web/README.md) — this file does not repeat them.
+
+Phase 7 will add exactly one Multistep booking-workflow check to this same
+project; nothing else changes here until then.
 
 ## Run it locally
 

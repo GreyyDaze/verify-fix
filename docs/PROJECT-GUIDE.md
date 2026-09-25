@@ -7,6 +7,12 @@ during a run, and where it works, does not work, or is incomplete. It is written
 so that after reading it you can explain the project in your own words and defend
 its technical decisions.
 
+**Reading note.** Sections 4–9a were written in the original Phase 0–2 era
+(synthetic executor, app simulator, regex scanner) and are kept as historical
+background; counts and commands quoted there — for example the 25-test suite
+in §5/§7 — are from that era. Sections 9b–9f document the later phases (1, 3,
+4, 5, and 5.5). Section 10 is the authoritative current state.
+
 ---
 
 ## 0. The one-paragraph version
@@ -745,6 +751,10 @@ the rule that decided the verdict.
 - Bundles with an `app-sim.ts` implementing `AppSim`.
 
 ### 9.2 Does not (yet) work / untested
+
+_Historical (Phase 0–2 era): browser support arrived with the Phase 4
+Playwright runner and the live Checkly executor with Phases 5–6; see §10._
+
 - **Browser checks.** There is no Playwright in the sandbox; `page.goto`,
   `page.click` do not exist, and only `fetch` is instrumented as "contact with
   the app". A real Checkly browser check would crash (⇒ `uncertain`).
@@ -876,10 +886,10 @@ bundle/
 └── .gitignore               raw/ (only with --keep-raw)
 ```
 
-The bundle is consumed by `verify` from Phase 3 on; today `verify` refuses
-v3 with a clear message. The only fields a person may still edit by hand are
-noted in the README of the bundle; every scene carries the result id it came
-from, so nothing in it has to be trusted on faith.
+The bundle is consumed by `verify` from Phase 3 on, which loads this v3
+manifest directly (`src/bundle.ts`). The only fields a person may still edit
+by hand are noted in the README of the bundle; every scene carries the result
+id it came from, so nothing in it has to be trusted on faith.
 
 ### Files
 
@@ -1056,7 +1066,7 @@ UNCERTAIN. In either case the verifier skips paid cloud work. A mutation that
 is killed by detection also skips its remote healthy run. The decision table
 is unchanged.
 
-**Candidate project.** Phase 6 replaces this Phase 5 reader in production.
+**Candidate project.** Phase 5.5 replaces this Phase 5 reader in production.
 `--candidate-project <dir> --base <git-ref>` now snapshots the complete Git
 working state first. The monitoring runner receives the final check/config tree
 and its real relative imports. The application source is tested through the
@@ -1111,7 +1121,7 @@ source change. The Upstash-compatible session-lease app candidate gave PASS
 with 20 browser runs. Candidates 02–10 and 13 all returned FAILED.
 Candidate 11 returned UNCERTAIN.
 
-## 9f. Complete candidate revisions — Phase 6
+## 9f. Complete candidate revisions — Phase 5.5
 
 ### Purpose
 
@@ -1261,36 +1271,54 @@ data. The tool never trusts an agent-supplied file list or explanation.
 
 ## 10. Current state
 
-Phases 0–4 are complete. Phase 5 and Phase 6 are implemented and validated
-locally. The tool can capture a real Checkly incident, pin a complete local or
-GitHub PR candidate revision, load the protected bundle, run DSL or Playwright
-checks against a chosen target, split scenes between the local proxy and
-Checkly's cloud CLI, grade code/config/app-preview repairs, and return
-PASS/FAILED/UNCERTAIN with exit 0/1/2.
+Phases 0–5.5 are complete: the Playwright incident capture, the scene layer,
+the browser runner, the live gate, and the complete-candidate intake all have
+their proofs — including the protected proof at commit `01f71b8` in run
+`36041826149`. Phase 6 is complete as well: the authenticated booking API
+(`GET /api/v1/availability`) and its Checkly `ApiCheck` live in the same
+project, the real `availability` → `status` incident was captured as
+`incidents/slots-availability-api`, and the strict repair passed the protected
+preview proof (run `36059967113`), the merge (`f8bf9f06`), and the production
+proof (run `36119394291`) through the manually verified stable alias. A first
+production attempt (run `36109648763`) failed only because Vercel Deployment
+Protection answered HTTP 302 before the app's route; the local
+REPRODUCTION/DETECTION scenes behaved correctly and neither the application
+nor the assertion was broken. `checkly deploy` ran only after PASS, and the
+real repaired run is green. The tool can capture a real Checkly incident, pin
+a complete local or GitHub PR candidate revision, load the protected bundle,
+run DSL, Playwright, or API checks against a chosen target, split scenes
+between the local proxy and Checkly's cloud CLI, grade code/config/app-preview
+repairs, and return PASS/FAILED/UNCERTAIN with exit 0/1/2.
 
 The repository has two real captured Playwright incidents. The overlap bundle
 has a 20/20 one-at-a-time API baseline and reproduces its 401 in 20/20 browser
 pairs. The drift bundle reproduces its stale locator in 20/20 runs. Their
 manifests say `method: local-runner`, so the determinism gate is open without
-pretending the numbers came from Checkly's cloud.
+pretending the numbers came from Checkly's cloud. Phase 6 added the real API
+incident bundle `incidents/slots-availability-api` to the same standard:
+sanitized evidence only, never credentials.
 
-The automated suite has 123 tests. It uses the real local app for the DSL
-suite. It uses fake project-local Playwright and Checkly CLIs for process
-boundaries. Candidate-revision tests cover dirty trees, multiple edits, new and
+The automated suite has 158 tests. It uses the real local app for the DSL
+suite. It uses fake project-local Playwright and Checkly CLIs as test doubles
+for process-boundary mechanics only — they are not real browser, Checkly
+account, deployment, or cloud proof. Candidate-revision tests cover dirty
+trees, multiple edits, new and
 renamed helpers, deletions, credentials, unsafe links, submodules, stable check
 identity, exact target binding, fork approval, and complete report identity.
+API specs cover the Phase 6 static model, policy, execution, and bundle paths.
 One package test installs the exact npm tarball into a customer project under
 the operating-system temp directory, outside this repository. It exercises
 local candidate snapshots through both bad and good repairs. The Phase 5
 candidates were also run manually through real Chromium against the local app.
 
-The live checkpoint is still open. The user must approve the protected GitHub
-environment with the existing Checkly/Vercel values. The corrected drift
-monitor must then be deployed. A fresh overlap incident must be captured after
-it is green. The three real alternatives plus ten fakes must then run through
-Checkly and Vercel. Phase 6 also needs one new real PR run whose report says
-`targetBinding.gateEligible: true`. Those actions send real logins and bookings,
-so they are not run from this sandbox.
+Next up is Phase 7: one Multistep booking-workflow check in this same app and
+Checkly project, captured evidence-first from a real flat-to-nested booking
+incident; Phase 8 stays blocked until it completes. URL roles are fixed going
+forward: verification targets the generated deployment URL, while monitoring
+uses the manually verified stable alias from GitHub's deployment status — no
+new Vercel API token enters the workflow, and the Phase 6 preview's temporary
+domain exception has been removed. Phase 7's capture sends real logins and
+bookings from the user's machine, so it is not run from this sandbox.
 
 ---
 

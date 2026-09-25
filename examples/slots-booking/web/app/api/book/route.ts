@@ -40,11 +40,15 @@ export async function POST(req: Request) {
     )
   }
 
+  // Approved nested booking contract: the success payload lives under
+  // `booking.*` and the session version field is `sessionVersion`.
   return NextResponse.json({
-    confirmed: true,
-    booking: 'CONFIRMED',
-    account: session.account,
-    slot,
-    version: session.version,
+    booking: {
+      confirmed: true,
+      status: 'CONFIRMED',
+      account: session.account,
+      slot,
+      sessionVersion: session.version,
+    },
   })
 }

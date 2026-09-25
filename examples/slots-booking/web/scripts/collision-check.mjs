@@ -29,7 +29,8 @@ async function book(token, slot = '09:30') {
     body: JSON.stringify({ slot }),
   })
   const data = await res.json()
-  return { status: res.status, result: data.booking ?? data.error ?? '' }
+  const booking = data.booking?.status
+  return { status: res.status, result: booking ?? data.error ?? '' }
 }
 
 const rows = []

@@ -18,6 +18,8 @@ import { applyConfigPolicy, diffCheckConfig, parseCheckConfig, type ConfigPolicy
 import { checkEnv, type EnvCheck } from "./scene/env.ts";
 import type { CandidateRevisionMetadata, CandidateTargetBinding } from "./candidate/revision.ts";
 import { evaluateApiPolicy, type ApiPolicyResult } from "./api/policy.ts";
+import { evaluateMultiStepPolicy, type MultiStepPolicyResult } from "./multistep/policy.ts";
+import { parseMultiStepProject } from "./multistep/source.ts";
 
 export const PR12_HEALTHY_RUNS = 5; // PR-12: ≥5 repeated healthy runs, else flake → UNCERTAIN
 
@@ -55,6 +57,7 @@ export interface VerifyResult {
   envDodge: string | null;
   configPolicy: ConfigPolicy;
   apiPolicy: ApiPolicyResult | null;
+  multistepPolicy: MultiStepPolicyResult | null;
   envCheck: EnvCheck;
   patchedConfig: BundleConfig | null;
   cost: ExecutionCost;
@@ -88,6 +91,13 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   candidateFileMap.set(candidateCheckFile, patchSource);
   const apiPolicy = bundle.check.checkType === "API" || bundle.api
     ? evaluateApiPolicy(bundle.check.file, originalFiles, candidateCheckFile, candidateFileMap, bundle.check.logicalId)
+    : null;
+  // Multistep static policy: same evidence→verdict path as the API policy
+  // (rejected → FAILED, uncertain → UNCERTAIN through the existing law).
+  const isMultiStep = bundle.check.checkType === "MULTI_STEP" ||
+    [...originalFiles.values()].some((source) => source.includes("new MultiStepCheck("));
+  const multistepPolicy = isMultiStep
+    ? evaluateMultiStepPolicy(parseMultiStepProject(originalFiles, bundle.check.file), parseMultiStepProject(candidateFileMap, candidateCheckFile))
     : null;
   const declared = [...new Set([
     ...(bundle.config?.environmentVariables ?? []),
@@ -133,11 +143,14 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     ?? (apiPolicy && !opts.target ? "ENVIRONMENT_URL is missing; pass --target so {{ENVIRONMENT_URL}} can be resolved without a fallback" : null)
     ?? (envCheck.missing.length > 0
       ? `the check reads ${envCheck.missing.map((m) => `${m.form === "handlebars" ? "{{" + m.name + "}}" : "process.env." + m.name} (line ${m.line})`).join(", ")} and no value was provided — pass --env-file; a run with an empty variable would not be the customer's check`
+      : null)
+    ?? (bundle.multistep?.problems && bundle.multistep.problems.length > 0
+      ? `multistep evidence unresolved: ${bundle.multistep.problems.join("; ")}`
       : null);
   const undeclaredEnvReason = envCheck.undeclared.length > 0
     ? `the patch reads undeclared environment variable(s): ${envCheck.undeclared.join(", ")}`
     : null;
-  const preflightRejected = patch.rejection ?? apiPolicy?.rejected ?? staticallyRejected(bundle, patchSource, candidateFileMap, candidateCheckFile) ?? envDodge ?? configPolicy.rejected ?? undeclaredEnvReason;
+  const preflightRejected = patch.rejection ?? apiPolicy?.rejected ?? multistepPolicy?.rejected ?? staticallyRejected(bundle, patchSource, candidateFileMap, candidateCheckFile) ?? envDodge ?? configPolicy.rejected ?? undeclaredEnvReason;
   if (preflightRejected) {
     if (verbose) console.error(`[verify] static rejection before execution: ${preflightRejected}`);
   } else if (missingEnvReason) {
@@ -240,10 +253,21 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     decision.verdict = "FAILED";
     decision.exitCode = 1;
   }
+  if (multistepPolicy?.rejected) {
+    decision.reasons.push(`multistep policy: ${multistepPolicy.rejected}`);
+    decision.verdict = "FAILED";
+    decision.exitCode = 1;
+  }
   for (const n of configPolicy.notes) decision.reasons.push(`config: ${n}`);
   for (const n of apiPolicy?.notes ?? []) decision.reasons.push(`API: ${n}`);
-  if (apiPolicy?.uncertain && !patch.rejection && !envDodge && !configPolicy.rejected && !apiPolicy.rejected) {
+  for (const n of multistepPolicy?.notes ?? []) decision.reasons.push(`multistep: ${n}`);
+  if (apiPolicy?.uncertain && !patch.rejection && !envDodge && !configPolicy.rejected && !apiPolicy.rejected && !multistepPolicy?.rejected) {
     decision.reasons.push(`API evidence unresolved: ${apiPolicy.uncertain}`);
+    decision.verdict = "UNCERTAIN";
+    decision.exitCode = 2;
+  }
+  if (multistepPolicy?.uncertain && !patch.rejection && !envDodge && !configPolicy.rejected && !apiPolicy?.rejected && !multistepPolicy.rejected) {
+    decision.reasons.push(`multistep source unresolved: ${multistepPolicy.uncertain}`);
     decision.verdict = "UNCERTAIN";
     decision.exitCode = 2;
   }
@@ -269,6 +293,9 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     candidateRevision: opts.candidateRevision ?? patch.revision ?? null,
     candidateCheck: patch.checkLogicalId ? { logicalId: patch.checkLogicalId, name: patch.checkName ?? null, file: patch.checkFile ?? null } : null,
     targetBinding: opts.targetBinding ?? null,
+    multistep: bundle.multistep
+      ? { kind: bundle.multistep.kind, steps: bundle.multistep.steps, problems: bundle.multistep.problems }
+      : null,
   });
   return {
     contract,
@@ -279,6 +306,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     envDodge,
     configPolicy,
     apiPolicy,
+    multistepPolicy,
     envCheck,
     patchedConfig: runConfig,
     cost,

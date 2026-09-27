@@ -154,5 +154,26 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
     runBudget: m.runBudget,
     oracleProvenance: m.oracleProvenance,
   };
+  bundle.multistep = null;
+  if (m.check.checkType === "MULTI_STEP") {
+    const problems: string[] = [];
+    problems.push(...(m.multistep?.failing?.problems ?? []));
+    problems.push(...(m.multistep?.passing?.problems ?? []));
+    let kind: string | null = null;
+    let steps: string[] = [];
+    const recordingFile = m.recordings.multistepFailing ?? m.recordings.multistepPassing ?? null;
+    if (recordingFile && existsSync(join(dir, recordingFile))) {
+      try {
+        const recording = JSON.parse(readFileSync(join(dir, recordingFile), "utf8")) as { kind?: string; steps?: Array<{ title?: string }> };
+        kind = typeof recording.kind === "string" ? recording.kind : null;
+        steps = Array.isArray(recording.steps) ? recording.steps.map((s) => String(s?.title ?? "")).filter(Boolean) : [];
+      } catch (err) {
+        problems.push(`multistep recording ${recordingFile} is unreadable: ${(err as Error).message}`);
+      }
+    } else if (problems.length === 0) {
+      problems.push("multistep recording missing — execution evidence is unavailable");
+    }
+    bundle.multistep = { kind, steps, problems };
+  }
   return bundle;
 }

@@ -11,6 +11,7 @@ import type { HarEntry } from "../trace/har-types.ts";
 import { envVarNamesOnly } from "./sanitize.ts";
 import { classifyRca } from "./rca-mode.ts";
 import { parseApiCheckProject } from "../api/model.ts";
+import type { MultiStepCapture } from "../multistep/normalize.ts";
 import type { MeasureResult } from "./measure.ts";
 import type { DeterminismV3, FailurePoint, ManifestV3, OverlappingRun, ResultRef, SceneV3 } from "./types.ts";
 
@@ -19,6 +20,12 @@ export interface FetchedResult {
   detail: CheckResult | null;
   extract: TraceExtract | null;
   apiRecording?: ApiRecording | null;
+  /** sanitized Multistep capture (MULTI_STEP results only) */
+  multistep?: MultiStepCapture | null;
+  /** raw normalized texts for Multistep capture (consumed then discarded) */
+  multistepTexts?: { testResults: string | null; checkRunData: string | null; logs: string | null } | null;
+  /** capture problems when the evidence could not be sanitized */
+  multistepProblems?: string[];
 }
 
 export interface ManifestInputs {
@@ -41,7 +48,9 @@ export interface ManifestInputs {
     playwright?: { configPath: string | null; projects: string[]; tags: string[] };
   };
   measurement: MeasureResult | null;
-  recordings: { failing: string | null; passing: string | null; bodies: string; apiFailing?: string | null; apiPassing?: string | null };
+  recordings: { failing: string | null; passing: string | null; bodies: string; apiFailing?: string | null; apiPassing?: string | null; multistepFailing?: string | null; multistepPassing?: string | null };
+  /** capture problems per side when Multistep evidence could not be sanitized (→ UNCERTAIN) */
+  multistep?: { failing: { problems: string[] } | null; passing: { problems: string[] } | null } | null;
   assets: ManifestV3["provenance"]["assets"];
   apiCalls: ManifestV3["provenance"]["apiCalls"];
   accountId: string;
@@ -405,6 +414,72 @@ export function findOverlappingRuns(failing: CheckResultSummary | null, history:
   return out.sort((a, b) => Math.abs(a.startDeltaMs) - Math.abs(b.startDeltaMs));
 }
 
+/**
+ * Failure point from a sanitized Multistep capture: the first step with an
+ * error, its failing assertion evidence (matched back to the inventory by the
+ * exact expected value), and the request that step depends on. A request that
+ * answered ≥400 is a real `request` failure; an answered-200 request becomes a
+ * `dependency` (drift: the check went stale while the app answered).
+ */
+export function detectMultiStepFailurePoint(
+  capture: MultiStepCapture,
+  sources: Array<{ path: string; content: string }>,
+  mainSource: string | null,
+): FailurePoint | null {
+  const failedIndex = capture.steps.findIndex((s) => s.status === "failed");
+  if (failedIndex === -1) return null;
+  const failedStep = capture.steps[failedIndex];
+  const error = failedStep.error ?? `${failedStep.title} failed`;
+  const action = { apiName: "test.step", title: summarizeErrorMessage(error), error };
+  const ordered = [...capture.steps.slice(failedIndex), ...capture.steps.slice(0, failedIndex)];
+  const pool = ordered.flatMap((step) => step.assertions.map((assertion) => ({ step, assertion })));
+  const evidence = pool.find((entry) => entry.assertion.passed === false)
+    ?? pool.find((entry) => entry.assertion.expected !== null || entry.assertion.actual !== null)
+    ?? null;
+  let assertionIdValue: string | null = null;
+  let line: number | null = null;
+  if (evidence && evidence.assertion.expected !== null && evidence.assertion.expected !== undefined) {
+    const expected = evidence.assertion.expected;
+    const candidates = new Set<string>();
+    if (typeof expected === "string") {
+      candidates.add(expected);
+      candidates.add(JSON.stringify(expected));
+      candidates.add(`'${expected}'`);
+    } else {
+      candidates.add(String(expected));
+      if (typeof expected === "object") candidates.add(JSON.stringify(expected));
+    }
+    const inventory = buildInventory(sources, mainSource);
+    const hit = inventory?.assertions.find((a) => candidates.has(a.target) || candidates.has(a.target.replace(/'/g, "\"")));
+    if (hit) {
+      assertionIdValue = hit.id;
+      line = hit.sourceLine;
+    }
+  }
+  const assertion = line !== null ? { file: mainSource, line, column: null, assertionId: assertionIdValue } : null;
+  const request = failedStep.requests.at(-1) ?? null;
+  if (request && request.status !== null && request.status >= 400) {
+    return {
+      action,
+      request: { method: request.method ?? "GET", url: request.url ?? "", path: request.path ?? "/", status: request.status, passingStatus: null, failureText: error },
+      assertion,
+      dependency: null,
+    };
+  }
+  const dependency = request
+    ? {
+        method: request.method ?? "GET",
+        url: request.url ?? "",
+        path: request.path ?? "/",
+        passingStatus: request.status ?? 200,
+        msBeforeStep: 0,
+        stepLine: line,
+        stepTitle: failedStep.title,
+      }
+    : null;
+  return { action, request: null, assertion, dependency };
+}
+
 export function detectTargetResolution(check: ChecklyCheck, sources: Array<{ path: string; content: string }>): ManifestV3["target"]["resolution"] {
   const url = check.request?.url ?? "";
   if (/\{\{\s*ENVIRONMENT_URL\s*\}\}/.test(url)) return "handlebars";
@@ -414,6 +489,10 @@ export function detectTargetResolution(check: ChecklyCheck, sources: Array<{ pat
 }
 
 function buildInventory(sources: Array<{ path: string; content: string }>, mainSource: string | null): AssertionInventory | null {
+  const hasMultistep = sources.some((s) => s.content.includes("new MultiStepCheck("));
+  if (hasMultistep && mainSource) {
+    return parseProjectInventory(mainSource, new Map(sources.map((source) => [source.path, source.content])));
+  }
   if (mainSource && /\.check\.[cm]?[jt]sx?$/.test(mainSource)) {
     return parseProjectInventory(mainSource, new Map(sources.map((source) => [source.path, source.content])));
   }
@@ -483,7 +562,9 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
     ? parseApiCheckProject(input.mainSource, new Map(input.sources.map((source) => [source.path, source.content])))
     : null;
   const checkLogicalId = apiSourceModel?.logicalId || input.project.logicalId;
-  const failurePoint = detectFailurePoint(failing?.extract ?? null, passing?.extract ?? null, failing?.detail ?? null, input.sources);
+  const failurePoint = check.checkType === "MULTI_STEP" && failing?.multistep
+    ? detectMultiStepFailurePoint(failing.multistep, input.sources, input.mainSource)
+    : detectFailurePoint(failing?.extract ?? null, passing?.extract ?? null, failing?.detail ?? null, input.sources);
   const resolution = detectTargetResolution(check, input.sources);
   const recordedOrigin =
     originOf(failing?.apiRecording?.request?.url ?? passing?.apiRecording?.request?.url ?? null) ??
@@ -643,6 +724,12 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   const allAssertionIds = inventory?.assertions.map((a) => a.id) ?? [];
   const failureAssertions = assertionsForFailure(inventory, failurePoint);
   const apiCheck = check.checkType === "API" && Boolean(failing?.apiRecording ?? passing?.apiRecording);
+  const multistepCheck = check.checkType === "MULTI_STEP";
+  // Multistep provenance artifacts: the sanitized structured recording when
+  // captured, otherwise the recorded Checkly result itself — never a HAR that
+  // does not exist.
+  const msFailingArtifact = failing?.multistep ? "recordings/failing.multistep.json" : failingId ? `checkly-result:${failingId}` : "recordings/failing.har";
+  const msPassingArtifact = passing?.multistep ? "recordings/passing.multistep.json" : passingId ? `checkly-result:${passingId}` : "recordings/passing.har";
 
   if (passingId) {
     scenes.push({
@@ -650,7 +737,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
       type: "HEALTHY",
       mode: "live",
       state: `the target behaves as in the last passing run (${passingId}, ${passing!.summary.runLocation}); the fixed check must pass`,
-      verdict: { mustFail: false, provenance: { kind: "recorded", runId: passingId, artifactId: apiCheck ? "recordings/passing.api.json" : "recordings/passing.har" }, envAssumptions: ["locations", "target-resolution", ...(apiCheck && envVars.length ? ["env-vars"] : [])] },
+      verdict: { mustFail: false, provenance: { kind: "recorded", runId: passingId, artifactId: apiCheck ? "recordings/passing.api.json" : multistepCheck ? msPassingArtifact : "recordings/passing.har" }, envAssumptions: ["locations", "target-resolution", ...(apiCheck && envVars.length ? ["env-vars"] : [])] },
       experiments: [{ durationSec: 60, repetitions: REPS, expectStable: true }],
       assertionsInvolved: allAssertionIds,
       environment: "target",
@@ -687,7 +774,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
               : "the responses of the failing run are replayed from recordings/failing.har; the fixed check must pass against them",
       verdict: {
         mustFail: false,
-        provenance: { kind: "recorded", runId: failingId, artifactId: apiCheck ? "recordings/failing.api.json" : "recordings/failing.har" },
+        provenance: { kind: "recorded", runId: failingId, artifactId: apiCheck ? "recordings/failing.api.json" : multistepCheck ? msFailingArtifact : "recordings/failing.har" },
         // "overlapping-run" is the scene's evidence only when a sibling passed
         envAssumptions: apiCheck
           ? ["target-resolution", ...(envVars.length ? ["env-vars"] : [])]
@@ -729,14 +816,18 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
         mustFail: true,
         provenance: apiCheck
           ? { kind: "recorded", runId: passing?.summary.id ?? failingId, artifactId: "recordings/passing.api.json" }
-          : req || !dep
-            ? { kind: "recorded", runId: failingId, artifactId: "recordings/failing.har" }
-            : { kind: "recorded", runId: passing?.summary.id ?? failingId, artifactId: "recordings/passing.har" },
+          : multistepCheck
+            ? req || !dep
+              ? { kind: "recorded", runId: failingId, artifactId: msFailingArtifact }
+              : { kind: "recorded", runId: passing?.summary.id ?? failingId, artifactId: msPassingArtifact }
+            : req || !dep
+              ? { kind: "recorded", runId: failingId, artifactId: "recordings/failing.har" }
+              : { kind: "recorded", runId: passing?.summary.id ?? failingId, artifactId: "recordings/passing.har" },
         envAssumptions: ["target-resolution", ...(apiCheck && envVars.length ? ["env-vars"] : [])],
       },
       experiments: [{ durationSec: 60, repetitions: REPS, expectStable: true }],
       assertionsInvolved: failureAssertions,
-      environment: apiCheck ? "recording" : "target+recording",
+      environment: apiCheck ? "recording" : multistepCheck ? "target" : "target+recording",
       ...(apiCheck
         ? { notes: [passing?.apiRecording ? "the passing result supplies the opposite field contract" : "no passing API response was captured; the scene runs as uncertain"] }
         : req
@@ -870,6 +961,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
     reproduction: { mode: apiCheck ? "replay:failing.api.json" : cls.mode, matchedRule: cls.matchedRule, matchedText: cls.matchedText, reason: apiCheck ? "API incident response is replayed from the sanitized Checkly result" : reproductionReason, decidedBy, overlappingRuns },
     failurePoint,
     recordings: input.recordings,
+    multistep: input.multistep ?? null,
     scenes,
     assertions: inventory,
     envAssumptions,

@@ -155,6 +155,8 @@ export interface Bundle {
   playwright?: { configFile: string; projects: string[] } | null;
   /** Sanitized request/response records for an API incident. */
   api?: { failing: ApiRecording | null; passing: ApiRecording | null } | null;
+  /** Normalized Multistep evidence summary (from the sanitized recording). */
+  multistep?: { kind: string | null; steps: string[]; problems: string[] } | null;
   scenes: Scene[];
   envAssumptions: EnvAssumption[];
   determinism: DeterminismEvidence;

@@ -7,6 +7,7 @@ import type { Assertion, AssertionInventory } from "../types.ts";
 import { assertionId, normalizeSubject } from "./id.ts";
 import { isFalsifiable, isWeakMatcher, matcherClass } from "./classify.ts";
 import { apiInventory, parseApiCheckProject } from "../api/model.ts";
+import { parseMultiStepProject, type MultiStepSourceModel } from "../multistep/source.ts";
 
 /**
  * Find `expect(<subject>).<matcher>(<target>)` calls on one line with balanced
@@ -214,13 +215,53 @@ export function parseInventory(checkFile: string, source: string): AssertionInve
 }
 
 /**
+ * Inventory for a MultiStepCheck project. Assertion identity is byte-stable:
+ * ids come from the same scanExpectCalls + assertionId pipeline, so the
+ * existing scene oracles keep binding. Ordered test.step() titles become the
+ * flow-step inventory (removal/reorder shows up in the diff); Multistep step
+ * context (awaited, conditional) stays on the source model, never in the id.
+ */
+export function multiStepInventory(model: MultiStepSourceModel): AssertionInventory {
+  const script = model.script;
+  if (!script) return { checkFile: "", assertions: [], steps: [], totalAssertions: 0 };
+  const assertions: Assertion[] = script.assertions.map((a) => {
+    const cls = matcherClass(a.matcher);
+    const weak = isWeakMatcher(a.matcher);
+    return {
+      id: a.id,
+      subject: a.subject,
+      matcher: a.matcher,
+      target: a.target,
+      kind: cls.kind,
+      onCriticalPath: true,
+      sourceLine: a.sourceLine,
+      falsifiable: isFalsifiable(a.matcher, a.target) && !weak,
+      guarded: false,
+    };
+  });
+  return {
+    checkFile: script.file,
+    assertions,
+    steps: script.steps.map((s) => `test.step:${s.title}`),
+    totalAssertions: assertions.length,
+  };
+}
+
+/**
  * Parse the complete monitoring source tree when the check is declarative.
  * Imported assertion arrays and constants are resolved by the API model parser.
- * Browser checks keep the existing single-file parser and assertion identity.
+ * MultiStepCheck projects are modeled by the Multistep source parser (ordered
+ * awaited steps + step-scoped assertions). Browser checks keep the existing
+ * single-file parser and assertion identity.
  */
 export function parseProjectInventory(checkFile: string, files: Map<string, string>, logicalId?: string | null): AssertionInventory {
   const api = parseApiCheckProject(checkFile, files, logicalId);
   if (api) return apiInventory(api);
+  const looksMultistep = [...files.values()].some((source) => source.includes("new MultiStepCheck("));
+  if (looksMultistep) {
+    const model = parseMultiStepProject(files, checkFile);
+    if (model?.script) return multiStepInventory(model);
+  }
   return parseInventory(checkFile, files.get(checkFile) ?? files.get(checkFile.replace(/^\.\//, "")) ?? "");
 }
 

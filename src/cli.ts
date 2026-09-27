@@ -60,6 +60,7 @@ interface Args {
   result: string | null;
   out: string | null;
   project: string | null;
+  assets: string | null;
   measure: number;
   measureOverlap: number;
   targetUrl: string | null;
@@ -76,7 +77,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: null, patch: null, candidateProject: null, pr: null, base: null, projectPath: ".", bundle: null, executor: "scene", target: null, targetRevision: null, targetMetadata: null, cloudApproved: false, allowForkCloud: false, reportJson: null, reportMarkdown: null, envFile: null, envName: null, dryRun: false, json: false, verbose: false,
-    check: null, result: null, out: null, project: null, measure: 0, measureOverlap: 0, targetUrl: null,
+    check: null, result: null, out: null, project: null, assets: null, measure: 0, measureOverlap: 0, targetUrl: null,
     triggerRca: false, bodies: "api", keepRaw: false, history: 100, runs: 20, reports: null,
   };
   const value = (i: number, a: string): string => {
@@ -117,6 +118,7 @@ function parseArgs(argv: string[]): Args {
       case "--result": args.result = value(i, a); if (takes) i++; break;
       case "--out": args.out = value(i, a); if (takes) i++; break;
       case "--project": args.project = value(i, a); if (takes) i++; break;
+      case "--assets": args.assets = value(i, a); if (takes) i++; break;
       case "--measure": args.measure = Number(value(i, a)); if (takes) i++; break;
       case "--measure-overlap": args.measureOverlap = Number(value(i, a)); if (takes) i++; break;
       case "--target-url": args.targetUrl = value(i, a); if (takes) i++; break;
@@ -139,11 +141,16 @@ function usage(): string {
     "verify-fix — pre-merge verification of an agent-proposed monitoring-check repair",
     "",
     "  verify-fix bundle --check <checkId> [--result <failingResultId>] [--project <checkly project dir>] [--out <dir>]",
-    "                    [--measure N] [--measure-overlap M] [--target-url <url>] [--trigger-rca]",
+    "                    [--assets <downloaded-dir>] [--measure N] [--measure-overlap M] [--target-url <url>] [--trigger-rca]",
     "                    [--bodies api|all|none] [--keep-raw] [--history N] [--json] [--verbose]",
     "      Captures an incident from Checkly into a bundle: check config, sources, failing + last passing",
     "      run (traces → HAR), error group, Rocky RCA, scenes with provenance. Credentials: CHECKLY_API_KEY +",
     "      CHECKLY_ACCOUNT_ID, or the login saved by `npx checkly login`. Secrets are never written.",
+    "      --assets reads result assets you already downloaded with `checkly assets download --type all --dir <dir>`",
+    "      instead of downloading them: flat files attach to the failing result, failing/ and passing/ subdirs to each.",
+    "      For a MULTI_STEP check the downloaded assets (test-results.json, check-run-data.json, logs.txt) are",
+    "      normalized into sanitized structured step evidence (recordings/<side>.multistep.json) — no HAR or trace is",
+    "      invented, raw assets are never written, and missing/corrupt assets make the evidence UNCERTAIN, not PASS/FAIL.",
     "      --trigger-rca asks Rocky for a fresh analysis when the group has none, or when its RCA describes",
     "      an earlier, different failure of the same group (Rocky analyzes only a group's first failure).",
     "",
@@ -202,6 +209,7 @@ async function runBundle(args: Args): Promise<ExitCode> {
         resultId: args.result,
         outDir: out,
         projectDir: project,
+        assetsDir: args.assets,
         measure: args.measure,
         measureOverlap: args.measureOverlap,
         targetUrl: args.targetUrl ?? undefined,

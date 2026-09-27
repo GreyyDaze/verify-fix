@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExecutor, type ObservationValue, type RunContext, type Scene, type SceneObservation, type TraceStep } from "../types.ts";
 import { runSandbox } from "../sandbox.ts";
 import { runPlaywrightSandbox } from "../playwright-sandbox.ts";
+import { runMultiStepSandbox } from "../multistep/executor.ts";
 import { sceneExpected } from "../contract/contract.ts";
 import { fnv1a } from "../assertion/id.ts";
 import { effectiveConcurrency, needsTarget, parseMode, type ParsedMode } from "../scene/modes.ts";
@@ -169,6 +170,22 @@ export class SceneExecutor implements ExperimentExecutor {
 
   private async runCandidate(bundle: Bundle, patchSource: string, ctx: RunContext | undefined, url: string, env: Record<string, string>, seed: number): Promise<CandidateOutcome> {
     const checkFile = ctx?.checkFile ?? bundle.check.file;
+    if (bundle.check.checkType === "MULTI_STEP") {
+      // The Multistep runner uses Playwright's API request fixture only —
+      // the adapter never configures or launches a browser.
+      if (!this.projectDir) throw new Error(`Multistep check needs --project <dir> so @playwright/test can be resolved`);
+      const out = await runMultiStepSandbox({
+        baseUrl: url,
+        environmentName: this.environmentName,
+        env,
+        timeoutMs: this.sandboxTimeoutMs,
+        projectDir: this.projectDir,
+        files: { ...(ctx?.files ?? bundle.files), [checkFile]: patchSource },
+        checkFile,
+        seed,
+      });
+      return { passed: out.passed, inconclusive: out.inconclusive, reason: out.reason, trace: out.trace };
+    }
     if (bundle.playwright && /\.(?:spec|test)\.[cm]?[jt]sx?$/.test(checkFile)) {
       if (!this.projectDir) throw new Error(`Playwright check needs --project <dir> so @playwright/test can be resolved`);
       const out = await runPlaywrightSandbox({
@@ -295,6 +312,11 @@ export class SceneExecutor implements ExperimentExecutor {
         const outcome = s.outcome;
         for (const t of outcome.trace) push({ ...t, what: tag ? `${tag}${t.what}` : t.what });
         push({ kind: "step", what: `${tag}${runHits.length} request(s) reached the proxy → ${runHits.length ? summarize(runHits) : "none"}`, outcome: runHits.length ? "ok" : "skipped" });
+        if (bundle.check.checkType === "MULTI_STEP") {
+          // Completed requests of the structured transaction — counted from
+          // the scene proxy (the executor's own evidence, not child stderr).
+          this.cost.httpRequests = (this.cost.httpRequests ?? 0) + runHits.length;
+        }
         if (runHits.length === 0) {
           // The executor's own count, independent of anything inside the sandbox.
           return this.uncertain(scene, `${tag}no request reached ENVIRONMENT_URL — nothing was observed in this scene state`, rep + 1, mergedTrace, environment);

@@ -182,7 +182,9 @@ export interface ManifestV3 {
     overlappingRuns: OverlappingRun[];
   };
   failurePoint: FailurePoint | null;
-  recordings: { failing: string | null; passing: string | null; bodies: string; apiFailing?: string | null; apiPassing?: string | null };
+  recordings: { failing: string | null; passing: string | null; bodies: string; apiFailing?: string | null; apiPassing?: string | null; multistepFailing?: string | null; multistepPassing?: string | null };
+  /** Multistep capture problems per side — surfaced to `verify` as UNCERTAIN evidence. */
+  multistep?: { failing: { problems: string[] } | null; passing: { problems: string[] } | null } | null;
   scenes: SceneV3[];
   assertions: AssertionInventory | null;
   envAssumptions: Array<{ id: string; text: string; verified: boolean; verifiedBy: string }>;

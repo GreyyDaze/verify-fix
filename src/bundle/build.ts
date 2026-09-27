@@ -25,12 +25,15 @@ import { measureDeterminism, type MeasureResult, type Runner } from "./measure.t
 import type { ManifestV3 } from "./types.ts";
 import { apiRecordingFromResult, setupProvenance } from "../api/recording.ts";
 import { parseApiCheckProject } from "../api/model.ts";
+import { buildMultiStepRecording, readMultiStepAssets, type MultiStepAssetTexts } from "../multistep/capture.ts";
 
 export interface BuildOptions {
   checkId: string;
   resultId?: string | null;
   outDir: string;
   projectDir?: string | null;
+  /** Directory of assets already downloaded with `checkly assets download` (MULTI_STEP only). */
+  assetsDir?: string | null;
   measure?: number;
   measureOverlap?: number;
   targetUrl?: string;
@@ -187,6 +190,15 @@ export function collectProjectSources(check: ChecklyCheck, projectDir: string | 
       warnings.push(`no checkly.config.* found in ${root}`);
     }
 
+    if (check.checkType === "MULTI_STEP") {
+      // Capture the construct file(s) so the Multistep source model can bind
+      // construct identity (logical ID, entrypoint, scheduling) at verify time.
+      for (const file of findApiCheckFiles(root)) {
+        const content = readFileSync(file, "utf8");
+        if (content.includes("new MultiStepCheck(")) collectModuleClosure(root, [file], sources);
+      }
+    }
+
     if (check.checkType === "API") {
       const candidates = findApiCheckFiles(root);
       const selected = candidates.find((file) => {
@@ -243,6 +255,8 @@ export function collectProjectSources(check: ChecklyCheck, projectDir: string | 
   return { sources, mainSource, gitCommit, logicalId, repoUrl, playwright, warnings };
 }
 
+const MULTISTEP_ASSET_NAMES = ["test-results.json", "check-run-data.json", "logs.txt"];
+
 async function fetchResultWithTrace(
   client: ChecklyClient,
   checkId: string,
@@ -254,6 +268,8 @@ async function fetchResultWithTrace(
   log: (l: string) => void,
   toolVersion: string,
   secretValues: string[],
+  assetKind: "trace" | "multistep" = "trace",
+  localAssets: MultiStepAssetTexts | null = null,
 ): Promise<{ fetched: FetchedResult; warnings: string[] }> {
   const warnings: string[] = [];
   let detail: CheckResult | null = null;
@@ -263,6 +279,67 @@ async function fetchResultWithTrace(
     warnings.push(`${label}: could not load result detail (${(err as Error).message})`);
   }
   const apiRecording = detail ? apiRecordingFromResult(checkId, detail, secretValues) : null;
+
+  if (assetKind === "multistep") {
+    // Structured capture: normalize the downloaded assets (or fetch them
+    // through the API when no --assets dir was given). Raw bytes are hashed
+    // for provenance and never written to the bundle.
+    const texts: MultiStepAssetTexts = { testResults: null, checkRunData: null, logs: null, found: [], missing: [] };
+    if (localAssets) {
+      Object.assign(texts, localAssets);
+      // Hash-only provenance for locally supplied assets: every raw byte
+      // hashed BEFORE parsing, recorded in provenance, never written.
+      for (const [name, meta] of Object.entries(localAssets.hashes ?? {})) {
+        assetsOut.push({ result: label, name, type: "local-asset", bytes: meta.bytes, sha256: meta.sha256 });
+      }
+      if (localAssets.invalid) warnings.push(`${label}: local assets invalid (${localAssets.invalid}) — recorded as UNCERTAIN evidence, never a fallback`);
+      log(`[bundle] ${label}: using local --assets (${texts.found.join(", ") || "no files"})`);
+    } else {
+      let entries: AssetManifestEntry[] = [];
+      try {
+        const m = await client.getAssets(checkId, summary.id);
+        entries = m.assets ?? [];
+        if (m.truncated) warnings.push(`${label}: asset manifest truncated (${m.entriesReturned}/${m.entriesTotal})`);
+      } catch (err) {
+        warnings.push(`${label}: could not list assets (${(err as Error).message})`);
+      }
+      const byName = new Map<string, string>();
+      const archiveCache = new Map<string, Buffer>();
+      for (const asset of entries) {
+        try {
+          let buf: Buffer;
+          if (asset.archive) {
+            let archive = archiveCache.get(asset.url);
+            if (!archive) {
+              archive = await client.download(asset.url);
+              archiveCache.set(asset.url, archive);
+            }
+            const entry = openZip(archive).get(asset.archive.entryName);
+            if (!entry) throw new Error(`entry ${asset.archive.entryName} not in archive`);
+            buf = entry();
+          } else {
+            buf = await client.download(asset.url);
+          }
+          const name = asset.name || (asset.archive?.entryName.split("/").pop() ?? "");
+          assetsOut.push({ result: label, name, type: asset.type, bytes: buf.length, sha256: sha256(buf) });
+          if (MULTISTEP_ASSET_NAMES.includes(name)) byName.set(name, buf.toString("utf8"));
+        } catch (err) {
+          warnings.push(`${label}: asset ${asset.name} skipped (${(err as Error).message})`);
+        }
+      }
+      texts.testResults = byName.get("test-results.json") ?? null;
+      texts.checkRunData = byName.get("check-run-data.json") ?? null;
+      texts.logs = byName.get("logs.txt") ?? null;
+      texts.found = MULTISTEP_ASSET_NAMES.filter((name) => byName.has(name));
+      texts.missing = MULTISTEP_ASSET_NAMES.filter((name) => !byName.has(name));
+    }
+    if (texts.testResults === null && !texts.missing.includes("test-results.json")) texts.missing.push("test-results.json");
+    return {
+      fetched: { summary, detail, extract: null, apiRecording: null, multistep: null, multistepTexts: texts, multistepProblems: [] },
+      warnings,
+    };
+  }
+
   let manifestEntries: AssetManifestEntry[] = [];
   try {
     const m = await client.getAssets(checkId, summary.id, apiRecording ? undefined : "trace");
@@ -378,6 +455,12 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   const check = await client.getCheck(opts.checkId);
   log(`[bundle] check ${check.id} "${check.name}" type=${check.checkType} locations=${(check.locations ?? []).join(",")} runParallel=${Boolean(check.runParallel)}`);
   const secretValues = (check.environmentVariables ?? []).map((v) => v.value).filter((v): v is string => typeof v === "string");
+  const isMultiStep = check.checkType === "MULTI_STEP";
+  const multistepAssets = opts.assetsDir ? readMultiStepAssets(opts.assetsDir) : null;
+  if (opts.assetsDir && !isMultiStep) warnings.push("--assets is only used for MULTI_STEP checks; ignored for this check type");
+  if (opts.assetsDir && isMultiStep) {
+    log(`[bundle] --assets ${opts.assetsDir}: failing [${multistepAssets?.failing?.found.join(", ") ?? "none"}], passing [${multistepAssets?.passing?.found.join(", ") ?? "none"}]`);
+  }
 
   // 2. history
   const page = await client.listResults(check.id, { limit: opts.historyLimit ?? 100, resultType: "FINAL", fields: RESULT_FIELDS });
@@ -414,15 +497,40 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   const assets: ManifestV3["provenance"]["assets"] = [];
   let failing: FetchedResult | null = null;
   let passing: FetchedResult | null = null;
+  const assetKind: "trace" | "multistep" = isMultiStep ? "multistep" : "trace";
   if (failingSummary) {
-    const r = await fetchResultWithTrace(client, check.id, failingSummary, "failing", bodies, assets, rawDir ? join(rawDir, "failing") : null, log, toolVersion, secretValues);
+    const r = await fetchResultWithTrace(client, check.id, failingSummary, "failing", bodies, assets, rawDir ? join(rawDir, "failing") : null, log, toolVersion, secretValues, assetKind, multistepAssets?.failing ?? null);
     failing = r.fetched;
     warnings.push(...r.warnings);
   }
   if (passingSummary) {
-    const r = await fetchResultWithTrace(client, check.id, passingSummary, "passing", bodies, assets, rawDir ? join(rawDir, "passing") : null, log, toolVersion, secretValues);
+    const r = await fetchResultWithTrace(client, check.id, passingSummary, "passing", bodies, assets, rawDir ? join(rawDir, "passing") : null, log, toolVersion, secretValues, assetKind, multistepAssets?.passing ?? null);
     passing = r.fetched;
     warnings.push(...r.warnings);
+  }
+
+  // 3b. Multistep: normalize → extract relationships → sanitize → record.
+  // Only sanitized structured evidence is ever written; problems become
+  // manifest.multistep so `verify` maps them to UNCERTAIN.
+  const multistepRecordings: { failing: string | null; passing: string | null } = { failing: null, passing: null };
+  const multistepProblems: { failing: string[] | null; passing: string[] | null } = { failing: null, passing: null };
+  const multistepSecrets: string[] = [];
+  for (const [side, fetched] of [["failing", failing], ["passing", passing]] as const) {
+    if (!fetched?.multistepTexts) continue;
+    const capture = buildMultiStepRecording({ texts: fetched.multistepTexts, attempts: fetched.summary.attempts ?? null });
+    if (capture.ok) {
+      fetched.multistep = capture.capture;
+      fetched.multistepProblems = [];
+      multistepRecordings[side] = JSON.stringify(capture.recording, null, 2) + "\n";
+      multistepProblems[side] = null;
+      multistepSecrets.push(...capture.secrets);
+      log(`[bundle] ${side}: multistep capture normalized (${capture.capture.kind}, ${capture.capture.steps.length} step entries)`);
+    } else {
+      fetched.multistep = null;
+      fetched.multistepProblems = capture.problems;
+      multistepProblems[side] = capture.problems;
+      warnings.push(`${side}: multistep evidence unresolved (${capture.reason}) — recorded as UNCERTAIN evidence, never PASS/FAIL`);
+    }
   }
 
   // 4. error group + RCA
@@ -524,6 +632,8 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     passing: passing?.extract ? "recordings/passing.har" : null,
     apiFailing: failing?.apiRecording ? "recordings/failing.api.json" : null,
     apiPassing: passing?.apiRecording ? "recordings/passing.api.json" : null,
+    multistepFailing: multistepRecordings.failing ? "recordings/failing.multistep.json" : null,
+    multistepPassing: multistepRecordings.passing ? "recordings/passing.multistep.json" : null,
     bodies,
   };
   const manifest = buildManifest({
@@ -539,6 +649,9 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     project: { dir: opts.projectDir ?? null, gitCommit: proj.gitCommit, logicalId: proj.logicalId, repoUrl: proj.repoUrl, playwright: proj.playwright },
     measurement,
     recordings,
+    multistep: isMultiStep
+      ? { failing: multistepProblems.failing ? { problems: multistepProblems.failing } : null, passing: multistepProblems.passing ? { problems: multistepProblems.passing } : null }
+      : null,
     assets,
     apiCalls: client.calls.map((c) => ({ ...c })),
     accountId: deps.accountId,
@@ -555,6 +668,8 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   if (passing?.extract) files.push({ file: "recordings/passing.har", text: JSON.stringify(sanitizeHar(passing.extract.har), null, 1) + "\n" });
   if (failing?.apiRecording) files.push({ file: "recordings/failing.api.json", text: JSON.stringify(failing.apiRecording, null, 2) + "\n" });
   if (passing?.apiRecording) files.push({ file: "recordings/passing.api.json", text: JSON.stringify(passing.apiRecording, null, 2) + "\n" });
+  if (multistepRecordings.failing) files.push({ file: "recordings/failing.multistep.json", text: multistepRecordings.failing });
+  if (multistepRecordings.passing) files.push({ file: "recordings/passing.multistep.json", text: multistepRecordings.passing });
   if (failing?.extract) files.push({ file: "recordings/failing.actions.json", text: JSON.stringify(failing.extract.actions.map(({ params: _p, ...a }) => a), null, 1) + "\n" });
   if (passing?.extract) files.push({ file: "recordings/passing.actions.json", text: JSON.stringify(passing.extract.actions.map(({ params: _p, ...a }) => a), null, 1) + "\n" });
   if (failing) files.push({ file: "results/failing.json", text: JSON.stringify(trimmedResult(failing.detail, failing.apiRecording) ?? failing.summary, null, 2) + "\n" });
@@ -584,15 +699,22 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   files.push({ file: ".gitignore", text: "raw/\n" });
   files.push({ file: "README.md", text: bundleReadme(manifest) });
 
-  assertNoSecretLeak(files, secretValues);
+  // Final leak check over EVERY original sensitive value: Checkly env vars
+  // plus the original account/token/origin values the sanitizer labeled.
+  const allSecrets = [...new Set([...secretValues, ...multistepSecrets])];
+  assertNoSecretLeak(files, allSecrets);
 
   mkdirSync(outDir, { recursive: true });
+  const written: Array<{ file: string; text: string }> = [];
   for (const f of files) {
     const p = isAbsolute(f.file) ? f.file : join(outDir, f.file);
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, f.text);
+    written.push({ file: f.file, text: readFileSync(p, "utf8") });
   }
-  log(`[bundle] wrote ${files.length} files to ${outDir}`);
+  // And again over every file ACTUALLY written, straight from disk.
+  assertNoSecretLeak(written, allSecrets);
+  log(`[bundle] wrote ${files.length} files to ${outDir} (post-write leak check over ${allSecrets.length} original sensitive value(s): clean)`);
   return { manifest, outDir, files: files.map((f) => f.file), warnings };
 }
 

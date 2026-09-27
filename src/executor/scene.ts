@@ -61,6 +61,20 @@ interface CandidateOutcome {
   inconclusive: boolean;
   reason: string | null;
   trace: TraceStep[];
+  /** Null if the run never yielded a browser-process measurement. */
+  browserProcesses?: number | null;
+}
+
+// These are the locations the canonical Multistep transaction has isolated
+// monitoring accounts for. This is deliberately not an arbitrary env-file
+// value or a spelling guessed from a private/unknown Checkly location.
+const MULTISTEP_REGIONS: Readonly<Record<string, string>> = Object.freeze({
+  "us-east-1": "us-east-1",
+  "eu-west-1": "eu-west-1",
+});
+
+export function multistepRegionForLocation(location: string): string | null {
+  return Object.hasOwn(MULTISTEP_REGIONS, location) ? MULTISTEP_REGIONS[location]! : null;
 }
 
 export function isSceneExecutor(e: ExperimentExecutor): e is SceneExecutor {
@@ -115,6 +129,7 @@ export class SceneExecutor implements ExperimentExecutor {
       runs: this.cost.localRuns + api.localRuns,
       localRuns: this.cost.localRuns + api.localRuns,
       browserProcesses: this.cost.browserProcesses + api.browserProcesses,
+      ...(this.cost.multiStepBrowserCounts ? { multiStepBrowserCounts: [...this.cost.multiStepBrowserCounts] } : {}),
       httpRequests: (this.cost.httpRequests ?? 0) + (api.httpRequests ?? 0),
       mutationRuns: this.cost.mutationRuns + api.mutationRuns,
       wallTimeMs: this.cost.wallTimeMs + api.wallTimeMs,
@@ -184,7 +199,7 @@ export class SceneExecutor implements ExperimentExecutor {
         checkFile,
         seed,
       });
-      return { passed: out.passed, inconclusive: out.inconclusive, reason: out.reason, trace: out.trace };
+      return { passed: out.passed, inconclusive: out.inconclusive, reason: out.reason, trace: out.trace, browserProcesses: out.browserProcesses };
     }
     if (bundle.playwright && /\.(?:spec|test)\.[cm]?[jt]sx?$/.test(checkFile)) {
       if (!this.projectDir) throw new Error(`Playwright check needs --project <dir> so @playwright/test can be resolved`);
@@ -222,7 +237,12 @@ export class SceneExecutor implements ExperimentExecutor {
       return observation;
     }
     const mode = parseMode(scene.mode);
-    const config = ctx?.config ?? bundle.config;
+    const isMultiStep = bundle.check.checkType === "MULTI_STEP";
+    // A MultiStepCheck construct overrides project-level Checkly scheduling.
+    // Its unchanged deployed check configuration (captured in the bundle) is
+    // the trusted location list; a patched checkly.config.ts for another check
+    // may NOT relabel two executed regions as one.
+    const config = isMultiStep ? (bundle.config ?? ctx?.config ?? null) : (ctx?.config ?? bundle.config);
     const allowed = effectiveConcurrency(config);
     const concurrency = mode.kind === "live-concurrent" ? Math.max(1, Math.min(mode.concurrency, allowed)) : 1;
     let environment = this.environmentLabel(bundle, scene, mode, concurrency);
@@ -241,6 +261,18 @@ export class SceneExecutor implements ExperimentExecutor {
     if (replayBrowserAssets) environment = this.environmentLabel(bundle, scene, mode, concurrency, true);
     const failingHar = mode.kind === "inject" ? this.har(bundle, "failing.har") : null;
 
+    const locations = config?.locations.length ? config.locations : bundle.config?.locations ?? [];
+    const baseEnv = { ...this.env, ...(scene.env ?? {}) };
+    const regions = isMultiStep
+      ? Array.from({ length: concurrency }, (_, index) => multistepRegionForLocation(locations[index % locations.length] ?? ""))
+      : [];
+    if (isMultiStep && regions.some((region) => region === null)) {
+      return this.uncertain(scene, "Multistep location has no trusted REGION/account mapping — no runner was started", 0, [], environment);
+    }
+    if (isMultiStep && baseEnv.REGION !== undefined && regions.some((region) => region !== baseEnv.REGION)) {
+      return this.uncertain(scene, "env-file REGION conflicts with the trusted per-location mapping — no runner was started", 0, [], environment);
+    }
+
     const budget = this.budgetFor(bundle);
     const wantedRuns = Math.min(scene.experiments[0]?.repetitions ?? 1, budget);
     const usedSoFar = this.used.get(scene.sceneId) ?? 0;
@@ -258,6 +290,7 @@ export class SceneExecutor implements ExperimentExecutor {
       checkRuns: 0,
       wallTimeMs: 0,
       phase: ctx?.phase ?? "candidate" as const,
+      ...(isMultiStep ? { multiStepBrowserCounts: [] as Array<number | null> } : {}),
     };
     this.cost.byScene.push(costRow);
 
@@ -271,18 +304,19 @@ export class SceneExecutor implements ExperimentExecutor {
 
     for (let rep = 0; rep < reps; rep++) {
       const urls = await this.proxy.arm({ mode, target: this.target, runs: concurrency, replayHar, replayBrowserAssetsFromTarget: replayBrowserAssets, failingHar, barrierTimeoutMs: this.barrierTimeoutMs });
-      const baseEnv = { ...this.env, ...(scene.env ?? {}) };
-      const locations = config?.locations.length ? config.locations : bundle.config?.locations ?? [];
       const startedAt = Date.now();
       const settled = await Promise.all(
         urls.map((url, runIndex) => {
-          const region = locations[runIndex % Math.max(1, locations.length)];
+          const region = isMultiStep ? regions[runIndex]! : locations[runIndex % Math.max(1, locations.length)];
           const env = {
             ...baseEnv,
             CHECKLY: "1",
             CHECKLY_RUN_SOURCE: "TEST_RECORD",
-            CI: "1",
+            // CI belongs to the Multistep adapter's reserved runner keys. It
+            // sets CI itself; the scene must not pass it as candidate env.
+            ...(!isMultiStep ? { CI: "1" } : {}),
             ...(region ? { CHECKLY_REGION: region } : {}),
+            ...(isMultiStep ? { REGION: region! } : {}),
           };
           return this.runCandidate(bundle, patchSource, ctx, url, env, repetitionSeed(scene.sceneId, rep, runIndex))
             .then((outcome) => ({ ok: true as const, outcome }))
@@ -296,6 +330,12 @@ export class SceneExecutor implements ExperimentExecutor {
       costRow.wallTimeMs += elapsed;
       this.cost.localRuns += concurrency;
       if (bundle.playwright) this.cost.browserProcesses += concurrency * Math.max(1, bundle.playwright.projects.length);
+      if (isMultiStep) {
+        const samples = settled.map((result) => result.ok ? result.outcome.browserProcesses ?? null : null);
+        costRow.multiStepBrowserCounts!.push(...samples);
+        (this.cost.multiStepBrowserCounts ??= []).push(...samples);
+        this.cost.browserProcesses += samples.reduce<number>((sum, n) => sum + (n ?? 0), 0);
+      }
       this.cost.wallTimeMs += elapsed;
       if (costRow.phase === "mutation") this.cost.mutationRuns += concurrency;
       const hits = this.proxy.hits();
@@ -305,12 +345,21 @@ export class SceneExecutor implements ExperimentExecutor {
         const runHits = hits.filter((h) => h.runIndex === runIndex);
         const tag = concurrency > 1 ? `run ${runIndex + 1}/${concurrency}: ` : "";
         if (!s.ok) {
-          const msg = s.err?.message ?? String(s.err);
-          push({ kind: "step", what: `${tag}sandbox error: ${msg.split("\n")[0].slice(0, 200)}`, outcome: "failed" });
-          return this.uncertain(scene, `sandbox could not run the check: ${msg.split("\n")[0].slice(0, 200)}`, rep, mergedTrace, environment);
+          // A Multistep exception may contain a project path or dependency
+          // error from the host. It is not transaction evidence or report text.
+          const msg = isMultiStep ? "Multistep sandbox execution unavailable"
+            : (s.err?.message ?? String(s.err)).split("\n")[0].slice(0, 200);
+          push({ kind: "step", what: `${tag}sandbox error: ${msg}`, outcome: "failed" });
+          return this.uncertain(scene, `sandbox could not run the check: ${msg}`, rep, mergedTrace, environment);
         }
         const outcome = s.outcome;
         for (const t of outcome.trace) push({ ...t, what: tag ? `${tag}${t.what}` : t.what });
+        if (isMultiStep && !outcome.inconclusive && outcome.browserProcesses == null) {
+          return this.uncertain(scene, "Multistep browser-process measurement unavailable — no zero-browser claim", rep + 1, mergedTrace, environment);
+        }
+        if (isMultiStep && !outcome.inconclusive && (outcome.browserProcesses ?? 0) > 0) {
+          return this.uncertain(scene, "Multistep browser process observed — API-only execution not proven", rep + 1, mergedTrace, environment);
+        }
         push({ kind: "step", what: `${tag}${runHits.length} request(s) reached the proxy → ${runHits.length ? summarize(runHits) : "none"}`, outcome: runHits.length ? "ok" : "skipped" });
         if (bundle.check.checkType === "MULTI_STEP") {
           // Completed requests of the structured transaction — counted from

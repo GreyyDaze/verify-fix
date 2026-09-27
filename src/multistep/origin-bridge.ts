@@ -53,6 +53,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { knownRoute, UNKNOWN_ROUTE } from "./routes.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -73,6 +74,8 @@ export interface BridgeRequestEvidence {
   path: string;
   /** query parameter NAMES only — never values (signed URLs included) */
   queryKeys: string[];
+  /** true if the client supplied any query string; names/values are discarded */
+  hasQuery?: boolean;
   /** request header names seen at the bridge (names only — never values) */
   requestHeaderNames: string[];
   status: number;
@@ -149,41 +152,11 @@ function stripHopByHop(headers: Record<string, string | string[] | undefined>): 
   return out;
 }
 
-/**
- * Evidence-safe path: never store sensitive path values. Long opaque
- * segments (token- or key-shaped) are redacted; length is bounded.
- */
-function sanitizeEvidencePath(path: string): string {
-  const capped = path.length > 512 ? path.slice(0, 512) : path;
-  return capped
-    .split("/")
-    .map((segment) => (/^[A-Za-z0-9+/=_-]{32,}$/.test(segment) && /\d/.test(segment) && /[A-Za-z]/.test(segment) ? "<redacted>" : segment))
-    .join("/");
-}
-
-function queryKeysOf(query: string): string[] {
-  if (!query) return [];
-  const keys: string[] = [];
-  for (const pair of query.split("&")) {
-    if (!pair) continue;
-    const rawKey = pair.split("=")[0] ?? "";
-    let key = rawKey;
-    try {
-      key = decodeURIComponent(rawKey);
-    } catch {
-      /* keep the raw key name when it is not percent-encoded */
-    }
-    if (key) keys.push(key);
-  }
-  return [...new Set(keys)];
-}
-
 async function runOpenssl(args: string[], cwd: string): Promise<void> {
   try {
     await execFileAsync("openssl", args, { cwd, timeout: 20_000, windowsHide: true });
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`openssl failed to mint the per-run bridge certificate (${detail.split("\n")[0]})`);
+    throw new Error("openssl failed to mint the per-run bridge certificate");
   }
 }
 
@@ -197,10 +170,10 @@ export async function startOriginBridge(upstreamUrl: string): Promise<OriginBrid
   try {
     upstream = new URL(upstreamUrl);
   } catch {
-    throw new Error(`upstream target is not a valid URL: ${JSON.stringify(String(upstreamUrl).slice(0, 120))}`);
+    throw new Error("upstream target is not a valid URL");
   }
   if (upstream.protocol !== "http:" && upstream.protocol !== "https:") {
-    throw new Error(`upstream target must be http or https, got ${upstream.protocol}`);
+    throw new Error("upstream target must be http or https");
   }
 
   const dir = await mkdtemp(join(tmpdir(), "verify-fix-bridge-"));
@@ -224,13 +197,14 @@ export async function startOriginBridge(upstreamUrl: string): Promise<OriginBrid
     const handle = (req: IncomingMessage, res: ServerResponse): void => {
       const rawUrl = req.url ?? "/";
       const qIndex = rawUrl.indexOf("?");
-      const path = sanitizeEvidencePath(qIndex === -1 ? rawUrl : rawUrl.slice(0, qIndex));
-      const query = qIndex === -1 ? "" : rawUrl.slice(qIndex + 1);
-      const method = req.method ?? "GET";
+      const path = knownRoute(qIndex === -1 ? rawUrl : rawUrl.slice(0, qIndex)) ?? UNKNOWN_ROUTE;
+      const query = qIndex !== -1 && qIndex < rawUrl.length - 1;
+      const method = req.method ?? "OTHER";
       const authorization = Object.keys(req.headers).some((h) => h.toLowerCase() === "authorization");
-      const requestHeaderNames = Object.keys(req.headers).map((h) => h.toLowerCase()).sort();
-      const headerBytes = requestHeaderNames.reduce((sum, name) => sum + name.length + (Array.isArray(req.headers[name]) ? (req.headers[name] as string[]).join(",").length : String(req.headers[name] ?? "").length), 0);
-      const entry: BridgeRequestEvidence = { index: 0, method, path, queryKeys: queryKeysOf(query), requestHeaderNames, status: 0, authorization };
+      const headerBytes = Object.entries(req.headers).reduce((sum, [name, value]) => sum + name.length + (Array.isArray(value) ? value.join(",").length : String(value ?? "").length), 0);
+      const headerNames = new Set(["host", "content-type", "authorization", "accept", "user-agent"]);
+      const requestHeaderNames = Object.keys(req.headers).map((h) => h.toLowerCase()).filter((h) => headerNames.has(h)).sort();
+      const entry: BridgeRequestEvidence = { index: 0, method: ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].includes(method) ? method : "OTHER", path, queryKeys: [], hasQuery: query, requestHeaderNames, status: 0, authorization };
 
       // ---- single completion guard: every request answers exactly once ----
       let settled = false;

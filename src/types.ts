@@ -289,6 +289,8 @@ export interface SceneCost {
   checkRuns: number;
   wallTimeMs: number;
   phase: "candidate" | "mutation";
+  /** Per-sandbox descendant browser-process sample maxima (null = unavailable). */
+  multiStepBrowserCounts?: Array<number | null>;
 }
 
 export interface ExecutionCost {
@@ -302,6 +304,8 @@ export interface ExecutionCost {
   localRuns: number;
   /** Browser processes started by local Playwright executions. */
   browserProcesses: number;
+  /** Measured per-run maxima for the Multistep adapter; absent = no adapter runs. */
+  multiStepBrowserCounts?: Array<number | null>;
   /** Completed API requests, including deterministic response replays. */
   httpRequests?: number;
   mutationRuns: number;

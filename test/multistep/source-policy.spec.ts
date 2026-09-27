@@ -88,14 +88,14 @@ test("clean original against itself produces no policy verdict", () => {
 test("missing await on a required test.step = FAILED", () => {
   const candidate = candidateWith((s) => s.replace("await test.step('session'", "test.step('session'"));
   const result = evaluateMultiStepPolicy(model, candidate);
-  assert.match(result.rejected ?? "", /missing await on required test\.step\('session'\)/);
+  assert.match(result.rejected ?? "", /missing await on required test\.step/);
   assert.equal(result.uncertain, null);
 });
 
 test("removed, reordered, or conditionally bypassed required steps = FAILED", () => {
   const removed = candidateWith((s) => s.slice(0, s.indexOf("await test.step('confirm transaction'")) + "\n})\n");
   const removedResult = evaluateMultiStepPolicy(model, removed);
-  assert.match(removedResult.rejected ?? "", /removed or skipped: confirm transaction/);
+  assert.match(removedResult.rejected ?? "", /removed or skipped \(1 required step/);
 
   const reordered = candidateWith((s) => {
     const before = s.indexOf("await test.step('session'");

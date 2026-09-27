@@ -18,12 +18,12 @@
 // back to a different flat parent directory.
 
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
+import { join } from "node:path";
 import { ASSET_ZIP_BOUNDS, openZipBounded } from "../trace/zip.ts";
 import { normalizeMultiStepCapture, type MultiStepCapture } from "./normalize.ts";
 import { extractTransaction, type MultiStepTransaction } from "./transaction.ts";
-import { sanitizeMultiStepCapture } from "./sanitize.ts";
+import { multistepProblemCategory, sanitizeMultiStepCapture } from "./sanitize.ts";
 
 export interface MultiStepTexts {
   testResults: string | null;
@@ -40,7 +40,7 @@ export interface MultiStepAssetTexts extends MultiStepTexts {
   hashes?: Record<string, { bytes: number; sha256: string }>;
 }
 
-export const MULTISTEP_RECORDING_SCHEMA = "multistep-recording-v1";
+export const MULTISTEP_RECORDING_SCHEMA = "multistep-recording-v2";
 
 /** Maximum bytes for any single directly-read asset file. */
 export const MAX_ASSET_FILE_BYTES = 32 * 1024 * 1024;
@@ -66,17 +66,52 @@ function invalidTexts(reason: string): MultiStepAssetTexts {
   };
 }
 
-/** lstat-based single file resolution: symlinks and oversized files rejected. */
-function resolveAssetFile(name: string, path: string): { buf: Buffer } | { invalid: string } {
-  if (!existsSync(path)) return { invalid: `missing ${name}` };
-  const stat = lstatSync(path);
-  if (stat.isSymbolicLink()) return { invalid: `${name} is a symbolic link — symlinks are rejected, not followed` };
-  if (!stat.isFile()) return { invalid: `${name} is not a regular file` };
-  if (stat.size > MAX_ASSET_FILE_BYTES) return { invalid: `${name} of ${stat.size} bytes exceeds the ${MAX_ASSET_FILE_BYTES}-byte bound` };
+/** Inspect without following symbolic links (including broken optional links). */
+function assetStat(path: string): ReturnType<typeof lstatSync> | null {
   try {
-    return { buf: readFileSync(path) };
+    return lstatSync(path);
   } catch (error) {
-    return { invalid: `${name} could not be read (${error instanceof Error ? error.message.split("\n")[0] : String(error)})` };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+/** Descriptor read is bounded BEFORE allocation, including when a file grows
+ * between lstat/fstat and read. No readFileSync(fd) unbounded growth window. */
+function readBounded(fd: number, max: number): Buffer | null {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  while (total <= max) {
+    const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, max + 1 - total));
+    const n = readSync(fd, chunk, 0, chunk.length, null);
+    if (n === 0) return Buffer.concat(chunks, total);
+    total += n;
+    if (total > max) return null;
+    chunks.push(chunk.subarray(0, n));
+  }
+  return null;
+}
+
+/** Open with O_NOFOLLOW, then enforce the size on the opened descriptor. */
+function resolveAssetFile(name: string, path: string): { buf: Buffer } | { invalid: string } {
+  try {
+    const stat = assetStat(path);
+    if (!stat) return { invalid: `missing ${name}` };
+    if (stat.isSymbolicLink()) return { invalid: `${name} is a symbolic link — symlinks are rejected, not followed` };
+    if (!stat.isFile()) return { invalid: `${name} is not a regular file` };
+    if (stat.size > MAX_ASSET_FILE_BYTES) return { invalid: `${name} exceeds the ${MAX_ASSET_FILE_BYTES}-byte bound` };
+    const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      const opened = fstatSync(fd);
+      if (!opened.isFile() || opened.size > MAX_ASSET_FILE_BYTES) return { invalid: `${name} is not a bounded regular file` };
+      const buf = readBounded(fd, MAX_ASSET_FILE_BYTES);
+      if (!buf) return { invalid: `${name} exceeds the ${MAX_ASSET_FILE_BYTES}-byte bound` };
+      return { buf };
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return { invalid: `${name} could not be read safely` };
   }
 }
 
@@ -96,49 +131,59 @@ function textsFromBuffers(files: Record<string, Buffer | null>): MultiStepAssetT
     return buf.toString("utf8");
   };
   const testResults = text(REQUIRED_ASSET);
-  const checkRunData = files["check-run-data.json"] ? text("check-run-data.json") : null;
-  const logs = files["logs.txt"] ? text("logs.txt") : null;
-  if (checkRunData === null) missing.push("check-run-data.json (optional)");
-  if (logs === null) missing.push("logs.txt (optional)");
+  const checkRunData = text("check-run-data.json", "check-run-data.json (optional)");
+  const logs = text("logs.txt", "logs.txt (optional)");
   return { testResults, checkRunData, logs, found, missing, hashes };
 }
 
 function fromDirectory(dir: string): MultiStepAssetTexts {
-  if (!existsSync(dir) || !statSync(dir).isDirectory()) return invalidTexts(`${basename(dir)} is not a directory`);
+  const root = assetStat(dir);
+  if (!root || !root.isDirectory() || root.isSymbolicLink()) return invalidTexts("asset directory is not a safe directory");
   const readDirect = (): { files: Record<string, Buffer | null> } | { invalid: string } => {
     const files: Record<string, Buffer | null> = {};
     for (const name of [REQUIRED_ASSET, ...OPTIONAL_ASSETS]) {
       const path = join(dir, name);
-      if (!existsSync(path)) {
+      if (!assetStat(path)) {
         files[name] = null;
         continue;
       }
       const resolved = resolveAssetFile(name, path);
-      if ("invalid" in resolved) {
-        if (name === REQUIRED_ASSET) return { invalid: resolved.invalid };
-        files[name] = null; // unreadable optional file → treated as absent
-        continue;
-      }
+      if ("invalid" in resolved) return { invalid: resolved.invalid }; // present optional corruption is NOT absence
       files[name] = resolved.buf;
     }
     return { files };
   };
   const zipPath = join(dir, "assets.zip");
-  const hasDirectRequired = existsSync(join(dir, REQUIRED_ASSET));
-  if (!hasDirectRequired && existsSync(zipPath)) {
+  const hasDirectRequired = assetStat(join(dir, REQUIRED_ASSET)) !== null;
+  const hasArchive = assetStat(zipPath) !== null;
+  if (hasDirectRequired && hasArchive) return invalidTexts("assets.zip conflicts with direct test-results.json — ambiguous evidence");
+  if (!hasDirectRequired && hasArchive) {
     // assets.zip from `checkly assets download` — bounded reader, no extraction
     try {
       const zipStat = lstatSync(zipPath);
       if (zipStat.isSymbolicLink()) return invalidTexts("assets.zip is a symbolic link — symlinks are rejected, not followed");
-      if (zipStat.size > MAX_ASSET_ZIP_BYTES) return invalidTexts(`assets.zip of ${zipStat.size} bytes exceeds the ${MAX_ASSET_ZIP_BYTES}-byte bound`);
-      const zipBuf = readFileSync(zipPath);
+      if (!zipStat.isFile()) return invalidTexts("assets.zip is not a regular file");
+      if (zipStat.size > MAX_ASSET_ZIP_BYTES) return invalidTexts(`assets.zip exceeds the ${MAX_ASSET_ZIP_BYTES}-byte bound`);
+      // Reuse the no-follow descriptor and actual-read bound for the archive.
+      const fd = openSync(zipPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      let zipBuf: Buffer;
+      try {
+        const opened = fstatSync(fd);
+        if (!opened.isFile() || opened.size > MAX_ASSET_ZIP_BYTES) return invalidTexts("assets.zip exceeds archive byte bound");
+        const bounded = readBounded(fd, MAX_ASSET_ZIP_BYTES);
+        if (!bounded) return invalidTexts("assets.zip exceeds archive byte bound");
+        zipBuf = bounded;
+      } finally {
+        closeSync(fd);
+      }
       const zip = openZipBounded(zipBuf, ASSET_ZIP_BOUNDS);
       const files: Record<string, Buffer | null> = {};
       for (const name of [REQUIRED_ASSET, ...OPTIONAL_ASSETS]) files[name] = zip.has(name) ? zip.get(name)!() : null;
       if (files[REQUIRED_ASSET] === null) return invalidTexts(`assets.zip does not contain ${REQUIRED_ASSET}`);
       return textsFromBuffers(files);
     } catch (error) {
-      return invalidTexts(`assets.zip is invalid (${error instanceof Error ? error.message.split("\n")[0] : String(error)})`);
+      const cause = error instanceof Error && /^zip: [a-zA-Z0-9 :()-]+$/.test(error.message) ? error.message : "zip: unreadable archive";
+      return invalidTexts(`assets.zip is invalid (${cause})`);
     }
   }
   const direct = readDirect();
@@ -158,13 +203,13 @@ function fromDirectory(dir: string): MultiStepAssetTexts {
 export function readMultiStepAssets(dir: string): { failing: MultiStepAssetTexts | null; passing: MultiStepAssetTexts | null } {
   const failingDir = join(dir, "failing");
   const passingDir = join(dir, "passing");
-  if (existsSync(failingDir)) {
+  if (assetStat(failingDir)) {
     return {
       failing: fromDirectory(failingDir),
-      passing: existsSync(passingDir) ? fromDirectory(passingDir) : null,
+      passing: assetStat(passingDir) ? fromDirectory(passingDir) : null,
     };
   }
-  if (existsSync(passingDir)) {
+  if (assetStat(passingDir)) {
     // passing/ without failing/: passing is explicit, failing comes from flat
     return { failing: fromDirectory(dir), passing: fromDirectory(passingDir) };
   }
@@ -205,7 +250,8 @@ export type CaptureRecordingResult =
 /** Normalize → extract relationships → sanitize. Storage gets sanitized output only. */
 export function buildMultiStepRecording(input: MultiStepCaptureInput): CaptureRecordingResult {
   if (input.texts.invalid) {
-    return { ok: false, reason: `asset capture invalid: ${input.texts.invalid}`, problems: [`asset capture invalid: ${input.texts.invalid}`] };
+    const reason = multistepProblemCategory(input.texts.invalid);
+    return { ok: false, reason, problems: [reason] };
   }
   const capture = normalizeMultiStepCapture({
     testResults: input.texts.testResults,
@@ -214,12 +260,20 @@ export function buildMultiStepRecording(input: MultiStepCaptureInput): CaptureRe
     attempts: input.attempts ?? null,
   });
   if (capture.problems.length > 0) {
-    return { ok: false, reason: capture.problems.join("; "), problems: capture.problems };
+    const problems = [...new Set(capture.problems.map(multistepProblemCategory))];
+    return { ok: false, reason: problems[0]!, problems };
   }
   const transaction = extractTransaction(capture);
   const sanitized = sanitizeMultiStepCapture(capture, transaction);
   if (!sanitized.ok) {
-    return { ok: false, reason: sanitized.reason, problems: [...capture.problems, sanitized.reason] };
+    return { ok: false, reason: sanitized.reason, problems: [sanitized.reason] };
+  }
+  // Re-extract from the VALUES-FREE capture. In particular, raw transaction
+  // steps, request paths, errors, sites and values must never enter storage.
+  const safeTransaction = extractTransaction(sanitized.capture);
+  if (safeTransaction.problems.length) {
+    const reason = multistepProblemCategory(safeTransaction.problems[0]!);
+    return { ok: false, reason, problems: [reason] };
   }
   const recording: MultiStepRecording = {
     schemaVersion: MULTISTEP_RECORDING_SCHEMA,
@@ -229,13 +283,13 @@ export function buildMultiStepRecording(input: MultiStepCaptureInput): CaptureRe
     checkRunData: sanitized.capture.checkRunData,
     logs: sanitized.capture.logs,
     recurrence: sanitized.capture.recurrence,
-    transaction: transaction.account && transaction.token
+    transaction: safeTransaction.account && safeTransaction.token
       ? {
-          steps: transaction.steps,
-          account: { label: "<account>", sites: transaction.account.sites },
-          token: { label: "<token>", sites: transaction.token.sites, occurrences: transaction.token.occurrences },
-          slot: transaction.slot,
-          version: transaction.version,
+          steps: safeTransaction.steps,
+          account: { label: "<account>", sites: safeTransaction.account.sites },
+          token: { label: "<token>", sites: safeTransaction.token.sites, occurrences: safeTransaction.token.occurrences },
+          slot: safeTransaction.slot,
+          version: safeTransaction.version,
         }
       : null,
     problems: sanitized.capture.problems,

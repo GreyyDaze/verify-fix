@@ -12,6 +12,7 @@ import { envVarNamesOnly } from "./sanitize.ts";
 import { classifyRca } from "./rca-mode.ts";
 import { parseApiCheckProject } from "../api/model.ts";
 import type { MultiStepCapture } from "../multistep/normalize.ts";
+import { parseMultiStepScript } from "../multistep/source.ts";
 import type { MeasureResult } from "./measure.ts";
 import type { DeterminismV3, FailurePoint, ManifestV3, OverlappingRun, ResultRef, SceneV3 } from "./types.ts";
 
@@ -414,54 +415,44 @@ export function findOverlappingRuns(failing: CheckResultSummary | null, history:
   return out.sort((a, b) => Math.abs(a.startDeltaMs) - Math.abs(b.startDeltaMs));
 }
 
-/**
- * Failure point from a sanitized Multistep capture: the first step with an
- * error, its failing assertion evidence (matched back to the inventory by the
- * exact expected value), and the request that step depends on. A request that
- * answered ≥400 is a real `request` failure; an answered-200 request becomes a
- * `dependency` (drift: the check went stale while the app answered).
- */
+/** Only a failed step may supply an assertion; never search other steps. */
 export function detectMultiStepFailurePoint(
   capture: MultiStepCapture,
   sources: Array<{ path: string; content: string }>,
   mainSource: string | null,
 ): FailurePoint | null {
-  const failedIndex = capture.steps.findIndex((s) => s.status === "failed");
-  if (failedIndex === -1) return null;
-  const failedStep = capture.steps[failedIndex];
-  const error = failedStep.error ?? `${failedStep.title} failed`;
-  const action = { apiName: "test.step", title: summarizeErrorMessage(error), error };
-  const ordered = [...capture.steps.slice(failedIndex), ...capture.steps.slice(0, failedIndex)];
-  const pool = ordered.flatMap((step) => step.assertions.map((assertion) => ({ step, assertion })));
-  const evidence = pool.find((entry) => entry.assertion.passed === false)
-    ?? pool.find((entry) => entry.assertion.expected !== null || entry.assertion.actual !== null)
-    ?? null;
-  let assertionIdValue: string | null = null;
-  let line: number | null = null;
-  if (evidence && evidence.assertion.expected !== null && evidence.assertion.expected !== undefined) {
-    const expected = evidence.assertion.expected;
-    const candidates = new Set<string>();
-    if (typeof expected === "string") {
-      candidates.add(expected);
-      candidates.add(JSON.stringify(expected));
-      candidates.add(`'${expected}'`);
-    } else {
-      candidates.add(String(expected));
-      if (typeof expected === "object") candidates.add(JSON.stringify(expected));
-    }
-    const inventory = buildInventory(sources, mainSource);
-    const hit = inventory?.assertions.find((a) => candidates.has(a.target) || candidates.has(a.target.replace(/'/g, "\"")));
-    if (hit) {
-      assertionIdValue = hit.id;
-      line = hit.sourceLine;
+  const failedStep = capture.steps.find((s) => s.status === "failed");
+  if (!failedStep) return null;
+  const error = failedStep.error ?? "STEP_ERROR";
+  const action = { apiName: "test.step", title: failedStep.title, error };
+  const source = sources.find((s) => s.path === mainSource);
+  let assertion: FailurePoint["assertion"] = null;
+  if (source) {
+    const model = parseMultiStepScript(source.path, source.content);
+    if (model.errors.length === 0) {
+      const inStep = model.assertions.filter((a) => a.stepTitle === failedStep.title);
+      const expected = [
+        ...failedStep.assertions.filter((a) => a.passed === false).map((a) => a.expected),
+        ...failedStep.requests.map((r) => r.expected),
+      ].filter((v) => v !== null && v !== undefined && v !== "<redacted>");
+      const expectedText = new Set(expected.flatMap((value) => typeof value === "string"
+        ? [JSON.stringify(value), `'${value}'`, value] : [String(value)]));
+      // If a line was reported, it must agree with the *same step* and its
+      // expected assertion value. Without a line, a UNIQUE tuple inside this
+      // failed step may be attributed; ambiguity is deliberately left null.
+      const matches = inStep.filter((a) =>
+        (failedStep.failureLine == null || a.sourceLine === failedStep.failureLine)
+        && expectedText.size > 0 && expectedText.has(a.target));
+      if (matches.length === 1) {
+        assertion = { file: mainSource, line: matches[0]!.sourceLine, column: null, assertionId: matches[0]!.id };
+      }
     }
   }
-  const assertion = line !== null ? { file: mainSource, line, column: null, assertionId: assertionIdValue } : null;
   const request = failedStep.requests.at(-1) ?? null;
   if (request && request.status !== null && request.status >= 400) {
     return {
       action,
-      request: { method: request.method ?? "GET", url: request.url ?? "", path: request.path ?? "/", status: request.status, passingStatus: null, failureText: error },
+      request: { method: request.method ?? "GET", url: request.url ?? "", path: request.path ?? "", status: request.status, passingStatus: null, failureText: error },
       assertion,
       dependency: null,
     };
@@ -470,10 +461,10 @@ export function detectMultiStepFailurePoint(
     ? {
         method: request.method ?? "GET",
         url: request.url ?? "",
-        path: request.path ?? "/",
+        path: request.path ?? "",
         passingStatus: request.status ?? 200,
         msBeforeStep: 0,
-        stepLine: line,
+        stepLine: assertion?.line ?? null,
         stepTitle: failedStep.title,
       }
     : null;
@@ -518,6 +509,7 @@ function assertionsForFailure(inv: AssertionInventory | null, fp: FailurePoint |
   if (!inv) return [];
   const all = inv.assertions.map((a) => a.id);
   if (fp?.assertion?.assertionId) return [fp.assertion.assertionId];
+  if (fp?.action?.apiName === "test.step") return []; // ambiguous Multistep assertion: no guessed ID
   const action = fp?.action;
   if (!action) return all;
   const m = /^expect\.(\w+)/.exec(action.apiName);

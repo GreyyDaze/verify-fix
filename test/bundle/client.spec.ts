@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ChecklyClient, ChecklyApiError } from "../../src/checkly/client.ts";
+import { ChecklyClient, ChecklyApiError, MAX_API_JSON_BYTES } from "../../src/checkly/client.ts";
 import { resolveCredentials, checklyCliConfigDir } from "../../src/checkly/credentials.ts";
 
 type Call = { url: string; init: RequestInit };
@@ -105,6 +105,39 @@ test("client: retries 429 with backoff then succeeds", async () => {
   assert.equal((await c.getCheck("x")).id, "ok");
   assert.equal(n, 3);
   assert.equal(waits.length, 2);
+});
+
+test("client: API JSON and signed-asset Content-Length bounds cancel bodies before reading", async () => {
+  let cancelled = 0;
+  const makeBody = () => new ReadableStream<Uint8Array>({ cancel() { cancelled += 1; } });
+  const { fetch } = fakeFetch((url) => new Response(makeBody(), {
+    status: 200,
+    headers: { "content-length": String(url.includes("/v1/checks/") ? MAX_API_JSON_BYTES + 1 : 1025) },
+  }));
+  const c = new ChecklyClient(creds, { fetchImpl: fetch });
+  await assert.rejects(c.getCheck("over-limit"), /JSON byte bound/);
+  await assert.rejects(c.download("https://assets.example.invalid/file", 1024), /Content-Length/);
+  assert.equal(cancelled, 2, "both oversized streams are cancelled without collecting their bodies");
+});
+
+test("client: streaming JSON and remote assets stop at their byte budgets even without a Content-Length", async () => {
+  let cancelled = 0;
+  const { fetch } = fakeFetch((url) => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (url.includes("/v1/checks/")) {
+        for (let i = 0; i < 4; i++) controller.enqueue(new Uint8Array(4 * 1024 * 1024));
+        controller.enqueue(new Uint8Array(1));
+      } else {
+        controller.enqueue(new Uint8Array(7));
+        controller.enqueue(new Uint8Array(6));
+      }
+    },
+    cancel() { cancelled += 1; },
+  }), { status: 200 }));
+  const c = new ChecklyClient(creds, { fetchImpl: fetch });
+  await assert.rejects(c.getCheck("over-limit"), /JSON byte bound/);
+  await assert.rejects(c.download("https://assets.example.invalid/file", 10), /stream/);
+  assert.equal(cancelled, 2);
 });
 
 test("credentials: env wins; otherwise the Checkly CLI login files are read; values never leave the object", () => {

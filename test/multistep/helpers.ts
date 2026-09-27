@@ -125,7 +125,7 @@ function bookStepNestedFailing(): Json {
     title: "expect.toBe",
     category: "expect",
     error: {
-      message: "Error: expect(received).toBe(expected)\nReceived:    undefined\n    at book 09:30 (multistep-booking.spec.ts:144:24)",
+      message: "Error: expect(received).toBe(expected)\nReceived:    undefined\n    at book 09:30 (multistep-booking.spec.ts:142:24)",
       stack: "Error: expect(received).toBe(expected)",
     },
   };

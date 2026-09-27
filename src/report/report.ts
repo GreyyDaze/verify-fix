@@ -136,7 +136,12 @@ export function buildReport(contract: ContractReport, decision: Decision, observ
     lines.push(`- Checkly test sessions: ${c.checklyTestSessions}`);
     lines.push(`- Checkly cloud check runs: ${c.checklyCloudRuns}`);
     lines.push(`- Local runs: ${c.localRuns}`);
-    lines.push(`- Browser processes: ${c.browserProcesses}`);
+    lines.push(`- Browser processes: ${c.browserProcesses}${details.multistep ? " (sum of measured per-run maxima, not a claim about unmeasured runs)" : ""}`);
+    if (details.multistep) {
+      const samples = c.multiStepBrowserCounts ?? [];
+      const measured = samples.filter((n): n is number => n !== null);
+      lines.push(`- Multistep browser-process measurements: ${samples.length} run(s), ${measured.length} measured, ${samples.length - measured.length} unavailable; peak ${measured.length ? Math.max(...measured) : "unknown"}. ${measured.length ? `Per-run maxima: ${samples.map((n) => n ?? "unknown").join(", ")}` : "No measured zero-browser claim."}`);
+    }
     lines.push(`- Completed API requests/replays: ${c.httpRequests ?? 0}`);
     lines.push(`- Mutation runs: ${c.mutationRuns}`);
     lines.push(`- Total completed runs: ${c.runs}`);

@@ -4,12 +4,14 @@
 // Nothing in a bundle drives the target by itself: the scene layer reads each
 // scene's `mode` and shapes traffic at the proxy (src/scene/proxy.ts).
 
-import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import type { ApiRecording, Bundle, BundleConfig, Scene } from "./types.ts";
 import type { ManifestV3 } from "./bundle/types.ts";
 import { parseCheckConfig } from "./scene/config-diff.ts";
 import { parseMode } from "./scene/modes.ts";
+import { validMultiStepStoredRecording } from "./multistep/recording-schema.ts";
+import { multistepProblemCategory } from "./multistep/sanitize.ts";
 
 export interface LoadedBundle {
   bundle: Bundle;
@@ -157,23 +159,31 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
   bundle.multistep = null;
   if (m.check.checkType === "MULTI_STEP") {
     const problems: string[] = [];
-    problems.push(...(m.multistep?.failing?.problems ?? []));
-    problems.push(...(m.multistep?.passing?.problems ?? []));
-    let kind: string | null = null;
-    let steps: string[] = [];
-    const recordingFile = m.recordings.multistepFailing ?? m.recordings.multistepPassing ?? null;
-    if (recordingFile && existsSync(join(dir, recordingFile))) {
-      try {
-        const recording = JSON.parse(readFileSync(join(dir, recordingFile), "utf8")) as { kind?: string; steps?: Array<{ title?: string }> };
-        kind = typeof recording.kind === "string" ? recording.kind : null;
-        steps = Array.isArray(recording.steps) ? recording.steps.map((s) => String(s?.title ?? "")).filter(Boolean) : [];
-      } catch (err) {
-        problems.push(`multistep recording ${recordingFile} is unreadable: ${(err as Error).message}`);
+    const recordings: Partial<Record<"failing" | "passing", { kind: string; steps: string[] }>> = {};
+    for (const side of ["failing", "passing"] as const) {
+      const result = m.results[side];
+      const expected = `recordings/${side}.multistep.json`;
+      const pointer = side === "failing" ? m.recordings?.multistepFailing : m.recordings?.multistepPassing;
+      if (!result) {
+        if (pointer) problems.push(`MULTISTEP_${side.toUpperCase()}_RESULT_MISSING`);
+        continue;
       }
-    } else if (problems.length === 0) {
-      problems.push("multistep recording missing — execution evidence is unavailable");
+      for (const issue of m.multistep?.[side]?.problems ?? []) problems.push(multistepProblemCategory(issue));
+      if (pointer !== expected) { problems.push(`MULTISTEP_${side.toUpperCase()}_RECORDING_MISSING`); continue; }
+      const full = join(dir, expected); // never join an untrusted manifest pointer
+      try {
+        const stat = lstatSync(full);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) throw new Error("not a bounded regular recording");
+        const value: unknown = JSON.parse(readFileSync(full, "utf8"));
+        if (!validMultiStepStoredRecording(value, side)) throw new Error("invalid values-free recording schema");
+        recordings[side] = { kind: side, steps: value.steps.map((step) => step.title) };
+      } catch {
+        problems.push(`MULTISTEP_${side.toUpperCase()}_RECORDING_INVALID`);
+      }
     }
-    bundle.multistep = { kind, steps, problems };
+    // Never substitute a passing run for the missing failing run.
+    const selected = m.results.failing ? recordings.failing : recordings.passing;
+    bundle.multistep = { kind: selected?.kind ?? null, steps: selected?.steps ?? [], problems: [...new Set(problems)] };
   }
   return bundle;
 }

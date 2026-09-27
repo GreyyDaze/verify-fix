@@ -48,6 +48,8 @@ export interface MultiStepStepEvidence {
   title: string;
   status: "passed" | "failed" | "skipped" | "unknown";
   error: string | null;
+  /** Numeric spec line only; no source path or free-form stack is retained. */
+  failureLine?: number | null;
   requests: MultiStepRequestEvidence[];
   assertions: MultiStepAssertionEvidence[];
 }
@@ -334,7 +336,9 @@ function collectStep(step: JsonStep, titleFallback: string, problems: string[], 
     ? [{ ...ownAssertion, passed: status === "failed" ? false : ownAssertion.passed }, ...aggregated.assertions]
     : aggregated.assertions;
   const requests = directEvidence ? [directEvidence, ...aggregated.requests] : aggregated.requests;
-  return [{ title, status, error, requests, assertions }];
+  const rawLine = error ? /[A-Za-z0-9_-]+\.(?:spec|test)\.[cm]?[jt]sx?:(\d{1,6}):\d{1,6}/.exec(error)?.[1] : null;
+  const failureLine = rawLine && Number(rawLine) <= 100_000 ? Number(rawLine) : null;
+  return [{ title, status, error, failureLine, requests, assertions }];
 }
 
 function findResultSteps(report: JsonReport, problems: string[]): { entries: Array<{ step: JsonStep; resultStatus: string | null }>; sawSpecs: boolean; statuses: string[] } {

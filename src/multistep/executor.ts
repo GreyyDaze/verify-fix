@@ -27,7 +27,7 @@
 // forwarded to the original target with method, path, query, body, and
 // headers intact. If the bridge cannot be established safely (no openssl,
 // TLS failure), the run is UNCERTAIN — never a relaxed-TLS fallback. https
-// targets pass through unchanged.
+// targets are also bridged: every run requires independent request evidence.
 //
 // Runner environment: the child gets a minimal environment — PATH, a FRESH
 // empty HOME (removed with the run directory afterwards), a fully replaced
@@ -50,6 +50,9 @@ import type { TraceStep } from "../types.ts";
 import { SEED_MODULE } from "../sandbox.ts";
 import { normalizeMultiStepCapture, type MultiStepCapture } from "./normalize.ts";
 import { startOriginBridge, type BridgeRequestEvidence, type OriginBridge } from "./origin-bridge.ts";
+import { knownRoute, knownStepTitle, routeFromUrl, UNKNOWN_ROUTE } from "./routes.ts";
+import { MAX_REPORTER_AUDIT_BYTES, parseReporterAudit, TRUSTED_REQUEST_REPORTER, type ReporterRequestEvidence } from "./reporter.ts";
+import { parseMultiStepScript } from "./source.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -101,15 +104,17 @@ export interface MultiStepSandboxOutcome {
   browserProcesses: number | null;
   /** the exact origin the check saw as ENVIRONMENT_URL (always https when a bridge runs) */
   environmentOrigin: string | null;
-  /** structured request evidence from the trusted origin bridge (empty for direct https targets) */
+  /** structured request evidence from the mandatory trusted origin bridge */
   proxyEvidence: BridgeRequestEvidence[];
+  /** independent, values-free Playwright reporter request evidence */
+  reporterEvidence: ReporterRequestEvidence[];
   /** stderr byte count for diagnostics ONLY — content is never retained or parsed */
   diagnostics: { stderrBytes: number; timedOut: boolean };
 }
 
 function safeRelativePath(path: string): string {
   const n = normalize(path).replaceAll("\\", "/");
-  if (isAbsolute(n) || n === ".." || n.startsWith("../")) throw new Error(`unsafe file path in candidate tree: ${path}`);
+  if (isAbsolute(n) || n === ".." || n.startsWith("../")) throw new Error("unsafe file path in candidate tree");
   return n.replace(/^\.\//, "");
 }
 
@@ -127,7 +132,7 @@ function traceOf(capture: MultiStepCapture): TraceStep[] {
   return capture.steps.map((step, index) => ({
     index,
     kind: "step" as const,
-    what: `test.step '${step.title}': ${step.status}${step.error ? ` — ${step.error.split("\n")[0].replace(/^Error:\s*/, "").slice(0, 240)}` : ""}`,
+    what: `test.step '${knownStepTitle(step.title) ?? "<unknown-step>"}': ${step.status}${step.error ? " — step error (details omitted)" : ""}`,
     outcome: step.status === "passed" ? ("ok" as const) : step.status === "failed" ? ("failed" as const) : ("skipped" as const),
   }));
 }
@@ -176,32 +181,60 @@ export function staticBrowserFreeScript(file: string, source: string): { free: b
 }
 
 /**
- * Compare bridge evidence against reporter-recorded requests for one bridged
- * run. Any discrepancy — count, method, path, status, or a bridge that saw
- * zero requests while the reporter recorded traffic — is a mismatch (the
- * caller maps it to UNCERTAIN). When the reporter carries no request records
- * at all, the non-zero bridge evidence stands on its own.
+ * Independent observations must agree in ORDER, route, method and (where the
+ * JSON report carries it) status. Zero/missing reporter evidence is NEVER a
+ * match. Raw paths, query names and values are never interpolated in reasons.
  */
-export function bridgeReporterMismatch(bridge: BridgeRequestEvidence[], capture: MultiStepCapture): string | null {
-  const reporter = capture.steps.flatMap((s) => s.requests).map((r) => ({ method: r.method ?? "?", path: r.path ?? r.url ?? "?", status: r.status }));
-  if (bridge.length === 0) {
-    return "the HTTPS origin bridge recorded zero requests for this run — the bridge saw no execution traffic, so zero-bridge evidence must never PASS";
+export function bridgeReporterMismatch(
+  bridge: BridgeRequestEvidence[], capture: MultiStepCapture, audit: ReporterRequestEvidence[] | null = null,
+): string | null {
+  const jsonRequests = capture.steps.flatMap((s) => s.requests.map((r) => ({
+    method: r.method ?? "OTHER",
+    path: r.url ? routeFromUrl(r.url) ?? UNKNOWN_ROUTE : knownRoute(r.path) ?? UNKNOWN_ROUTE,
+    status: r.status,
+    step: knownStepTitle(s.title) ?? "<unknown-step>",
+    originMatches: true,
+    hasQuery: Boolean(r.url && (() => { try { return new URL(r.url).search !== ""; } catch { return true; } })()),
+  })));
+  if (bridge.length === 0) return "the HTTPS origin bridge recorded zero requests — no execution traffic can PASS";
+  // The JSON reporter is advisory: Playwright normally filters pw:api steps
+  // from it, and an untrusted CLI can print a forged JSON result. The trusted
+  // fd-3 reporter is MANDATORY even when the JSON document lists requests.
+  if (!audit || audit.length === 0) return "bridge/reporter dedicated request audit missing — no trustworthy execution evidence";
+  if (jsonRequests.length > 0 && (audit.length !== jsonRequests.length
+    || audit.some((r, i) => r.method !== jsonRequests[i]?.method || r.path !== jsonRequests[i]?.path || r.step !== jsonRequests[i]?.step))) {
+    return "bridge/reporter JSON and request-audit evidence disagree — no trustworthy execution evidence";
   }
-  if (reporter.length === 0) return null; // reporter carries no request records; non-zero bridge evidence stands
-  if (bridge.length !== reporter.length) {
-    return `bridge/reporter request-count mismatch (bridge ${bridge.length}, reporter ${reporter.length}) — no trustworthy execution evidence`;
-  }
+  const reporter = audit;
+  if (bridge.length !== reporter.length) return `bridge/reporter request-count mismatch (bridge ${bridge.length}, reporter ${reporter.length}) — no trustworthy execution evidence`;
   for (let i = 0; i < bridge.length; i++) {
     const b = bridge[i]!;
     const r = reporter[i]!;
-    if (b.method.toUpperCase() !== r.method.toUpperCase()) {
-      return `bridge/reporter method mismatch at request ${i + 1} (bridge ${b.method}, reporter ${r.method}) — no trustworthy execution evidence`;
+    if (!knownRoute(b.path) || !knownRoute(r.path) || b.hasQuery || r.hasQuery || r.originMatches === false || r.step === "<unknown-step>") {
+      return `bridge/reporter unrecognized route, origin, query or step at request ${i + 1} — no trustworthy execution evidence`;
     }
-    if (b.path !== r.path) {
-      return `bridge/reporter path mismatch at request ${i + 1} (bridge ${b.path}, reporter ${r.path}) — no trustworthy execution evidence`;
+    if (b.method !== r.method) return `bridge/reporter method mismatch at request ${i + 1} — no trustworthy execution evidence`;
+    if (b.path !== r.path) return `bridge/reporter path mismatch at request ${i + 1} — no trustworthy execution evidence`;
+    const expectedStep: Record<string, string> = { "/api/login": "login", "/api/session": "session", "/api/slots": "slots", "/api/book": "book 09:30" };
+    if (r.step !== expectedStep[r.path] || !capture.steps.some((s) => s.title === r.step)) {
+      return `bridge/reporter request-step mismatch at request ${i + 1} — no trustworthy execution evidence`;
     }
-    if (r.status !== null && b.status !== r.status) {
-      return `bridge/reporter status mismatch at request ${i + 1} (bridge ${b.status}, reporter ${r.status}) — no trustworthy execution evidence`;
+    // The dedicated reporter records requests on begin (before a response
+    // exists). Bind the HTTP status in the JSON result to the independently
+    // measured bridge status; a forged passing response cannot override a
+    // real 401/500 while preserving the four request names.
+    if (typeof jsonRequests[i]?.status === "number" && b.status !== jsonRequests[i]!.status) {
+      return `bridge/reporter status mismatch at request ${i + 1} — no trustworthy execution evidence`;
+    }
+    // The baseline has hard status-200 assertions for all four requests. On
+    // real Playwright JSON output pw:api steps may be filtered out, so a
+    // fabricated passing assertion must not overrule a bridge-observed 401.
+    if (capture.kind === "passing" && b.status !== 200) {
+      return `bridge/reporter passing result contradicts HTTP status at request ${i + 1} — no trustworthy execution evidence`;
+    }
+    const needsAuthorization = b.path === "/api/session" || b.path === "/api/book";
+    if (b.authorization !== needsAuthorization) {
+      return `bridge/reporter authorization-site mismatch at request ${i + 1} — no trustworthy execution evidence`;
     }
   }
   return null;
@@ -248,11 +281,6 @@ function sleep(ms: number): Promise<void> {
 }
 
 export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise<MultiStepSandboxOutcome> {
-  const projectDir = resolve(ctx.projectDir);
-  const cli = resolvePlaywrightCli(projectDir);
-  const nodeModules = join(projectDir, "node_modules");
-  if (!existsSync(nodeModules)) throw new Error(`node_modules not found under --project ${projectDir}; install the project's dependencies first`);
-
   const inconclusive = (reason: string, extra?: Partial<MultiStepSandboxOutcome>): MultiStepSandboxOutcome => ({
     passed: false,
     inconclusive: true,
@@ -263,6 +291,7 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
     browserProcesses: null,
     environmentOrigin: null,
     proxyEvidence: [],
+    reporterEvidence: [],
     diagnostics: { stderrBytes: 0, timedOut: false },
     ...extra,
   });
@@ -271,44 +300,49 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
   // that tries to set one is UNCERTAIN before anything executes.
   for (const key of Object.keys(ctx.env ?? {})) {
     if (RESERVED_ENV_KEYS.has(key.toUpperCase())) {
-      return inconclusive(`candidate environment key "${key}" collides with a reserved runner key — no trustworthy execution environment`);
+      return inconclusive("candidate environment collides with a reserved runner key — no trustworthy execution environment");
     }
   }
 
   // The candidate spec must be provably API-only: this adapter launches no
   // browser, so a script that references one cannot be executed faithfully.
-  const checkFile = safeRelativePath(ctx.checkFile);
-  const checkSource = ctx.files[ctx.checkFile] ?? ctx.files[checkFile];
-  if (checkSource !== undefined) {
-    const browserFree = staticBrowserFreeScript(checkFile, checkSource);
-    if (!browserFree.free) {
-      return inconclusive(`Multistep script uses browser APIs the adapter never launches (${browserFree.findings.join("; ")}) — no trustworthy execution evidence`);
-    }
+  let checkFile: string;
+  try {
+    checkFile = safeRelativePath(ctx.checkFile);
+    for (const path of Object.keys(ctx.files)) safeRelativePath(path);
+  } catch {
+    return inconclusive("Multistep candidate file path is unsafe — no runner was started");
   }
+  const checkSource = ctx.files[ctx.checkFile] ?? ctx.files[checkFile];
+  if (checkSource === undefined) return inconclusive("Multistep check file is missing — no runner was started");
+  const browserFree = staticBrowserFreeScript(checkFile, checkSource);
+  if (!browserFree.free) {
+    return inconclusive("Multistep script uses browser APIs the adapter never launches — no trustworthy execution evidence");
+  }
+  const sourceModel = parseMultiStepScript(checkFile, checkSource, new Map(Object.entries(ctx.files)));
+  if (sourceModel.errors.length > 0) return inconclusive("Multistep source is unsupported before execution — no runner was started");
+
+  // Dependency lookup is also an evidence gate, not a thrown filesystem path
+  // in a report. Crucially it runs AFTER source preflight: unsupported source
+  // is rejected before attempting to resolve or execute any CLI.
+  const projectDir = resolve(ctx.projectDir);
+  const nodeModules = join(projectDir, "node_modules");
+  if (!existsSync(nodeModules)) return inconclusive("Multistep runner dependencies are unavailable — no runner was started");
+  let cli: string;
+  try { cli = resolvePlaywrightCli(projectDir); }
+  catch { return inconclusive("Multistep runner dependencies are unavailable — no runner was started"); }
 
   const dir = await mkdtemp(join(tmpdir(), "verify-fix-multistep-"));
   let bridge: OriginBridge | null = null;
   try {
-    // Establish the trusted HTTPS origin boundary before anything runs.
-    // http targets (the scene proxy) are bridged; https targets pass through.
-    // Any failure here is UNCERTAIN — never a relaxed-TLS or http fallback.
-    let environmentOrigin = ctx.baseUrl;
-    let protocol: string;
+    // Always establish the independent bridge, even for HTTPS upstreams.
+    // Unbridged HTTPS runs cannot prove bridge↔reporter request agreement.
+    let environmentOrigin: string;
     try {
-      protocol = new URL(ctx.baseUrl).protocol;
+      bridge = await startOriginBridge(ctx.baseUrl);
+      environmentOrigin = bridge.origin;
     } catch {
-      protocol = "";
-    }
-    if (protocol === "http:") {
-      try {
-        bridge = await startOriginBridge(ctx.baseUrl);
-        environmentOrigin = bridge.origin;
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        return inconclusive(`Multistep HTTPS origin bridge could not be established safely: ${detail}`);
-      }
-    } else if (protocol !== "https:") {
-      return inconclusive(`Multistep HTTPS origin bridge could not be established safely: target ${JSON.stringify(ctx.baseUrl.slice(0, 120))} is not an http(s) origin`);
+      return inconclusive("Multistep HTTPS origin bridge could not be established safely — no runner was started");
     }
     for (const [rawPath, content] of Object.entries(ctx.files)) {
       const path = safeRelativePath(rawPath);
@@ -322,6 +356,8 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
     await writeFile(seedFile, SEED_MODULE, "utf8");
     const configPath = "verify-fix.multistep.config.ts";
     await writeFile(join(dir, configPath), MULTISTEP_CONFIG, "utf8");
+    const auditReporter = join(dir, "verify-fix-request-reporter.cjs");
+    await writeFile(auditReporter, TRUSTED_REQUEST_REPORTER, "utf8");
 
     // FRESH HOME for the run: nothing under the parent's home (playwright
     // caches, ~/.auth, saved storage state) can be read or written. It lives
@@ -329,10 +365,10 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
     const freshHome = join(dir, "sandbox-home");
     await mkdir(freshHome, { recursive: true });
 
-    const args = [cli, "test", "--config", join(dir, configPath), checkFile, "--workers=1", "--retries=0", "--reporter=json"];
+    const args = [cli, "test", "--config", join(dir, configPath), checkFile, "--workers=1", "--retries=0", `--reporter=json,${auditReporter}`];
 
     let browserProcesses: number | null = null;
-    const childResult = await new Promise<{ code: number | null; stdout: string; stderrBytes: number; timedOut: boolean; spawnError: string | null }>((done) => {
+    const childResult = await new Promise<{ code: number | null; stdout: string; audit: string; stderrBytes: number; timedOut: boolean; spawnError: boolean }>((done) => {
       const child = spawn(process.execPath, args, {
         cwd: dir,
         env: {
@@ -352,11 +388,15 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
           ...(bridge ? { NODE_EXTRA_CA_CERTS: bridge.caPath } : {}),
           // LD_LIBRARY_PATH is deliberately absent: never inherited.
         },
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["ignore", "pipe", "pipe", "pipe"],
         detached: process.platform !== "win32",
       });
       let stdout = "";
+      let stdoutBytes = 0;
       let stdoutTruncated = false;
+      let audit = "";
+      let auditBytes = 0;
+      let auditTruncated = false;
       let stderrBytes = 0;
       let timedOut = false;
       let sampling = true;
@@ -381,32 +421,43 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
           child.kill("SIGKILL");
         }
       }, ctx.timeoutMs ?? 90_000);
-      child.stdout.on("data", (d: Buffer) => {
+      child.stdout!.on("data", (d: Buffer) => {
         if (stdoutTruncated) return;
-        if (stdout.length + d.length > MAX_REPORTER_STDOUT_BYTES) {
+        if (stdoutBytes + d.length > MAX_REPORTER_STDOUT_BYTES) {
           stdoutTruncated = true;
           stdout = ""; // over the bound: partial output is not admissible
           return;
         }
+        stdoutBytes += d.length;
         stdout += String(d);
       });
-      child.stderr.on("data", (d: Buffer) => {
+      child.stdio[3]?.on("data", (d: Buffer) => {
+        if (auditTruncated) return;
+        if (auditBytes + d.length > MAX_REPORTER_AUDIT_BYTES) {
+          auditTruncated = true;
+          audit = "";
+          return;
+        }
+        auditBytes += d.length;
+        audit += String(d);
+      });
+      child.stderr!.on("data", (d: Buffer) => {
         stderrBytes = Math.min(MAX_STDERR_BYTES, stderrBytes + d.length); // counted only — content discarded
       });
       let settled = false;
-      const finish = (code: number | null, spawnError: string | null): void => {
+      const finish = (code: number | null, spawnError: boolean): void => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         sampling = false;
-        void sampleLoop.then(() => done({ code, stdout: stdoutTruncated ? "" : stdout, stderrBytes, timedOut, spawnError }));
+        void sampleLoop.then(() => done({ code, stdout: stdoutTruncated ? "" : stdout, audit: auditTruncated ? "" : audit, stderrBytes, timedOut, spawnError }));
       };
-      child.on("error", (err) => finish(null, String(err)));
-      child.on("close", (code) => finish(code, null));
+      child.on("error", () => finish(null, true));
+      child.on("close", (code) => finish(code, false));
     });
 
-    if (childResult.spawnError !== null) {
-      return inconclusive(`Multistep runner failed to start (${childResult.spawnError}) — no trustworthy execution evidence`, { browserProcesses });
+    if (childResult.spawnError) {
+      return inconclusive("Multistep runner failed to start — no trustworthy execution evidence", { browserProcesses });
     }
 
     if (childResult.timedOut) {
@@ -419,6 +470,8 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
     }
 
     const capture = normalizeMultiStepCapture({ testResults: childResult.stdout });
+    const audit = parseReporterAudit(childResult.audit);
+    const reporterEvidence = audit ?? [];
     const proxyEvidence: BridgeRequestEvidence[] = bridge ? [...bridge.evidence] : [];
     const diagnostics = { stderrBytes: childResult.stderrBytes, timedOut: childResult.timedOut };
 
@@ -430,20 +483,24 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
         browserProcesses,
         environmentOrigin: bridge.origin,
         proxyEvidence,
+        reporterEvidence,
         diagnostics,
       });
     }
     if (capture.problems.length > 0 || capture.steps.length === 0) {
-      const detail = capture.problems.join("; ") || "the JSON reporter produced no ordered step evidence";
-      return inconclusive(`Multistep runner produced no admissible evidence: ${detail}`, { trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses, environmentOrigin, proxyEvidence, diagnostics });
+      return inconclusive("Multistep runner produced no admissible JSON step evidence", { trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses, environmentOrigin, proxyEvidence, reporterEvidence, diagnostics });
     }
     // Bridged execution: bridge evidence must corroborate the reporter.
     // Zero bridge requests with reporter traffic is UNCERTAIN by construction.
-    if (bridge) {
-      const mismatch = bridgeReporterMismatch(bridge.evidence, capture);
-      if (mismatch) {
-        return inconclusive(mismatch, { trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses, environmentOrigin: bridge.origin, proxyEvidence, diagnostics });
-      }
+    const mismatch = bridgeReporterMismatch(bridge.evidence, capture, audit);
+    if (mismatch) {
+      return inconclusive(mismatch, { trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses, environmentOrigin: bridge.origin, proxyEvidence, reporterEvidence, diagnostics });
+    }
+    if (browserProcesses === null || browserProcesses > 0) {
+      return inconclusive(browserProcesses === null
+        ? "Multistep browser-process measurement unavailable — no zero-browser claim"
+        : "Multistep browser process observed — API-only execution not proven",
+      { trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses, environmentOrigin, proxyEvidence, reporterEvidence, diagnostics });
     }
     const failed = capture.stats !== null
       ? capture.stats.unexpected > 0
@@ -459,6 +516,7 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
       browserProcesses,
       environmentOrigin,
       proxyEvidence,
+      reporterEvidence,
       diagnostics,
     };
   } finally {

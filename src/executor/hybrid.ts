@@ -64,6 +64,7 @@ export class HybridExecutor implements ExperimentExecutor {
     cost.checklyResultIds = [...remote.checklyResultIds];
     cost.localRuns = local.localRuns;
     cost.browserProcesses = local.browserProcesses;
+    if (local.multiStepBrowserCounts) cost.multiStepBrowserCounts = [...local.multiStepBrowserCounts];
     cost.httpRequests = (local.httpRequests ?? 0) + (remote.httpRequests ?? 0);
     cost.mutationRuns = local.mutationRuns + remote.mutationRuns;
     cost.wallTimeMs = local.wallTimeMs + remote.wallTimeMs;

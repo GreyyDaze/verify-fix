@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { ChecklyClient } from "../checkly/client.ts";
 import type { AssetManifestEntry, ChecklyCheck, CheckResult, CheckResultSummary, ErrorGroup, RootCauseAnalysis } from "../checkly/types.ts";
-import { isZip, openZip } from "../trace/zip.ts";
+import { ASSET_ZIP_BOUNDS, isZip, openZipBounded } from "../trace/zip.ts";
 import { mergeHars, traceZipToHar, type BodyPolicy, type TraceExtract } from "../trace/trace-to-har.ts";
 import { sanitizeHar } from "./sanitize.ts";
 import { buildManifest, expectedReceived, findOverlappingRuns, groupErrorMatches, rcaFit, rcaMentionsReceived, resultErrors, runOutcome, type FetchedResult } from "./manifest.ts";
@@ -25,7 +25,10 @@ import { measureDeterminism, type MeasureResult, type Runner } from "./measure.t
 import type { ManifestV3 } from "./types.ts";
 import { apiRecordingFromResult, setupProvenance } from "../api/recording.ts";
 import { parseApiCheckProject } from "../api/model.ts";
-import { buildMultiStepRecording, readMultiStepAssets, type MultiStepAssetTexts } from "../multistep/capture.ts";
+import { buildMultiStepRecording, readMultiStepAssets, MAX_ASSET_FILE_BYTES, MAX_ASSET_ZIP_BYTES, type MultiStepAssetTexts } from "../multistep/capture.ts";
+import { constrainMultiStepManifest, multiStepRunMetadata } from "../multistep/bundle-evidence.ts";
+import { multistepProblemCategory } from "../multistep/sanitize.ts";
+import { parseMultiStepConstruct } from "../multistep/source.ts";
 
 export interface BuildOptions {
   checkId: string;
@@ -191,12 +194,43 @@ export function collectProjectSources(check: ChecklyCheck, projectDir: string | 
     }
 
     if (check.checkType === "MULTI_STEP") {
-      // Capture the construct file(s) so the Multistep source model can bind
-      // construct identity (logical ID, entrypoint, scheduling) at verify time.
+      // The Checkly API returns the DEPLOYED script (as a basename), whereas
+      // the construct names its actual project-relative entrypoint. Bind those
+      // two identities before saving: no same-basename fallback at verify time.
       for (const file of findApiCheckFiles(root)) {
         const content = readFileSync(file, "utf8");
         if (content.includes("new MultiStepCheck(")) collectModuleClosure(root, [file], sources);
       }
+      const construct = parseMultiStepConstruct(new Map(sources.map((item) => [item.path, item.content])));
+      if (construct?.model.errors.length) warnings.push("MULTISTEP_CONSTRUCT_UNRESOLVED");
+      else if (construct && (
+        JSON.stringify(construct.model.locations) !== JSON.stringify(check.locations ?? [])
+        || (typeof check.runParallel === "boolean" && construct.model.runParallel !== check.runParallel)
+        || (typeof check.activated === "boolean" && construct.model.activated !== check.activated)
+        || (typeof check.muted === "boolean" && construct.model.muted !== check.muted)
+        || (typeof check.frequency === "number" && construct.model.frequencyMinutes !== check.frequency)
+      )) warnings.push("MULTISTEP_DEPLOYED_CONFIG_MISMATCH");
+      const entrypoint = construct?.model.entrypoint ?? null;
+      if (entrypoint) {
+        const onDisk = resolve(root, entrypoint);
+        if (relative(root, onDisk).startsWith("..") || isAbsolute(relative(root, onDisk))) {
+          warnings.push("MULTISTEP_ENTRYPOINT_UNSAFE");
+        } else if (existsSync(onDisk)) {
+          collectModuleClosure(root, [onDisk], sources);
+          const deployed = sources.find((item) => item.path === mainSource);
+          const project = sources.find((item) => item.path === entrypoint);
+          if (deployed && project && deployed.content !== project.content) warnings.push("MULTISTEP_SOURCE_PROJECT_MISMATCH");
+          if (deployed && project) {
+            // The deployed API script wins as the recorded original, while
+            // local imports remain available for static closure verification.
+            project.content = deployed.content;
+            if (deployed !== project) sources.splice(sources.indexOf(deployed), 1);
+          }
+          if (project) mainSource = entrypoint;
+        } else {
+          warnings.push("MULTISTEP_ENTRYPOINT_MISSING");
+        }
+      } else warnings.push("MULTISTEP_CONSTRUCT_UNRESOLVED");
     }
 
     if (check.checkType === "API") {
@@ -278,7 +312,7 @@ async function fetchResultWithTrace(
   } catch (err) {
     warnings.push(`${label}: could not load result detail (${(err as Error).message})`);
   }
-  const apiRecording = detail ? apiRecordingFromResult(checkId, detail, secretValues) : null;
+  const apiRecording = detail && assetKind !== "multistep" ? apiRecordingFromResult(checkId, detail, secretValues) : null;
 
   if (assetKind === "multistep") {
     // Structured capture: normalize the downloaded assets (or fetch them
@@ -296,42 +330,76 @@ async function fetchResultWithTrace(
       log(`[bundle] ${label}: using local --assets (${texts.found.join(", ") || "no files"})`);
     } else {
       let entries: AssetManifestEntry[] = [];
+      let invalid: string | null = null;
       try {
         const m = await client.getAssets(checkId, summary.id);
-        entries = m.assets ?? [];
-        if (m.truncated) warnings.push(`${label}: asset manifest truncated (${m.entriesReturned}/${m.entriesTotal})`);
-      } catch (err) {
-        warnings.push(`${label}: could not list assets (${(err as Error).message})`);
+        if (!Array.isArray(m.assets)) invalid = "MULTISTEP_ASSET_MANIFEST_INVALID";
+        else entries = m.assets;
+        if (m.truncated) invalid = "MULTISTEP_ASSET_MANIFEST_TRUNCATED";
+      } catch {
+        invalid = "MULTISTEP_ASSET_MANIFEST_UNAVAILABLE";
       }
       const byName = new Map<string, string>();
-      const archiveCache = new Map<string, Buffer>();
-      for (const asset of entries) {
+      const archiveCache = new Map<string, ReturnType<typeof openZipBounded>>();
+      let totalDecoded = 0;
+      let totalDownloaded = 0;
+      if (entries.length > ASSET_ZIP_BOUNDS.maxEntries) invalid = "MULTISTEP_ASSET_COUNT_EXCEEDED";
+      for (const asset of invalid ? [] : entries) {
+        // An API manifest is untrusted JSON, even when the HTTP status is 2xx.
+        // Reject malformed accepted descriptors as a fixed evidence category
+        // instead of throwing while inspecting a path before the ZIP bounds.
+        if (!asset || typeof asset !== "object" || typeof asset.name !== "string" || typeof asset.url !== "string"
+          || (asset.archive != null && (!asset.archive || typeof asset.archive !== "object" || typeof asset.archive.entryName !== "string"))) {
+          invalid = "MULTISTEP_ASSET_MANIFEST_INVALID";
+          break;
+        }
+        // Ignore unrelated screenshots/attachments entirely. An accepted
+        // name is fixed and cannot carry a secret path segment.
+        const archived = asset.archive?.entryName.split("/").pop() ?? "";
+        const name = MULTISTEP_ASSET_NAMES.includes(archived) ? archived : asset.name;
+        if (!MULTISTEP_ASSET_NAMES.includes(name)) continue;
+        if (byName.has(name)) { invalid = "MULTISTEP_DUPLICATE_ASSET"; break; }
         try {
           let buf: Buffer;
           if (asset.archive) {
-            let archive = archiveCache.get(asset.url);
-            if (!archive) {
-              archive = await client.download(asset.url);
-              archiveCache.set(asset.url, archive);
+            let zip = archiveCache.get(asset.url);
+            if (!zip) {
+              const archive = await client.download(asset.url, Math.min(MAX_ASSET_ZIP_BYTES, ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalDownloaded));
+              if (archive.length > MAX_ASSET_ZIP_BYTES || archive.length > ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalDownloaded) throw new Error("zip: archive exceeds byte bound");
+              totalDownloaded += archive.length;
+              zip = openZipBounded(archive, ASSET_ZIP_BOUNDS);
+              archiveCache.set(asset.url, zip);
             }
-            const entry = openZip(archive).get(asset.archive.entryName);
-            if (!entry) throw new Error(`entry ${asset.archive.entryName} not in archive`);
+            const entry = zip.get(asset.archive.entryName);
+            if (!entry) throw new Error("zip: required asset entry is missing");
             buf = entry();
           } else {
-            buf = await client.download(asset.url);
+            buf = await client.download(asset.url, Math.min(MAX_ASSET_FILE_BYTES, ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalDownloaded));
+            if (buf.length > ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalDownloaded) throw new Error("asset download exceeds byte bound");
+            totalDownloaded += buf.length;
           }
-          const name = asset.name || (asset.archive?.entryName.split("/").pop() ?? "");
-          assetsOut.push({ result: label, name, type: asset.type, bytes: buf.length, sha256: sha256(buf) });
-          if (MULTISTEP_ASSET_NAMES.includes(name)) byName.set(name, buf.toString("utf8"));
+          if (buf.length > MAX_ASSET_FILE_BYTES || buf.length > ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalDecoded) {
+            throw new Error("asset exceeds decoded byte bound");
+          }
+          totalDecoded += buf.length;
+          assetsOut.push({ result: label, name, type: "remote-asset", bytes: buf.length, sha256: sha256(buf) });
+          byName.set(name, buf.toString("utf8"));
         } catch (err) {
-          warnings.push(`${label}: asset ${asset.name} skipped (${(err as Error).message})`);
+          invalid = multistepProblemCategory(err instanceof Error ? err.message : "asset invalid");
+          break; // partial remote capture is not admissible evidence
         }
       }
-      texts.testResults = byName.get("test-results.json") ?? null;
-      texts.checkRunData = byName.get("check-run-data.json") ?? null;
-      texts.logs = byName.get("logs.txt") ?? null;
-      texts.found = MULTISTEP_ASSET_NAMES.filter((name) => byName.has(name));
-      texts.missing = MULTISTEP_ASSET_NAMES.filter((name) => !byName.has(name));
+      if (invalid) {
+        texts.invalid = invalid;
+        assetsOut.splice(0, assetsOut.length, ...assetsOut.filter((asset) => asset.result !== label));
+        warnings.push(`${label}: remote Multistep asset capture is invalid (${invalid}) — UNCERTAIN`);
+      } else {
+        texts.testResults = byName.get("test-results.json") ?? null;
+        texts.checkRunData = byName.get("check-run-data.json") ?? null;
+        texts.logs = byName.get("logs.txt") ?? null;
+        texts.found = MULTISTEP_ASSET_NAMES.filter((name) => byName.has(name));
+      }
+      texts.missing = MULTISTEP_ASSET_NAMES.filter((name) => !texts.found.includes(name));
     }
     if (texts.testResults === null && !texts.missing.includes("test-results.json")) texts.missing.push("test-results.json");
     return {
@@ -352,20 +420,30 @@ async function fetchResultWithTrace(
 
   const archiveCache = new Map<string, Buffer>();
   const extracts: TraceExtract[] = [];
+  let totalRemoteDownloaded = 0;
+  const downloadBounded = async (url: string): Promise<Buffer> => {
+    const remaining = ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalRemoteDownloaded;
+    const budget = Math.min(MAX_ASSET_ZIP_BYTES, remaining);
+    if (budget <= 0) throw new Error("remote trace download aggregate bound exceeded");
+    const data = await client.download(url, budget);
+    if (data.length > budget) throw new Error("remote trace download aggregate bound exceeded");
+    totalRemoteDownloaded += data.length;
+    return data;
+  };
   for (const asset of manifestEntries) {
     try {
       let buf: Buffer;
       if (asset.archive) {
         let archive = archiveCache.get(asset.url);
         if (!archive) {
-          archive = await client.download(asset.url);
+          archive = await downloadBounded(asset.url);
           archiveCache.set(asset.url, archive);
         }
-        const entry = openZip(archive).get(asset.archive.entryName);
-        if (!entry) throw new Error(`entry ${asset.archive.entryName} not in archive`);
+        const entry = openZipBounded(archive).get(asset.archive.entryName);
+        if (!entry) throw new Error("trace asset entry is missing from archive");
         buf = entry();
       } else {
-        buf = await client.download(asset.url);
+        buf = await downloadBounded(asset.url);
       }
       assetsOut.push({ result: label, name: asset.name, type: asset.type, bytes: buf.length, sha256: sha256(buf) });
       // API assets may contain wire-level authorization data. Hash them for
@@ -402,8 +480,9 @@ async function fetchResultWithTrace(
   return { fetched: { summary, detail, extract, apiRecording }, warnings };
 }
 
-function trimmedResult(detail: CheckResult | null, apiRecording?: FetchedResult["apiRecording"]): Record<string, unknown> | null {
+function trimmedResult(detail: CheckResult | null, apiRecording?: FetchedResult["apiRecording"], multistep = false): Record<string, unknown> | null {
   if (!detail) return null;
+  if (multistep) return multiStepRunMetadata(detail as CheckResultSummary);
   const r = detail.playwrightCheckResult ?? detail.browserCheckResult ?? detail.multiStepCheckResult ?? null;
   return {
     id: detail.id,
@@ -456,7 +535,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   log(`[bundle] check ${check.id} "${check.name}" type=${check.checkType} locations=${(check.locations ?? []).join(",")} runParallel=${Boolean(check.runParallel)}`);
   const secretValues = (check.environmentVariables ?? []).map((v) => v.value).filter((v): v is string => typeof v === "string");
   const isMultiStep = check.checkType === "MULTI_STEP";
-  const multistepAssets = opts.assetsDir ? readMultiStepAssets(opts.assetsDir) : null;
+  const multistepAssets = opts.assetsDir && isMultiStep ? readMultiStepAssets(opts.assetsDir) : null;
   if (opts.assetsDir && !isMultiStep) warnings.push("--assets is only used for MULTI_STEP checks; ignored for this check type");
   if (opts.assetsDir && isMultiStep) {
     log(`[bundle] --assets ${opts.assetsDir}: failing [${multistepAssets?.failing?.found.join(", ") ?? "none"}], passing [${multistepAssets?.passing?.found.join(", ") ?? "none"}]`);
@@ -504,7 +583,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     warnings.push(...r.warnings);
   }
   if (passingSummary) {
-    const r = await fetchResultWithTrace(client, check.id, passingSummary, "passing", bodies, assets, rawDir ? join(rawDir, "passing") : null, log, toolVersion, secretValues, assetKind, multistepAssets?.passing ?? null);
+    const r = await fetchResultWithTrace(client, check.id, passingSummary, "passing", bodies, assets, rawDir ? join(rawDir, "passing") : null, log, toolVersion, secretValues, assetKind, multistepAssets?.passing ?? (!failingSummary ? multistepAssets?.failing : null) ?? null);
     passing = r.fetched;
     warnings.push(...r.warnings);
   }
@@ -517,8 +596,16 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   const multistepSecrets: string[] = [];
   for (const [side, fetched] of [["failing", failing], ["passing", passing]] as const) {
     if (!fetched?.multistepTexts) continue;
+    const expectFailing = side === "failing";
+    if (isOk(fetched.summary) === expectFailing) {
+      const problems = ["MULTISTEP_RESULT_SIDE_MISMATCH"];
+      fetched.multistepProblems = problems;
+      multistepProblems[side] = problems;
+      warnings.push(`${side}: result summary contradicts the evidence side — UNCERTAIN`);
+      continue;
+    }
     const capture = buildMultiStepRecording({ texts: fetched.multistepTexts, attempts: fetched.summary.attempts ?? null });
-    if (capture.ok) {
+    if (capture.ok && capture.recording.kind === side) {
       fetched.multistep = capture.capture;
       fetched.multistepProblems = [];
       multistepRecordings[side] = JSON.stringify(capture.recording, null, 2) + "\n";
@@ -526,10 +613,11 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
       multistepSecrets.push(...capture.secrets);
       log(`[bundle] ${side}: multistep capture normalized (${capture.capture.kind}, ${capture.capture.steps.length} step entries)`);
     } else {
+      const problems = capture.ok ? ["MULTISTEP_CAPTURE_SIDE_MISMATCH"] : capture.problems;
       fetched.multistep = null;
-      fetched.multistepProblems = capture.problems;
-      multistepProblems[side] = capture.problems;
-      warnings.push(`${side}: multistep evidence unresolved (${capture.reason}) — recorded as UNCERTAIN evidence, never PASS/FAIL`);
+      fetched.multistepProblems = problems;
+      multistepProblems[side] = problems;
+      warnings.push(`${side}: multistep evidence unresolved (${problems[0]}) — UNCERTAIN, never PASS/FAIL`);
     }
   }
 
@@ -537,7 +625,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   let errorGroup: ErrorGroup | null = null;
   let rca: RootCauseAnalysis | null = null;
   let replacedRca: RootCauseAnalysis | null = null;
-  if (failing) {
+  if (failing && !isMultiStep) {
     const ids = failing.summary.errorGroupIds ?? failing.detail?.errorGroupIds ?? [];
     try {
       if (ids.length) errorGroup = await client.getErrorGroup(ids[0]);
@@ -594,6 +682,13 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   // 5. sources
   const proj = collectProjectSources(check, opts.projectDir, failing?.detail ? (failing.detail.playwrightCheckResult ?? failing.detail.browserCheckResult ?? failing.detail.multiStepCheckResult)?.errors ?? [] : []);
   warnings.push(...proj.warnings);
+  if (isMultiStep && proj.warnings.some((warning) => warning.startsWith("MULTISTEP_"))) {
+    const problem = proj.warnings.find((warning) => warning.startsWith("MULTISTEP_"))!;
+    for (const side of ["failing", "passing"] as const) {
+      if (side === "failing" && !failing || side === "passing" && !passing) continue;
+      multistepProblems[side] = [...new Set([...(multistepProblems[side] ?? []), problem])];
+    }
+  }
   if (check.checkType === "API" && proj.mainSource) {
     const sourceMap = new Map(proj.sources.map((source) => [source.path.replace(/\\/g, "/"), source.content]));
     const model = parseApiCheckProject(proj.mainSource, sourceMap);
@@ -659,6 +754,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     toolVersion,
   });
   manifest.notes.push(...warnings.map((w) => `warning: ${w}`));
+  if (isMultiStep) constrainMultiStepManifest(manifest);
 
   const files: Array<{ file: string; text: string }> = [];
   files.push({ file: "manifest.json", text: JSON.stringify(manifest, null, 2) + "\n" });
@@ -672,16 +768,16 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   if (multistepRecordings.passing) files.push({ file: "recordings/passing.multistep.json", text: multistepRecordings.passing });
   if (failing?.extract) files.push({ file: "recordings/failing.actions.json", text: JSON.stringify(failing.extract.actions.map(({ params: _p, ...a }) => a), null, 1) + "\n" });
   if (passing?.extract) files.push({ file: "recordings/passing.actions.json", text: JSON.stringify(passing.extract.actions.map(({ params: _p, ...a }) => a), null, 1) + "\n" });
-  if (failing) files.push({ file: "results/failing.json", text: JSON.stringify(trimmedResult(failing.detail, failing.apiRecording) ?? failing.summary, null, 2) + "\n" });
-  if (passing) files.push({ file: "results/passing.json", text: JSON.stringify(trimmedResult(passing.detail, passing.apiRecording) ?? passing.summary, null, 2) + "\n" });
-  if (rca || errorGroup) files.push({ file: "rca.json", text: JSON.stringify({ errorGroup: manifest.errorGroup, rca, ...(replacedRca ? { replacedRca } : {}) }, null, 2) + "\n" });
+  if (failing) files.push({ file: "results/failing.json", text: JSON.stringify(trimmedResult(failing.detail, failing.apiRecording, isMultiStep) ?? (isMultiStep ? multiStepRunMetadata(failing.summary) : failing.summary), null, 2) + "\n" });
+  if (passing) files.push({ file: "results/passing.json", text: JSON.stringify(trimmedResult(passing.detail, passing.apiRecording, isMultiStep) ?? (isMultiStep ? multiStepRunMetadata(passing.summary) : passing.summary), null, 2) + "\n" });
+  if (!isMultiStep && (rca || errorGroup)) files.push({ file: "rca.json", text: JSON.stringify({ errorGroup: manifest.errorGroup, rca, ...(replacedRca ? { replacedRca } : {}) }, null, 2) + "\n" });
   // the result window the decisions were made from (ids + timestamps only), so
   // the overlap evidence and the pass rate can be re-checked offline
   files.push({
     file: "results/history.json",
     text:
       JSON.stringify(
-        history.map((r) => ({
+        history.map((r) => isMultiStep ? multiStepRunMetadata(r) : ({
           id: r.id,
           runLocation: r.runLocation,
           startedAt: r.startedAt,

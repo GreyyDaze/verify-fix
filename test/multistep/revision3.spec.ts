@@ -178,8 +178,8 @@ test("rev3/bridge: Connection-named headers are stripped, opaque path segments a
     assert.equal(seen.url, `/api/probe/${opaque}?token=raw-query-value`, "the upstream receives the verbatim path and query");
 
     const ev = bridge.evidence[0]!;
-    assert.equal(ev.path, "/api/probe/<redacted>", "sensitive/opaque path values never enter evidence");
-    assert.deepEqual(ev.queryKeys, ["token"], "evidence carries query key names only");
+    assert.equal(ev.path, "<unknown-route>", "only fixed transaction routes can enter evidence");
+    assert.deepEqual(ev.queryKeys, [], "even query-key names are omitted from evidence");
     const serialized = JSON.stringify(bridge.evidence);
     assert.ok(!serialized.includes("raw-query-value"), "evidence must never contain raw query values");
     assert.ok(!serialized.includes(opaque), "evidence must never contain the opaque path segment");
@@ -211,7 +211,7 @@ test("rev3/bridge: request bodies over the bound are refused once with 413; over
     } catch {
       refused = true; // client side may observe the refusal as an error too
     }
-    const ev413 = bridge.evidence.find((e) => e.path === "/api/upload");
+    const ev413 = bridge.evidence.find((e) => e.path === "<unknown-route>" && e.method === "POST");
     assert.ok(ev413, "the oversized upload is recorded exactly once");
     assert.equal(ev413!.status, 413, "the bridge refuses over-bound bodies itself");
     assert.equal(ev413!.forwardError, undefined, "a size refusal is not a forward error");
@@ -225,9 +225,9 @@ test("rev3/bridge: request bodies over the bound are refused once with 413; over
       aborted = true;
     }
     assert.equal(aborted, true, "the oversized response never completes to the client");
-    const evBig = bridge.evidence.find((e) => e.path === "/big")!;
+    const evBig = bridge.evidence.find((e) => e.path === "<unknown-route>" && e.method === "GET" && e.forwardError === true)!;
     assert.equal(evBig.forwardError, true, "an oversized response is a forward failure (→ UNCERTAIN downstream)");
-    assert.equal(bridge.evidence.filter((e) => e.path === "/big").length, 1, "single completion — one entry even on abort");
+    assert.equal(bridge.evidence.filter((e) => e.path === "<unknown-route>" && e.method === "GET" && e.forwardError === true).length, 1, "single completion — one entry even on abort");
 
     // the bridge is still healthy afterwards
     const after = await bridgeRequest(bridge.origin, ca, "GET", "/api/ok", {}, "");
@@ -312,16 +312,17 @@ test("rev3/executor: the child runs with a FRESH HOME (removed afterwards), a re
     checkFile: "multistep-booking.spec.ts",
     env: { FAKE_REPORT_FILE: join(p2, "fake-report.json"), FAKE_ENV_SNAPSHOT: snapshot2 },
   });
-  assert.equal(outcome2.inconclusive, false, outcome2.reason ?? "");
-  assert.equal(outcome2.passed, true);
+  assert.equal(outcome2.inconclusive, true, "a fake JSON report without bridge/reporter traffic cannot PASS");
+  assert.equal(outcome2.passed, false);
+  assert.match(outcome2.reason ?? "", /zero requests/);
   assert.equal(outcome2.browserProcesses, 0, "measured browser processes during the run: zero");
   const env = JSON.parse(readFileSync(snapshot2, "utf8")) as FakeEnv;
   assert.ok(env.HOME && env.HOME.includes("sandbox-home"), `HOME must be the fresh sandbox home, got ${env.HOME}`);
   assert.ok(env.HOME !== process.env.HOME, "HOME must not be the parent's home");
   assert.match(env.NODE_OPTIONS ?? "", /^--import=.*verify-fix-seed\.mjs$/, "NODE_OPTIONS is fully replaced with the seed import");
   assert.equal(env.LD_LIBRARY_PATH, null, "LD_LIBRARY_PATH is never inherited");
-  assert.equal(env.NODE_EXTRA_CA_CERTS, null, "https direct targets get no CA override");
-  assert.equal(env.ENVIRONMENT_URL, "https://fixture.invalid");
+  assert.ok(env.NODE_EXTRA_CA_CERTS?.includes("ca.pem"), "HTTPS targets also get a per-run bridge CA");
+  assert.match(env.ENVIRONMENT_URL ?? "", /^https:\/\/127\.0\.0\.1:\d+$/, "every ENVIRONMENT_URL is a trusted bridge origin");
   assert.ok(env.PATH, "PATH remains available");
   assert.ok(!existsSync(env.HOME!), "the fresh HOME is removed after the run");
 });
@@ -341,7 +342,7 @@ test("rev3/executor: reporter stdout over the bound yields no admissible evidenc
   });
   assert.equal(outcome.passed, false);
   assert.equal(outcome.inconclusive, true);
-  assert.match(outcome.reason ?? "", /no admissible evidence/);
+  assert.match(outcome.reason ?? "", /no admissible JSON step evidence/);
 });
 
 test("rev3/executor: raw stderr content is never retained or used as evidence", async () => {
@@ -358,8 +359,8 @@ test("rev3/executor: raw stderr content is never retained or used as evidence", 
       FAKE_STDERR_MARKER: marker,
     },
   });
-  assert.equal(outcome.inconclusive, false, outcome.reason ?? "");
-  assert.equal(outcome.passed, true);
+  assert.equal(outcome.inconclusive, true, "stderr cannot supply missing bridge/reporter observations");
+  assert.equal(outcome.passed, false);
   assert.ok(outcome.diagnostics.stderrBytes >= marker.length, "stderr is only counted");
   assert.ok(!("stderr" in outcome.diagnostics), "raw stderr content must not exist on the outcome");
   assert.ok(!JSON.stringify(outcome.diagnostics).includes("evidence-from"), "stderr content never surfaces anywhere");
@@ -385,7 +386,7 @@ test("rev3/executor: bridge/reporter mismatch — bridge traffic that does not m
     });
     assert.equal(outcome.passed, false);
     assert.equal(outcome.inconclusive, true);
-    assert.match(outcome.reason ?? "", /bridge\/reporter request-count mismatch/);
+    assert.match(outcome.reason ?? "", /bridge\/reporter dedicated request audit missing/);
     assert.equal(outcome.proxyEvidence.length, 1, "the bridge saw the single real request");
   } finally {
     await upstream.close();
@@ -400,15 +401,21 @@ test("rev3/executor: bridgeReporterMismatch — zero bridge requests never PASS;
     { index: 3, method: "GET", path: "/api/slots", queryKeys: [], requestHeaderNames: [], status: 200, authorization: false },
     { index: 4, method: "POST", path: "/api/book", queryKeys: [], requestHeaderNames: [], status: 200, authorization: true },
   ];
-  assert.match(bridgeReporterMismatch([], capture) ?? "", /zero requests/);
-  assert.equal(bridgeReporterMismatch(bridgeEvs, capture), null, "four matching requests stand");
+  const auditOf = (items: typeof bridgeEvs) => items.map(({ index, method, path, status, authorization }) => ({
+    index, step: ["login", "session", "slots", "book 09:30"][index - 1]!,
+    method: method as "GET" | "POST" | "OTHER",
+    path, status, authorization, hasQuery: false, originMatches: true,
+  }));
+  assert.match(bridgeReporterMismatch([], capture, []) ?? "", /zero requests/);
+  assert.match(bridgeReporterMismatch(bridgeEvs, capture, null) ?? "", /dedicated request audit missing/);
+  assert.equal(bridgeReporterMismatch(bridgeEvs, capture, auditOf(bridgeEvs)), null, "four independently audited matching requests stand");
   const methodMismatch = [...bridgeEvs];
   methodMismatch[0] = { ...methodMismatch[0]!, method: "GET" };
-  assert.match(bridgeReporterMismatch(methodMismatch, capture) ?? "", /method mismatch/);
+  assert.match(bridgeReporterMismatch(methodMismatch, capture, auditOf(bridgeEvs)) ?? "", /method mismatch/);
   const statusMismatch = [...bridgeEvs];
   statusMismatch[1] = { ...statusMismatch[1]!, status: 500 };
-  assert.match(bridgeReporterMismatch(statusMismatch, capture) ?? "", /status mismatch/);
-  assert.equal(bridgeReporterMismatch(bridgeEvs.slice(0, 1), capture) !== null, true, "count mismatch detected");
+  assert.match(bridgeReporterMismatch(statusMismatch, capture, auditOf(bridgeEvs)) ?? "", /status mismatch/);
+  assert.equal(bridgeReporterMismatch(bridgeEvs.slice(0, 1), capture, auditOf(bridgeEvs.slice(0, 1))) !== null, true, "count mismatch detected");
 });
 
 test("rev3/executor: the canonical API-only spec is statically browser-free; a browser-touching script never runs", async () => {
@@ -528,16 +535,12 @@ test("rev3/sanitize: strict allow-list — unknown keys are dropped, check-run m
   assert.deepEqual(Object.keys(request).sort(), [
     "actual", "expected", "fetchUid", "method", "path", "queryKeys", "requestBody", "requestHeaders", "responseBody", "responseHeaders", "status", "statusText", "timings", "title", "url",
   ].sort(), "request evidence is an explicit allow-list — no captured keys survive");
-  assert.deepEqual(request.timings, { startTime: 1, endTime: 2 }, "unknown timing keys are dropped, not inspected");
-  assert.equal(out.checkRunData!.dependencies, null, "check-run metadata removed");
-  assert.equal(out.checkRunData!.imports, null, "check-run metadata removed");
-  assert.equal(out.checkRunData!.playwrightConfig, null, "check-run metadata removed");
-  assert.equal(out.checkRunData!.script, null, "script content removed from the recording");
-  assert.equal(out.checkRunData!.scriptPath, "checks/multistep-booking.spec.ts");
-  assert.equal(out.logs![0]!.msg, "<redacted>", "log content never survives");
+  assert.equal(request.timings, null, "timings and arbitrary trace metadata are not stored");
+  assert.equal(out.checkRunData, null, "check-run metadata and script paths are removed wholesale");
+  assert.equal(out.logs, null, "log levels and contents are removed wholesale");
   assert.equal(out.steps[0]!.title, "login");
   const stepKeys = Object.keys(out.steps[0]!).sort();
-  assert.deepEqual(stepKeys, ["assertions", "error", "requests", "status", "title"]);
+  assert.deepEqual(stepKeys, ["assertions", "error", "failureLine", "requests", "status", "title"]);
   const serialized = JSON.stringify(out);
   assert.ok(!serialized.includes(FAKE_ACCOUNT) && !serialized.includes(FAKE_TOKEN) && !serialized.includes(FAKE_ORIGIN), "final leak check: no original sensitive value survives serialization");
 });

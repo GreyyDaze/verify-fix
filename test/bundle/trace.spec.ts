@@ -7,7 +7,8 @@ import { writeZip } from "../helpers/zip-writer.ts";
 import { fakeTraceZip } from "../helpers/fake-trace.ts";
 
 test("zip: round-trips deflate and store entries", () => {
-  const big = "x".repeat(10_000);
+  // Keep the fixture below the ZIP's 200:1 compression-ratio safety limit.
+  const big = "x".repeat(2_000);
   for (const store of [false, true]) {
     const zip = writeZip({ "a.txt": "hello", "dir/b.json": '{"k":1}', "big.txt": big }, { store });
     assert.ok(isZip(zip));
@@ -16,7 +17,7 @@ test("zip: round-trips deflate and store entries", () => {
     const map = openZip(zip);
     assert.equal(map.get("a.txt")!().toString(), "hello");
     assert.equal(map.get("dir/b.json")!().toString(), '{"k":1}');
-    assert.equal(map.get("big.txt")!().length, 10_000);
+    assert.equal(map.get("big.txt")!().length, 2_000);
     assert.equal(readZipEntry(zip, listZip(zip)[2]).toString(), big);
   }
 });

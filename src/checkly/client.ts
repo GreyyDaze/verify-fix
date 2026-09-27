@@ -52,6 +52,36 @@ export interface ListResultsParams {
   fields?: string[];
 }
 
+/** Bound even non-asset API JSON before calling JSON.parse or Buffer.concat. */
+export const MAX_API_JSON_BYTES = 16 * 1024 * 1024;
+
+async function boundedResponseText(res: Response, maxBytes: number): Promise<string> {
+  const length = res.headers.get("content-length");
+  if (length !== null && /^\d+$/.test(length) && Number(length) > maxBytes) {
+    await res.body?.cancel();
+    throw new Error("Checkly API response exceeds JSON byte bound");
+  }
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.byteLength > maxBytes - total) {
+        await reader.cancel();
+        throw new Error("Checkly API response exceeds JSON byte bound");
+      }
+      total += value.byteLength;
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks, total).toString("utf8");
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export class ChecklyClient {
   readonly baseUrl: string;
   private readonly creds: ChecklyCredentials;
@@ -96,6 +126,7 @@ export class ChecklyClient {
       const res = await this.fetchImpl(absolute, { method, headers, body });
       this.calls.push({ method, url: absolute.replace(/\?.*$/, ""), status: res.status });
       if ((res.status === 429 || res.status >= 500) && attempt < this.retries) {
+        await res.body?.cancel();
         attempt += 1;
         const retryAfter = Number(res.headers.get("retry-after"));
         await this.sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 500 * 2 ** attempt);
@@ -107,7 +138,7 @@ export class ChecklyClient {
 
   private async json<T>(method: string, url: string, init: { body?: unknown } = {}): Promise<{ status: number; data: T }> {
     const res = await this.request(method, url, init);
-    const text = await res.text();
+    const text = await boundedResponseText(res, MAX_API_JSON_BYTES);
     if (!res.ok) throw new ChecklyApiError(res.status, url, text.slice(0, 300));
     // 202 bodies matter: GET rca → {id, status: "PENDING"}; POST trigger → {id, status: "PENDING"}.
     return { status: res.status, data: (text ? JSON.parse(text) : null) as T };
@@ -141,13 +172,38 @@ export class ChecklyClient {
     return this.json<AssetManifest>("GET", `/v1/check-results/${encodeURIComponent(checkId)}/${encodeURIComponent(resultId)}/assets${qs}`).then((r) => r.data);
   }
 
-  /** Download an asset (API path or presigned URL) into memory. */
+  /** Stream an asset under a fixed byte budget; never allocate an unchecked body. */
   async download(url: string, maxBytes = 200 * 1024 * 1024): Promise<Buffer> {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error("invalid asset download byte bound");
     const res = await this.request("GET", url, { accept: "*/*" });
-    if (!res.ok) throw new ChecklyApiError(res.status, url.replace(/\?.*$/, ""), "asset download failed");
-    const ab = await res.arrayBuffer();
-    if (ab.byteLength > maxBytes) throw new Error(`asset larger than ${maxBytes} bytes: ${url.replace(/\?.*$/, "")}`);
-    return Buffer.from(ab);
+    if (!res.ok) {
+      await res.body?.cancel();
+      throw new Error(`asset download failed (HTTP ${res.status})`);
+    }
+    const length = res.headers.get("content-length");
+    if (length !== null && /^\d+$/.test(length) && Number(length) > maxBytes) {
+      await res.body?.cancel();
+      throw new Error("asset download exceeds byte bound (Content-Length)");
+    }
+    if (!res.body) return Buffer.alloc(0);
+    const reader = res.body.getReader();
+    const chunks: Buffer[] = [];
+    let total = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value.byteLength > maxBytes - total) {
+          await reader.cancel();
+          throw new Error("asset download exceeds byte bound (stream)");
+        }
+        total += value.byteLength;
+        chunks.push(Buffer.from(value));
+      }
+      return Buffer.concat(chunks, total);
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   errorGroupsForCheck(checkId: string): Promise<ErrorGroup[]> {

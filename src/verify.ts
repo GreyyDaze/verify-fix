@@ -106,6 +106,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     ...(apiPolicy?.candidate?.environmentKeys ?? []),
   ])];
   let envDodge = detectEnvScopeDodge(bundle.checkSource, patchSource, { locations: runConfig?.locations, declaredEnvKeys: declared });
+  if (isMultiStep && envDodge) envDodge = "regional account data flow changed or generated at runtime — trusted per-location mapping not proven";
   const provided = { ...(opts.env ?? {}) };
   const regionalKeys = regionalUserKeys(patchSource, { locations: runConfig?.locations, declaredEnvKeys: declared });
   if (!envDodge && regionalKeys) {
@@ -130,7 +131,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
         .filter((entry): entry is readonly [string, string] => typeof entry[1] === "string")
     : [[candidateCheckFile, patchSource] as const];
   const environmentSource = environmentEntries.map(([file, source]) => `// ${file}\n${source}`).join("\n");
-  const envCheck = checkEnv(environmentSource || patchSource, provided, declared);
+  const envCheck = checkEnv(environmentSource || patchSource, provided, declared, isMultiStep ? ["REGION"] : []);
   const added = newFiles(bundle, patch);
 
   const contract = buildContract(bundle, patchSource, candidateFileMap, candidateCheckFile);
@@ -139,16 +140,21 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   }
 
   const observations = new Map<string, SceneObservation>();
-  const missingEnvReason = apiPolicy?.uncertain
+  // Unsupported Multistep source is a pre-execution UNCERTAIN gate. A child
+  // must never run first and only *then* have its result changed to UNCERTAIN.
+  const missingEnvReason = multistepPolicy?.uncertain
+    ?? apiPolicy?.uncertain
     ?? (apiPolicy && !opts.target ? "ENVIRONMENT_URL is missing; pass --target so {{ENVIRONMENT_URL}} can be resolved without a fallback" : null)
     ?? (envCheck.missing.length > 0
-      ? `the check reads ${envCheck.missing.map((m) => `${m.form === "handlebars" ? "{{" + m.name + "}}" : "process.env." + m.name} (line ${m.line})`).join(", ")} and no value was provided — pass --env-file; a run with an empty variable would not be the customer's check`
+      ? isMultiStep
+        ? "Multistep environment values are missing — pass --env-file; a run with empty variables would not be the original check"
+        : `the check reads ${envCheck.missing.map((m) => `${m.form === "handlebars" ? "{{" + m.name + "}}" : "process.env." + m.name} (line ${m.line})`).join(", ")} and no value was provided — pass --env-file; a run with an empty variable would not be the customer's check`
       : null)
     ?? (bundle.multistep?.problems && bundle.multistep.problems.length > 0
       ? `multistep evidence unresolved: ${bundle.multistep.problems.join("; ")}`
       : null);
   const undeclaredEnvReason = envCheck.undeclared.length > 0
-    ? `the patch reads undeclared environment variable(s): ${envCheck.undeclared.join(", ")}`
+    ? isMultiStep ? "Multistep patch reads undeclared environment variable(s)" : `the patch reads undeclared environment variable(s): ${envCheck.undeclared.join(", ")}`
     : null;
   const preflightRejected = patch.rejection ?? apiPolicy?.rejected ?? multistepPolicy?.rejected ?? staticallyRejected(bundle, patchSource, candidateFileMap, candidateCheckFile) ?? envDodge ?? configPolicy.rejected ?? undeclaredEnvReason;
   if (preflightRejected) {
@@ -272,12 +278,18 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     decision.exitCode = 2;
   }
   if (envCheck.undeclared.length > 0) {
-    decision.reasons.push(`env: the patch reads ${envCheck.undeclared.join(", ")} — not declared on the check; it must be added to the check's environment variables in Checkly (values never enter the bundle)`);
+    decision.reasons.push(isMultiStep
+      ? "env: Multistep patch reads undeclared environment variables — the check's declared variable names must be preserved"
+      : `env: the patch reads ${envCheck.undeclared.join(", ")} — not declared on the check; it must be added to the check's environment variables in Checkly (values never enter the bundle)`);
     decision.verdict = "FAILED";
     decision.exitCode = 1;
   }
-  for (const d of envCheck.defaulted) decision.reasons.push(`env: ${d.name} not provided; the check ran on its own fallback (line ${d.line})`);
-  if (added.length > 0) decision.reasons.push(`patch adds files not in the bundle: ${added.join(", ")} (copied into the candidate check tree)`);
+  for (const d of envCheck.defaulted) decision.reasons.push(isMultiStep
+    ? "env: Multistep environment value defaulted — untrusted fallback cannot prove the configured check"
+    : `env: ${d.name} not provided; the check ran on its own fallback (line ${d.line})`);
+  if (added.length > 0) decision.reasons.push(isMultiStep
+    ? `Multistep patch adds ${added.length} file(s) not in the bundle (candidate check tree expanded)`
+    : `patch adds files not in the bundle: ${added.join(", ")} (copied into the candidate check tree)`);
 
   await executor.close?.();
 
@@ -318,7 +330,9 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
 export function staticallyRejected(bundle: Bundle, mutantSource: string, files?: Map<string, string>, checkFile?: string): string | null {
   const c = buildContract(bundle, mutantSource, files, checkFile);
   const core = [...c.diff.removed, ...c.diff.weakened].filter((a) => a.onCriticalPath);
-  if (core.length > 0) return `core-path assertion removed/weakened (${core.map((a) => `${a.subject}.${a.matcher}`).join(", ")})`;
+  if (core.length > 0) return bundle.check.checkType === "MULTI_STEP"
+    ? `core-path assertion removed/weakened (${core.length} assertion tuple(s))`
+    : `core-path assertion removed/weakened (${core.map((a) => `${a.subject}.${a.matcher}`).join(", ")})`;
   if (c.suppressionCandidates.length > 0) return `suppression candidate (${c.suppressionCandidates.length})`;
   return null;
 }

@@ -9,12 +9,21 @@ import { join } from "node:path";
 import { buildBundle } from "../../src/bundle/build.ts";
 import { loadBundle } from "../../src/bundle.ts";
 import { buildContract } from "../../src/contract/contract.ts";
+import { assessAdequacy } from "../../src/adequacy/adequacy.ts";
 import type { ChecklyClient } from "../../src/checkly/client.ts";
 import type { AssetManifestEntry, CheckResultSummary } from "../../src/checkly/types.ts";
 import { openZip, openZipBounded, readZipEntry, listZip } from "../../src/trace/zip.ts";
 import { writeZip } from "../helpers/zip-writer.ts";
 import { buildMultiStepRecording, readMultiStepAssets } from "../../src/multistep/capture.ts";
 import { validMultiStepStoredRecording } from "../../src/multistep/recording-schema.ts";
+import { MULTISTEP_DETECTION_MODE, parseMode } from "../../src/scene/modes.ts";
+import { SceneProxy } from "../../src/scene/proxy.ts";
+import { SceneExecutor } from "../../src/executor/scene.ts";
+import { runMultiStepSandbox, bridgeReporterMismatch } from "../../src/multistep/executor.ts";
+import { normalizeMultiStepCapture } from "../../src/multistep/normalize.ts";
+import { multiStepDetectionShapeProblems, multiStepShapeProblems } from "../../src/multistep/shape.ts";
+import { verify, staticallyRejected } from "../../src/verify.ts";
+import { DETECTION_WEB, repairedNestedSpec, startDetectionApp } from "./detection-fixture.ts";
 import { FAKE_ACCOUNT, FAKE_TOKEN, FAKE_ORIGIN, failingTestResults, passingTestResults, failingLogs, passingLogs } from "./helpers.ts";
 
 const WEB = new URL("../../examples/slots-booking/web/", import.meta.url).pathname;
@@ -545,6 +554,14 @@ test("remote admission rejects prefixes, failed confirmation, malformed booking 
   resultSteps(missingBody)[3]!.steps[0].checklyData[0].body = null;
   const status401 = JSON.parse(failingTestResults());
   resultSteps(status401)[3]!.steps[0].checklyData[0].status = 401;
+  const status500 = JSON.parse(failingTestResults());
+  resultSteps(status500)[3]!.steps[0].checklyData[0].status = 500;
+  const falseConfirmation = JSON.parse(failingTestResults());
+  resultSteps(falseConfirmation)[3]!.steps[0].checklyData[0].body.booking.confirmed = false;
+  const missingNestedVersion = JSON.parse(failingTestResults());
+  delete resultSteps(missingNestedVersion)[3]!.steps[0].checklyData[0].body.booking.sessionVersion;
+  const genericBookError = JSON.parse(failingTestResults());
+  resultSteps(genericBookError)[3]!.steps[1].error.message = "Error: generic exception at book 09:30 (multistep-booking.spec.ts:142:24)";
   const fifth = JSON.parse(passingTestResults());
   fifth.stats.expected = 0; fifth.stats.unexpected = 1;
   fifth.suites[0].suites[0].specs[0].tests[0].results[0].status = "failed";
@@ -553,6 +570,10 @@ test("remote admission rejects prefixes, failed confirmation, malformed booking 
   const variants: Array<[string, string, boolean]> = [
     ["failing two-request prefix", (() => { const r = JSON.parse(failingTestResults()); resultSteps(r).length = 2; return JSON.stringify(r); })(), true],
     ["HTTP 401 on fourth request", JSON.stringify(status401), true],
+    ["HTTP 500 on fourth request", JSON.stringify(status500), true],
+    ["false nested confirmation is not an original remote incident", JSON.stringify(falseConfirmation), true],
+    ["missing nested version cannot be invented", JSON.stringify(missingNestedVersion), true],
+    ["generic exception is not the protected assertion", JSON.stringify(genericBookError), true],
     ["missing book response", JSON.stringify(missingBody), true],
     ["mismatched failed step", JSON.stringify(wrongStep), true],
     ["wrong source assertion line", JSON.stringify(wrongLine), true],
@@ -672,4 +693,277 @@ test("exact output tree and full preflight secret scan reject stale files before
   await buildAt(dir);
   assert.deepEqual(loadBundle(dir).bundle.multistep?.problems, [], "bounded recapture restores a missing allowed file");
   assert.deepEqual(allFiles(dir).map((path) => path.slice(dir.length + 1)).sort(), [...outcome.files].sort());
+});
+
+// All detection tests below use a mocked *authenticated remote asset path*
+// plus a local HTTP app. They prove verifier mechanics only, not Checkly,
+// browser, deployment, production or cloud evidence.
+const DETECTION_EAST = "synthetic-detection-east";
+const DETECTION_WEST = "synthetic-detection-west";
+const DETECTION_ENV = { MULTISTEP_USER_US_EAST_1: DETECTION_EAST, MULTISTEP_USER_EU_WEST_1: DETECTION_WEST };
+
+test("remote-bound HTTP-200 nested confirmation mutation is one field and the repaired candidate fails on THAT line in both regions", { timeout: 180_000 }, async () => {
+  const out = await captureRemote();
+  const bundle = loadBundle(out.outDir).bundle;
+  const detection = bundle.scenes.find((scene) => scene.type === "DETECTION")!;
+  assert.deepEqual(bundle.multistep?.problems, []);
+  assert.equal(detection.mode, MULTISTEP_DETECTION_MODE);
+  assert.deepEqual(detection.verdict.provenance, {
+    kind: "recorded", runId: "synthetic-fail", artifactId: "recordings/failing.multistep.json",
+  });
+  const patch = repairedNestedSpec();
+  assert.equal(staticallyRejected(bundle, patch), null, "all seven booked-field assertions move to their bound nested equivalents");
+  const diff = buildContract(bundle, patch).diff;
+  assert.equal(diff.removed.filter((item) => item.onCriticalPath).length, 0);
+  assert.ok(diff.removed.some((item) => item.subject === "body.confirmed"));
+  assert.ok(diff.added.some((item) => item.subject === "body.booking.confirmed"));
+  const app = await startDetectionApp();
+  const runs: Array<{ sceneId: string; hits: Array<{ method: string; path: string; status: number; source: string }> }> = [];
+  const executor = new SceneExecutor({ target: app.origin, projectDir: DETECTION_WEB, env: DETECTION_ENV,
+    maxRunsPerScene: 1, onRepetition: (value) => runs.push(value) });
+  try {
+    const reproduced = await executor.runScene(bundle, patch, bundle.scenes.find((scene) => scene.type === "REPRODUCTION")!);
+    assert.equal(reproduced.observed, "pass", reproduced.reason ?? "");
+    const detected = await executor.runScene(bundle, patch, detection);
+    assert.equal(detected.observed, "fail", detected.reason ?? JSON.stringify(detected.trace));
+    assert.equal(detected.repetitions, 1);
+    assert.deepEqual(runs.filter((item) => item.sceneId === "detection").flatMap((item) => item.hits.map((hit) => [hit.method, hit.path, hit.status, hit.source])), [
+      ["POST", "/api/login", 200, "target"], ["GET", "/api/session", 200, "target"],
+      ["GET", "/api/slots", 200, "target"], ["POST", "/api/book", 200, "injected"],
+      ["POST", "/api/login", 200, "target"], ["GET", "/api/session", 200, "target"],
+      ["GET", "/api/slots", 200, "target"], ["POST", "/api/book", 200, "injected"],
+    ]);
+    assert.deepEqual(app.accounts.filter((account) => [DETECTION_EAST, DETECTION_WEST].includes(account)).sort(),
+      [DETECTION_EAST, DETECTION_WEST, DETECTION_EAST, DETECTION_WEST].sort());
+    assert.deepEqual(executor.costReport().multiStepBrowserCounts, [0, 0, 0, 0]);
+  } finally {
+    await executor.close();
+    await app.close();
+  }
+});
+
+test("full synthetic Stage 7 verdict reaches PASS only with remote-bound HTTP-200 detection, five healthy repetitions, and unweakened nested assertions", { timeout: 240_000 }, async () => {
+  const out = await captureRemote();
+  const bundle = loadBundle(out.outDir).bundle;
+  assert.deepEqual(bundle.multistep?.problems, []);
+  // SYNTHETIC decision fixture: the real capture has NO measured determinism.
+  // Supplying the decision-law prerequisite here is not a measurement or a
+  // Checkly/cloud claim. The real verifier retains its unchanged gate.
+  bundle.determinism = { targetRuns: 20, achieved: 20, sequentialPassRate: 1, overlapFailRate: 0,
+    reproductionFailRate: 1, baselinePassRate: 1, method: "local-runner", lastVerifiedAt: "2026-09-27" };
+  bundle.envAssumptions = bundle.envAssumptions.map((item) => ({ ...item, verified: true }));
+  const app = await startDetectionApp();
+  try {
+    const result = await verify({ bundle, patch: repairedNestedSpec(), target: app.origin,
+      projectDir: DETECTION_WEB, env: DETECTION_ENV, maxRunsPerScene: 25 });
+    assert.deepEqual([...result.observations].map(([id, item]) => [id, item.observed]), [
+      ["reproduction", "pass"], ["detection", "fail"], ["healthy-live", "pass"],
+    ], result.decision.reasons.join("; "));
+    assert.equal(result.observations.get("healthy-live")?.repetitions, 5);
+    assert.equal(result.decision.verdict, "PASS", result.decision.reasons.join("; "));
+    assert.equal(result.decision.exitCode, 0);
+    assert.equal(result.contract.diff.removed.filter((item) => item.onCriticalPath).length, 0);
+    assert.ok(result.mutants.length >= 2 && result.mutants.every((mutant) => !mutant.survived));
+    assert.ok(result.cost.multiStepBrowserCounts?.every((count) => count === 0));
+    assert.ok((result.cost.httpRequests ?? 0) >= 4 * 2 * (5 + 5 + 5));
+  } finally {
+    await app.close();
+  }
+});
+
+test("passing-only/local/missing v3 provenance and caller-selected injection cannot arm detection", async () => {
+  const remote = await captureRemote();
+  const bundle = loadBundle(remote.outDir).bundle;
+  const scene = bundle.scenes.find((item) => item.type === "DETECTION")!;
+  const local = await capture({}, assetDir());
+  const localBundle = loadBundle(local.outDir).bundle;
+  const pretendPassing = { ...scene, verdict: { ...scene.verdict,
+    provenance: { kind: "recorded" as const, runId: "synthetic-pass", artifactId: "recordings/passing.multistep.json" } } };
+  const cases = [
+    { label: "locally captured evidence", bundle: { ...localBundle, scenes: [scene] }, scene },
+    { label: "passing side substituted for failing", bundle, scene: pretendPassing },
+    { label: "missing failing binding", bundle: { ...bundle, multistep: null }, scene },
+    { label: "old HTTP 500 mode", bundle, scene: { ...scene, mode: "inject:POST /api/book -> 500" } },
+    { label: "arbitrary HTTP 200 injection", bundle, scene: { ...scene, mode: "inject:POST /api/book -> 200" } },
+    { label: "arbitrary route", bundle, scene: { ...scene, mode: "inject:GET /api/slots -> 200" } },
+    { label: "caller-selected body field", bundle, scene: { ...scene, mode: "detect:POST /api/book -> 200:booking.status=WRONG" } },
+  ];
+  for (const item of cases) {
+    const executor = new SceneExecutor({ target: "http://127.0.0.1:1", projectDir: DETECTION_WEB, env: DETECTION_ENV });
+    try {
+      const observation = await executor.runScene(item.bundle, repairedNestedSpec(), item.scene);
+      assert.equal(observation.observed, "uncertain", item.label);
+      assert.equal(observation.repetitions, 0, `${item.label}: preflight must not start the child or proxy`);
+      assert.equal(executor.costReport().localRuns, 0, item.label);
+    } finally { await executor.close(); }
+  }
+  const direct = await runMultiStepSandbox({ projectDir: DETECTION_WEB, baseUrl: "http://127.0.0.1:1",
+    files: { ...bundle.files, [FILE]: repairedNestedSpec() }, originalFiles: bundle.files, checkFile: FILE,
+    env: { REGION: "us-east-1", ...DETECTION_ENV },
+    detection: { bundle: { ...bundle, multistep: null }, scene } });
+  assert.equal(direct.inconclusive, true);
+  assert.equal(direct.environmentOrigin, null, "direct adapter cannot self-declare detection provenance");
+});
+
+test("detection cannot invent a nested response, coerce HTTP 500, change an upstream fact, or leak target secrets", { timeout: 180_000 }, async () => {
+  const out = await captureRemote();
+  const bundle = loadBundle(out.outDir).bundle;
+  const scene = bundle.scenes.find((item) => item.type === "DETECTION")!;
+  for (const [label, options] of [
+    ["HTTP 500", { bookStatus: 500 }],
+    ["flat response", { flat: true }],
+    ["target already reports false", { bookConfirmed: false }],
+    ["wrong live version", { versionMismatch: true }],
+    ["wrong live account", { accountMismatch: true }],
+    ["unapproved body field", { extraBookField: CANARY }],
+  ] as const) {
+    const app = await startDetectionApp(options);
+    const executor = new SceneExecutor({ target: app.origin, projectDir: DETECTION_WEB, env: DETECTION_ENV,
+      maxRunsPerScene: 1 });
+    try {
+      const result = await executor.runScene(bundle, repairedNestedSpec(), scene);
+      assert.equal(result.observed, "uncertain", `${label}: ${result.reason ?? ""}`);
+      assert.ok(result.reason && !result.reason.includes(CANARY) && !result.reason.includes(DETECTION_EAST));
+      assert.ok(!JSON.stringify(result).includes(CANARY), `${label}: never serialize the upstream secret`);
+      assert.equal(executor.costReport().httpRequests, 4, `${label}: no later request or confirmed detection`);
+    } finally {
+      await executor.close();
+      await app.close();
+    }
+  }
+});
+
+test("candidate failures on another assertion, in confirmation, or via negation are not conclusive detection", { timeout: 180_000 }, async () => {
+  const out = await captureRemote();
+  const bundle = loadBundle(out.outDir).bundle;
+  const scene = bundle.scenes.find((item) => item.type === "DETECTION")!;
+  const patch = repairedNestedSpec();
+  const variants = [
+    ["wrong hard assertion inside book", patch.replace("expect(body.booking.confirmed).toBe(true)",
+      "expect(body.booking.status).toBe('WRONG')\n    expect(body.booking.confirmed).toBe(true)")],
+    ["assertion delayed until confirmation", patch.replace("expect(body.booking.confirmed).toBe(true)",
+      "expect(body.booking.confirmed).toBe(false)")],
+    ["negated confirmation", patch.replace("expect(body.booking.confirmed).toBe(true)",
+      "expect(body.booking.confirmed).not.toBe(true)")],
+  ] as const;
+  for (const [label, candidate] of variants) {
+    const app = await startDetectionApp();
+    const executor = new SceneExecutor({ target: app.origin, projectDir: DETECTION_WEB, env: DETECTION_ENV,
+      maxRunsPerScene: 1 });
+    try {
+      const result = await executor.runScene(bundle, candidate, scene);
+      assert.equal(result.observed, "uncertain", `${label}: ${result.reason ?? ""}`);
+      assert.ok(result.reason, label);
+    } finally {
+      await executor.close();
+      await app.close();
+    }
+  }
+  assert.match(staticallyRejected(bundle, variants[2]![1]) ?? "", /core-path assertion/,
+    "negation cannot retain a colliding ID as a strong repair");
+});
+
+test("JSON request audit admits ONLY the trusted local false confirmation; remote shape and bridge contradictions stay strict", () => {
+  const raw = JSON.parse(failingTestResults());
+  resultSteps(raw)[3]!.steps[0].checklyData[0].body.booking.confirmed = false;
+  const capture = normalizeMultiStepCapture({ testResults: JSON.stringify(raw), reporterOnly: true });
+  assert.deepEqual(capture.problems, []);
+  assert.ok(multiStepShapeProblems(capture).length > 0, "remote admission never accepts the local false outcome");
+  assert.deepEqual(multiStepDetectionShapeProblems(capture), [], "only the fixed nested boolean differs");
+  const routes = [["POST", "/api/login", "login"], ["GET", "/api/session", "session"],
+    ["GET", "/api/slots", "slots"], ["POST", "/api/book", "book 09:30"]] as const;
+  const bridge = routes.map(([method, path], i) => ({ index: i + 1, method, path, status: 200,
+    queryKeys: [], requestHeaderNames: i === 1 || i === 3 ? ["authorization"] : [],
+    authorization: i === 1 || i === 3 }));
+  const audit = routes.map(([method, path, step]) => ({ method, path, step, originMatches: true, hasQuery: false }));
+  assert.equal(bridgeReporterMismatch(bridge, capture, audit, FAKE_ORIGIN, true), null);
+  assert.match(bridgeReporterMismatch(bridge, capture, audit, FAKE_ORIGIN) ?? "", /JSON response evidence/);
+  assert.match(bridgeReporterMismatch(bridge, capture, null, FAKE_ORIGIN, true) ?? "", /dedicated request audit/);
+  const badBridge = bridge.map((row, i) => i === 3 ? { ...row, status: 500 } : row);
+  assert.match(bridgeReporterMismatch(badBridge, capture, audit, FAKE_ORIGIN, true) ?? "", /status mismatch|HTTP status/);
+  const badAudit = audit.map((row, i) => i === 3 ? { ...row, path: "/api/slots" } : row);
+  assert.match(bridgeReporterMismatch(bridge, capture, badAudit, FAKE_ORIGIN, true) ?? "", /disagree|transaction sequence/);
+  for (const change of [
+    (draft: typeof capture) => { draft.steps[3]!.requests[0]!.responseBody = { booking: { confirmed: false } }; },
+    (draft: typeof capture) => { (draft.steps[3]!.requests[0]!.responseBody as Record<string, unknown>).extra = CANARY; },
+    (draft: typeof capture) => { draft.steps[3]!.requests[0]!.status = 500; },
+    (draft: typeof capture) => { draft.steps[3]!.status = "passed"; },
+    (draft: typeof capture) => { draft.steps.push({ title: "confirm transaction", status: "passed",
+      error: null, requests: [], assertions: [] }); },
+  ]) {
+    const draft = JSON.parse(JSON.stringify(capture)) as typeof capture;
+    change(draft);
+    assert.ok(bridgeReporterMismatch(bridge, draft, audit, FAKE_ORIGIN, true), "changed JSON cannot override four trusted HTTP-200 hits");
+  }
+});
+
+test("fixed proxy mutation changes exactly booking.confirmed on a completed HTTP-200 transaction (mechanics only)", async () => {
+  // This directly tests the response bytes. Only SceneExecutor may set the
+  // proxy capability for a verdict, after trustedMultiStepDetection reloads
+  // the failing remote v3 bundle; this standalone proxy test is not proof.
+  const app = await startDetectionApp();
+  const proxy = new SceneProxy();
+  try {
+    const [origin] = await proxy.arm({ mode: parseMode(MULTISTEP_DETECTION_MODE), target: app.origin,
+      runs: 1, trustedMultiStepDetection: true });
+    const account = DETECTION_EAST;
+    const login = await fetch(`${origin}/api/login`, { method: "POST",
+      headers: { "content-type": "application/json" }, body: JSON.stringify({ account }) });
+    const loginBody = await login.json() as { token: string; version: number };
+    assert.equal(login.status, 200);
+    const session = await fetch(`${origin}/api/session`, { headers: { authorization: `Bearer ${loginBody.token}` } });
+    assert.equal(session.status, 200); await session.text();
+    const slots = await fetch(`${origin}/api/slots`);
+    assert.equal(slots.status, 200); await slots.text();
+    const booked = await fetch(`${origin}/api/book`, { method: "POST",
+      headers: { authorization: `Bearer ${loginBody.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ slot: "09:30" }) });
+    assert.equal(booked.status, 200);
+    assert.equal(booked.headers.get("content-type"), "application/json");
+    assert.deepEqual(await booked.json(), { booking: { confirmed: false, status: "CONFIRMED",
+      account, slot: "09:30", sessionVersion: loginBody.version } });
+    assert.deepEqual(proxy.hits().map((hit) => [hit.ordinal, hit.path, hit.status, hit.source]), [
+      [1, "/api/login", 200, "target"], [2, "/api/session", 200, "target"],
+      [3, "/api/slots", 200, "target"], [4, "/api/book", 200, "injected"],
+    ]);
+    assert.deepEqual(app.paths, ["POST /api/login", "GET /api/session", "GET /api/slots", "POST /api/book"]);
+  } finally {
+    await proxy.close();
+    await app.close();
+  }
+});
+
+test("only remote/source-bound Multistep evidence recognizes two concrete boundary checks; version range remains weak", async () => {
+  const out = await captureRemote();
+  const bundle = loadBundle(out.outDir).bundle;
+  const adequacyOf = (input: typeof bundle) => assessAdequacy({
+    contract: buildContract(input, repairedNestedSpec()), sceneObservations: new Map(), mutants: [],
+  }).weakness.weakAssertions;
+  const proven = adequacyOf(bundle);
+  assert.equal(proven.length, 1);
+  assert.match(proven[0]!.reason, /toBeGreaterThan/);
+  const unproven = adequacyOf({ ...bundle, multistep: null });
+  assert.equal(unproven.length, 3, "a local/self-declared bundle cannot silently strengthen weak assertions");
+  const borrowed = adequacyOf({ ...bundle, scenes: bundle.scenes.map((scene) => scene.type === "DETECTION"
+    ? { ...scene, verdict: { ...scene.verdict, provenance: { kind: "recorded" as const,
+      runId: "synthetic-pass", artifactId: "recordings/passing.multistep.json" } } } : scene) });
+  assert.equal(borrowed.length, 3, "the passing side cannot supply failing-side adequacy proof");
+});
+
+test("semantic fault stays an HTTP-200 nested booking response with the ORIGINAL stale assertion failing before confirmation", { timeout: 180_000 }, async () => {
+  const app = await startDetectionApp();
+  try {
+    const result = await runMultiStepSandbox({ projectDir: DETECTION_WEB, baseUrl: app.origin,
+      files: { [FILE]: SPEC }, checkFile: FILE,
+      env: { REGION: "us-east-1", ...DETECTION_ENV } });
+    assert.equal(result.inconclusive, false, result.reason ?? "");
+    assert.equal(result.passed, false);
+    assert.deepEqual(result.capture?.steps.map((step) => [step.title, step.status]), [
+      ["login", "passed"], ["session", "passed"], ["slots", "passed"], ["book 09:30", "failed"],
+    ]);
+    assert.equal(result.capture?.steps[3]?.failureLine, 142, "source-bound stale body.confirmed assertion");
+    assert.deepEqual(result.proxyEvidence.map((request) => request.status), [200, 200, 200, 200]);
+    assert.ok(!JSON.stringify(result.trace).includes(DETECTION_EAST), "local traces never contain the account value");
+    assert.equal(result.browserProcesses, 0);
+  } finally { await app.close(); }
 });

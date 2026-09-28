@@ -15,6 +15,44 @@ function version(value: unknown): boolean { return typeof value === "number" && 
 function identity(value: unknown): boolean { return typeof value === "string" && value.length > 0; }
 function sameAccount(a: unknown, b: unknown): boolean { return identity(a) && a === b; }
 
+/** A fact from an ALREADY validated remote failing-side v3 recording, never
+ * inferred from a passing run or from a local reporter. All fields needed to
+ * recognize the fixed nested booking outcome must actually be present. */
+export function recordedNestedBookingConfirmed(steps: MultiStepCapture["steps"]): boolean {
+  const request = steps[3]?.requests[0];
+  const body = object(request?.responseBody);
+  const booking = object(body?.booking);
+  return steps.length === 4 && request?.method === "POST" && request.path === "/api/book"
+    && request.status === 200 && body !== null && !Object.hasOwn(body, "confirmed")
+    && booking?.confirmed === true && booking.status === "CONFIRMED"
+    && identity(booking.account) && booking.slot === "09:30" && version(booking.sessionVersion);
+}
+
+/** The *local* detection shape, used only after trusted remote provenance and
+ * a proxy-confirmed mutation. Remote admission still calls the unmodified
+ * multiStepShapeProblems: its failing booking MUST have confirmed === true.
+ * No other request/field/status is relaxed. */
+export function multiStepDetectionShapeProblems(capture: Pick<MultiStepCapture, "kind" | "stats" | "reporterStatus" | "reporterErrors" | "steps">): string[] {
+  if (capture.kind !== "failing" || capture.steps.length !== 4) return ["MULTISTEP_STEP_SEQUENCE_INVALID"];
+  const book = capture.steps[3]!;
+  const request = book.requests[0];
+  const body = object(request?.responseBody);
+  const booking = object(body?.booking);
+  if (!request || !body || !booking || Object.keys(body).length !== 1
+    || !Object.hasOwn(body, "booking") || Object.hasOwn(body, "confirmed")
+    || JSON.stringify(Object.keys(booking).sort()) !== JSON.stringify(["account", "confirmed", "sessionVersion", "slot", "status"])
+    || booking.confirmed !== false) {
+    return ["MULTISTEP_REQUEST_BODY_INVALID"];
+  }
+  // Reuse ALL original request, assertion, and step checks on a temporary
+  // in-memory view. Only the one proven mutated boolean is inverted for the
+  // original strict validator; neither this view nor a draft is stored.
+  const originalShape = { ...capture, steps: [...capture.steps.slice(0, 3), {
+    ...book, requests: [{ ...request, responseBody: { ...body, booking: { ...booking, confirmed: true } } }, ...book.requests.slice(1)],
+  }] };
+  return multiStepShapeProblems(originalShape);
+}
+
 /** Fixed, values-free categories; never echo response bodies or reporter text. */
 export function multiStepShapeProblems(capture: Pick<MultiStepCapture, "kind" | "stats" | "reporterStatus" | "reporterErrors" | "steps">,
   reporterOnly = false): string[] {

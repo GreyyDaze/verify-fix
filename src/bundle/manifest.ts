@@ -13,6 +13,7 @@ import { classifyRca } from "./rca-mode.ts";
 import { parseApiCheckProject } from "../api/model.ts";
 import type { MultiStepCapture } from "../multistep/normalize.ts";
 import { parseMultiStepScript } from "../multistep/source.ts";
+import { MULTISTEP_DETECTION_MODE } from "../scene/modes.ts";
 import type { MeasureResult } from "./measure.ts";
 import type { DeterminismV3, FailurePoint, ManifestV3, OverlappingRun, ResultRef, SceneV3 } from "./types.ts";
 
@@ -781,30 +782,34 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
 
     const req = failurePoint?.request;
     const dep = failurePoint?.dependency ?? null;
-    // Three cases: a request failed (inject its recorded failure); nothing
-    // failed but the failing step depends on a request (drift → inject a
-    // server error there: the repaired check must still notice a broken
-    // dependency); nothing derivable (pending, runs as uncertain).
-    const injectRule = apiCheck
-      ? passing?.apiRecording
-        ? "replay:passing.api.json"
-        : "inject:<passing API response unavailable>"
-      : req
-        ? `inject:${req.method} ${req.path.replace(/\?.*$/, "")} -> ${req.status}`
-        : dep
-          ? `inject:${dep.method} ${dep.path.replace(/\?.*$/, "")} -> ${DEPENDENCY_FAILURE_STATUS}`
-          : "inject:<failing request unknown>";
+    // For Multistep, ONLY the subsequent strict remote projection may keep
+    // this fixed HTTP-200 nested-confirmation mutation. No HTTP-500 fallback,
+    // and no dependency rule supplied by a manifest can drive its body.
+    // Other check types retain their generic injection semantics.
+    const injectRule = multistepCheck
+      ? MULTISTEP_DETECTION_MODE // remote v3 projection must independently admit the nested outcome
+      : apiCheck
+        ? passing?.apiRecording
+          ? "replay:passing.api.json"
+          : "inject:<passing API response unavailable>"
+        : req
+          ? `inject:${req.method} ${req.path.replace(/\?.*$/, "")} -> ${req.status}`
+          : dep
+            ? `inject:${dep.method} ${dep.path.replace(/\?.*$/, "")} -> ${DEPENDENCY_FAILURE_STATUS}`
+            : "inject:<failing request unknown>";
     scenes.push({
       sceneId: "detection",
       type: "DETECTION",
       mode: injectRule as SceneV3["mode"],
-      state: apiCheck
-        ? "the last known-good API response is replayed; a repair for the renamed field MUST fail and must not accept both contracts"
-        : req
-          ? `the failing response (${req.method} ${req.path.replace(/\?.*$/, "")} → ${req.status}) is injected on top of a live run; the fixed check MUST still fail (it may not hide the incident)`
-          : dep
-            ? `no request failed in the incident (the check went stale); the step that failed (${dep.stepTitle}${dep.stepLine ? `, line ${dep.stepLine}` : ""}) depends on ${dep.method} ${dep.path.replace(/\?.*$/, "")} (observed without a failed HTTP response in the incident run${dep.passingStatus === null ? "" : `; passing-run status ${dep.passingStatus}`}${dep.msBeforeStep === null ? "" : `; interval ${dep.msBeforeStep} ms`}) — that call is answered ${DEPENDENCY_FAILURE_STATUS} on top of a live run; the fixed check MUST still fail`
-            : "the recorded failure is injected on top of a live run; the fixed check must still fail",
+      state: multistepCheck
+        ? "the remotely bound nested booking response is locally mutated from confirmed true to false (HTTP 200); the repaired hard assertion must fail inside book 09:30"
+        : apiCheck
+          ? "the last known-good API response is replayed; a repair for the renamed field MUST fail and must not accept both contracts"
+          : req
+            ? `the failing response (${req.method} ${req.path.replace(/\?.*$/, "")} → ${req.status}) is injected on top of a live run; the fixed check MUST still fail (it may not hide the incident)`
+            : dep
+              ? `no request failed in the incident (the check went stale); the step that failed (${dep.stepTitle}${dep.stepLine ? `, line ${dep.stepLine}` : ""}) depends on ${dep.method} ${dep.path.replace(/\?.*$/, "")} (observed without a failed HTTP response in the incident run${dep.passingStatus === null ? "" : `; passing-run status ${dep.passingStatus}`}${dep.msBeforeStep === null ? "" : `; interval ${dep.msBeforeStep} ms`}) — that call is answered ${DEPENDENCY_FAILURE_STATUS} on top of a live run; the fixed check MUST still fail`
+              : "the recorded failure is injected on top of a live run; the fixed check must still fail",
       verdict: {
         mustFail: true,
         provenance: apiCheck

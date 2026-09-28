@@ -9,6 +9,8 @@ import { failurePointFromRecording, matchesRemoteMultiStepBinding } from "./bind
 import { parseMultiStepProject } from "./source.ts";
 import { knownRoute, knownStepTitle, MULTISTEP_ROUTES } from "./routes.ts";
 import { multiStepSourcePath } from "./files.ts";
+import { recordedNestedBookingConfirmed } from "./shape.ts";
+import { MULTISTEP_DETECTION_MODE } from "../scene/modes.ts";
 
 const ASSET_NAMES = new Set(["test-results.json", "check-run-data.json", "logs.txt"]);
 const API_OPERATIONS = new Set(["asset", "get-check", "list-results", "list-assets", "get-result", "error-group", "rca"]);
@@ -55,7 +57,8 @@ function ref(input: ResultRef | null): ResultRef | null {
 }
 
 function sceneProjection(scene: SceneV3, manifest: ManifestV3,
-  available: { failing: boolean; passing: boolean }, point: FailurePoint | null): SceneV3 | null {
+  available: { failing: boolean; passing: boolean }, point: FailurePoint | null,
+  failingRecording: MultiStepRecording | null): SceneV3 | null {
   if (!["HEALTHY", "REPRODUCTION", "DETECTION"].includes(scene.type)
     || scene.sceneId !== (scene.type === "HEALTHY" ? "healthy-live"
       : scene.type === "REPRODUCTION" ? "reproduction" : "detection")) return null;
@@ -78,8 +81,9 @@ function sceneProjection(scene: SceneV3, manifest: ManifestV3,
     const req = point?.request ?? point?.dependency;
     const route = knownRoute(req?.path);
     if (!route || route !== "/api/book" || !req || req.method !== "POST" || proof.kind !== "recorded"
-      || point?.request !== null || !point.assertion) return null;
-    mode = "inject:POST /api/book -> 500";
+      || point?.request !== null || !point.assertion || scene.mode !== MULTISTEP_DETECTION_MODE
+      || !failingRecording || !recordedNestedBookingConfirmed(failingRecording.steps)) return null;
+    mode = MULTISTEP_DETECTION_MODE;
   }
   const isDetection = scene.type === "DETECTION";
   return {
@@ -129,7 +133,8 @@ export function constrainMultiStepManifest(m: ManifestV3,
   // A missing/invalid failing recording cannot be laundered by a passing run
   // into an incident scene. Nothing in the generic manifest can create one.
   const scenes = failing && !available.failing ? []
-    : m.scenes.flatMap((scene) => sceneProjection(scene, m, available, point) ?? []);
+    : m.scenes.flatMap((scene) => sceneProjection(scene, m, available, point,
+      available.failing ? recordings.failing ?? null : null) ?? []);
   const problems = (side: "failing" | "passing"): { problems: string[] } | null => {
     const selected = m.multistep?.[side]?.problems.filter((item) => /^MULTISTEP_[A-Z_]+$/.test(item)).slice(0, 16) ?? [];
     if (invalidAsset) selected.push("MULTISTEP_ASSET_TYPE_INVALID");

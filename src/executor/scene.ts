@@ -22,6 +22,7 @@ import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExe
 import { runSandbox } from "../sandbox.ts";
 import { runPlaywrightSandbox } from "../playwright-sandbox.ts";
 import { trustedRegionalAccounts } from "../multistep/accounts.ts";
+import { trustedMultiStepDetection } from "../multistep/detection.ts";
 import { runMultiStepSandbox } from "../multistep/executor.ts";
 import { knownRoute } from "../multistep/routes.ts";
 import { sceneExpected } from "../contract/contract.ts";
@@ -156,6 +157,8 @@ export class SceneExecutor implements ExperimentExecutor {
         return `target ${host} (live-concurrent:${concurrency}${concurrency < mode.concurrency ? ` of ${mode.concurrency}, schedule allows ${concurrency}` : ""})`;
       case "inject":
         return `target ${host} + inject ${mode.rule.raw}`;
+      case "multistep-detection":
+        return `target ${host} + trusted HTTP-200 nested booking confirmation mutation`;
       case "replay":
         return replayBrowserAssets && this.target
           ? `recording ${mode.har} + target ${new URL(this.target).host} (browser assets)`
@@ -185,7 +188,8 @@ export class SceneExecutor implements ExperimentExecutor {
     return { sceneId: scene.sceneId, observed: "uncertain", repetitions, trace, source: "scene", reason, environment };
   }
 
-  private async runCandidate(bundle: Bundle, patchSource: string, ctx: RunContext | undefined, url: string, env: Record<string, string>, seed: number): Promise<CandidateOutcome> {
+  private async runCandidate(bundle: Bundle, patchSource: string, ctx: RunContext | undefined, url: string, env: Record<string, string>, seed: number,
+    detectionScene: Scene | null = null): Promise<CandidateOutcome> {
     const checkFile = ctx?.checkFile ?? bundle.check.file;
     if (bundle.check.checkType === "MULTI_STEP") {
       // The Multistep runner uses Playwright's API request fixture only —
@@ -201,6 +205,7 @@ export class SceneExecutor implements ExperimentExecutor {
         originalFiles: bundle.files,
         checkFile,
         seed,
+        ...(detectionScene ? { detection: { bundle, scene: detectionScene } } : {}),
       });
       return { passed: out.passed, inconclusive: out.inconclusive, reason: out.reason, trace: out.trace, browserProcesses: out.browserProcesses };
     }
@@ -251,6 +256,10 @@ export class SceneExecutor implements ExperimentExecutor {
     let environment = this.environmentLabel(bundle, scene, mode, concurrency);
 
     if (mode.kind === "unknown" || mode.kind === "pending") return this.uncertain(scene, `scene mode not runnable: ${mode.reason}`, 0, [], environment);
+    if ((isMultiStep && scene.type === "DETECTION" && mode.kind !== "multistep-detection")
+      || (mode.kind === "multistep-detection" && (!isMultiStep || !trustedMultiStepDetection(bundle, scene)))) {
+      return this.uncertain(scene, "Multistep detection lacks validated failing-side remote provenance and fixed nested booking facts", 0, [], environment);
+    }
     if (needsTarget(mode) && !this.target) {
       const recorded = bundle.recordedOrigin ? `the recorded origin ${bundle.recordedOrigin}` : "a recorded origin";
       return this.uncertain(scene, `live scene needs a target: pass --target <url> (${recorded} is never used implicitly)`, 0, [], environment);
@@ -317,7 +326,9 @@ export class SceneExecutor implements ExperimentExecutor {
       const allHits: ProxyHit[] = [];
       const batches = isMultiStep && concurrency === 1 ? 2 : 1;
       for (let batch = 0; batch < batches; batch++) {
-        const urls = await this.proxy.arm({ mode, target: this.target, runs: concurrency, replayHar, replayBrowserAssetsFromTarget: replayBrowserAssets, failingHar, barrierTimeoutMs: this.barrierTimeoutMs });
+        const urls = await this.proxy.arm({ mode, target: this.target, runs: concurrency, replayHar, replayBrowserAssetsFromTarget: replayBrowserAssets,
+          failingHar, barrierTimeoutMs: this.barrierTimeoutMs,
+          trustedMultiStepDetection: mode.kind === "multistep-detection" });
         const startedAt = Date.now();
         const settled = await Promise.all(
           urls.map((url, runIndex) => {
@@ -333,7 +344,8 @@ export class SceneExecutor implements ExperimentExecutor {
               CI: "1",
               ...(region ? { CHECKLY_REGION: region } : {}),
             }) as Record<string, string>;
-            return this.runCandidate(bundle, patchSource, ctx, url, env, repetitionSeed(scene.sceneId, rep, batch * concurrency + runIndex))
+            return this.runCandidate(bundle, patchSource, ctx, url, env, repetitionSeed(scene.sceneId, rep, batch * concurrency + runIndex),
+              mode.kind === "multistep-detection" ? scene : null)
               .then((outcome) => ({ ok: true as const, outcome }))
               .catch((err: Error) => ({ ok: false as const, err }))
               .finally(() => this.proxy.runFinished(runIndex));
@@ -386,6 +398,16 @@ export class SceneExecutor implements ExperimentExecutor {
           if (runHits.length === 0) {
             // The executor's own count, independent of anything inside the sandbox.
             return this.uncertain(scene, `${tag}no request reached ENVIRONMENT_URL — nothing was observed in this scene state`, rep + 1, mergedTrace, environment);
+          }
+          if (mode.kind === "multistep-detection") {
+            const expected = [["POST", "/api/login"], ["GET", "/api/session"],
+              ["GET", "/api/slots"], ["POST", "/api/book"]] as const;
+            if (runHits.length !== 4 || runHits.some((hit, i) => hit.ordinal !== i + 1
+              || hit.method !== expected[i]![0] || hit.path !== expected[i]![1]
+              || hit.status !== 200 || hit.source !== (i === 3 ? "injected" : "target"))) {
+              return this.uncertain(scene, `${tag}the fixed HTTP-200 nested booking mutation did not occur exactly once after three completed requests`,
+                rep + 1, mergedTrace, environment);
+            }
           }
           if (outcome.inconclusive) return this.uncertain(scene, `${tag}${outcome.reason ?? "runner produced no admissible result"}`, rep + 1, mergedTrace, environment);
           if (!outcome.passed) repPassed = false;

@@ -9,10 +9,11 @@
 //                     together. Browser documents/assets bypass the barrier.
 //                     Two runs therefore execute "login, login, book, book" —
 //                     the recorded 401 overlap — instead of scheduler timing.
-//   inject            forwarded, except the request matching the rule, which
-//                     is answered with the recorded failing response (same
-//                     method, path and status in the failing HAR) or a plain
-//                     JSON failure when the recording has none
+//   inject            generic recorded/error response (non-Multistep)
+//   multistep-detection  forward the four fixed API calls; only when the
+//                     validated nested book response agrees with the live
+//                     account/token/version/slot chain, flip its existing
+//                     booking.confirmed boolean from true to false (HTTP 200)
 //   replay            answered from a HAR; the target is never contacted
 //
 // Every request is counted per run. The executor's evidence gate reads these
@@ -54,10 +55,32 @@ export interface ArmOptions {
   failingHar?: Har | null;
   /** lockstep barrier: how long to wait for the other runs' request k before forwarding anyway */
   barrierTimeoutMs?: number;
+  /** Granted only after re-loading and validating a remote failing v3 bundle. */
+  trustedMultiStepDetection?: boolean;
 }
 
 const HOP_BY_HOP = new Set(["host", "connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "proxy-connection", "content-length", "accept-encoding", "expect"]);
 const DROP_RESPONSE = new Set(["content-encoding", "transfer-encoding", "content-length", "connection", "keep-alive"]);
+
+interface DetectionState {
+  account: string;
+  token: string;
+  version: number;
+  session: boolean;
+  slots: boolean;
+}
+
+/** Parser bound to the fixed transaction; never retain or log raw bodies. */
+function boundedJsonObject(bytes: Buffer): Record<string, unknown> | null {
+  if (bytes.length > 16 * 1024) return null;
+  try {
+    const value: unknown = JSON.parse(bytes.toString("utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  } catch { return null; }
+}
+function version(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000_000;
+}
 
 interface Pending {
   runIndex: number;
@@ -127,6 +150,8 @@ export class SceneProxy {
   private actionOrdinals: number[] = [];
   private barrier: Barrier | null = null;
   private replayUsed = new Map<string, number>();
+  /** Raw identities live only in memory during this one scene repetition. */
+  private detectionStates: Array<DetectionState | null> = [];
 
   /** Arm the proxy for one scene repetition. Returns one ENVIRONMENT_URL per run. */
   async arm(opts: ArmOptions): Promise<string[]> {
@@ -136,6 +161,7 @@ export class SceneProxy {
     this.ordinals = Array.from({ length: opts.runs }, () => 0);
     this.actionOrdinals = Array.from({ length: opts.runs }, () => 0);
     this.replayUsed = new Map();
+    this.detectionStates = Array.from({ length: opts.runs }, () => null);
     this.barrier = opts.mode.kind === "live-concurrent" && opts.runs > 1 ? new Barrier(opts.runs, opts.barrierTimeoutMs ?? 2000) : null;
     this.urls = [];
     for (let i = 0; i < opts.runs; i++) {
@@ -168,6 +194,7 @@ export class SceneProxy {
 
   async close(): Promise<void> {
     await this.closeServers();
+    this.detectionStates = [];
   }
 
   private async closeServers(): Promise<void> {
@@ -181,17 +208,28 @@ export class SceneProxy {
     const ordinal = ++this.ordinals[runIndex];
     const method = (req.method ?? "GET").toUpperCase();
     const url = new URL(req.url ?? "/", this.urls[runIndex]);
-    const body = await readBody(req);
     const action = shouldInterleave(req);
     const hit: ProxyHit = { runIndex, ordinal, method, path: url.pathname, status: 0, action, source: "error" };
     this.hitsList.push(hit);
+    let body: Buffer;
+    try {
+      body = await readBody(req, opts.mode.kind === "multistep-detection" ? 1024 : undefined);
+    } catch {
+      hit.status = 413;
+      res.writeHead(413, { "content-type": "application/json" });
+      res.end('{"error":"verify-fix detection request exceeds bound"}');
+      return;
+    }
 
     let answer: Answer = { status: 502, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ error: "verify-fix proxy: not handled" })), source: "error" };
     const forward = async () => {
       try {
-        answer = await this.answer(opts, runIndex, method, url, req, body);
+        answer = await this.answer(opts, runIndex, ordinal, method, url, req, body);
       } catch (err) {
-        answer = { status: 502, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ error: `verify-fix proxy: ${(err as Error).message}` })), source: "error" };
+        const message = opts.mode.kind === "multistep-detection"
+          ? "verify-fix detection forward unavailable" : `verify-fix proxy: ${(err as Error).message}`;
+        answer = { status: 502, headers: { "content-type": "application/json" },
+          body: Buffer.from(JSON.stringify({ error: message })), source: "error" };
       }
     };
     // Browser document/script/style/image requests can arrive in a different
@@ -212,7 +250,7 @@ export class SceneProxy {
     res.end(answer.body);
   }
 
-  private async answer(opts: ArmOptions, runIndex: number, method: string, url: URL, req: IncomingMessage, body: Buffer): Promise<Answer> {
+  private async answer(opts: ArmOptions, runIndex: number, ordinal: number, method: string, url: URL, req: IncomingMessage, body: Buffer): Promise<Answer> {
     const mode = opts.mode;
     if (mode.kind === "replay") {
       if (opts.replayBrowserAssetsFromTarget && !shouldInterleave(req)) {
@@ -224,10 +262,85 @@ export class SceneProxy {
     if (mode.kind === "inject" && matchesRule(mode.rule, method, url)) return injected(mode.rule, opts.failingHar ?? null);
     if (mode.kind === "unknown" || mode.kind === "pending") throw new Error(mode.reason);
     if (!opts.target) throw new Error("no target for a live scene (pass --target <url>)");
-    return this.forwardToTarget(opts.target, this.urls[runIndex], method, url, req, body);
+    if (mode.kind === "multistep-detection" && !opts.trustedMultiStepDetection) {
+      throw new Error("Multistep detection has no remote failing-side provenance");
+    }
+    const forwarded = await this.forwardToTarget(opts.target, this.urls[runIndex], method, url, req, body,
+      mode.kind === "multistep-detection" ? 16 * 1024 : undefined);
+    return mode.kind === "multistep-detection"
+      ? this.mutateNestedBooking(runIndex, ordinal, method, url, req, body, forwarded)
+      : forwarded;
   }
 
-  private async forwardToTarget(target: string, proxyOrigin: string, method: string, url: URL, req: IncomingMessage, body: Buffer): Promise<Answer> {
+  /** The ONLY Multistep response mutation. It cannot set a path, status,
+   * field name, arbitrary body, or new fact. If any runtime relationship is
+   * absent, forward unchanged and let the scene's mutation-hit gate return
+   * UNCERTAIN. The original remote recording is never modified or re-admitted. */
+  private mutateNestedBooking(runIndex: number, ordinal: number, method: string, url: URL,
+    req: IncomingMessage, requestBody: Buffer, answer: Answer): Answer {
+    const sequence = [["POST", "/api/login"], ["GET", "/api/session"],
+      ["GET", "/api/slots"], ["POST", "/api/book"]] as const;
+    const expected = sequence[ordinal - 1];
+    if (!expected || method !== expected[0] || url.pathname !== expected[1]
+      || url.search || url.hash || answer.status !== 200) return answer;
+    const response = boundedJsonObject(answer.body);
+    if (!response) return answer;
+    if (ordinal === 1) {
+      const input = boundedJsonObject(requestBody);
+      if (!input || Object.keys(input).length !== 1 || typeof input.account !== "string"
+        || !input.account || input.account.length > 512 || req.headers.authorization !== undefined
+        || response.ok !== true || response.account !== input.account
+        || typeof response.token !== "string" || !response.token || response.token.length > 512
+        || !version(response.version)) return answer;
+      this.detectionStates[runIndex] = {
+        account: input.account, token: response.token, version: response.version, session: false, slots: false,
+      };
+      return answer;
+    }
+    const state = this.detectionStates[runIndex];
+    const previous = this.hitsList.filter((hit) => hit.runIndex === runIndex && hit.ordinal < ordinal);
+    if (!state || previous.length !== ordinal - 1 || previous.some((hit, i) =>
+      hit.ordinal !== i + 1 || hit.method !== sequence[i]![0] || hit.path !== sequence[i]![1]
+      || hit.status !== 200 || hit.source !== "target")) return answer;
+    if (ordinal === 2) {
+      if (requestBody.length !== 0 || req.headers.authorization !== `Bearer ${state.token}`
+        || response.valid !== true || response.account !== state.account
+        || response.tokenVersion !== state.version || response.currentVersion !== state.version) return answer;
+      state.session = true;
+      return answer;
+    }
+    if (ordinal === 3) {
+      if (!state.session || requestBody.length !== 0 || req.headers.authorization !== undefined
+        || !Array.isArray(response.slots) || response.slots.length > 64
+        || !response.slots.includes("09:30") || !version(response.delayMs)) return answer;
+      state.slots = true;
+      return answer;
+    }
+    const input = boundedJsonObject(requestBody);
+    const booking = response.booking;
+    if (!state.session || !state.slots || !input || Object.keys(input).length !== 1
+      || input.slot !== "09:30" || req.headers.authorization !== `Bearer ${state.token}`
+      || !/^application\/json(?:\s*;|$)/i.test(answer.headers["content-type"] ?? "")
+      || Object.keys(response).length !== 1 || !Object.hasOwn(response, "booking")
+      || !booking || typeof booking !== "object" || Array.isArray(booking)
+      || JSON.stringify(Object.keys(booking).sort()) !== JSON.stringify(["account", "confirmed", "sessionVersion", "slot", "status"])
+      || (booking as Record<string, unknown>).confirmed !== true
+      || (booking as Record<string, unknown>).status !== "CONFIRMED"
+      || (booking as Record<string, unknown>).account !== state.account
+      || (booking as Record<string, unknown>).slot !== "09:30"
+      || (booking as Record<string, unknown>).sessionVersion !== state.version) return answer;
+    this.detectionStates[runIndex] = null;
+    // All other booking properties are copied from the ACTUAL HTTP-200
+    // target response, after their presence and relationships were checked.
+    // Do not forward upstream headers (including cookies, validators, or
+    // secret-bearing extensions) on this newly encoded response.
+    return { status: 200, headers: { "content-type": "application/json" },
+      body: Buffer.from(JSON.stringify({ booking: { ...(booking as Record<string, unknown>), confirmed: false } })),
+      source: "injected" };
+  }
+
+  private async forwardToTarget(target: string, proxyOrigin: string, method: string, url: URL, req: IncomingMessage, body: Buffer,
+    detectionResponseLimit?: number): Promise<Answer> {
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries(req.headers)) {
       if (v === undefined || HOP_BY_HOP.has(k)) continue;
@@ -242,7 +355,9 @@ export class SceneProxy {
       if (DROP_RESPONSE.has(name)) return;
       out[name] = name === "location" ? rewriteOrigin(value, target, proxyOrigin) : value;
     });
-    return { status: res.status, headers: out, body: Buffer.from(await res.arrayBuffer()), source: "target" };
+    const responseBody = detectionResponseLimit === undefined
+      ? Buffer.from(await res.arrayBuffer()) : await boundedResponseBody(res, detectionResponseLimit);
+    return { status: res.status, headers: out, body: responseBody, source: "target" };
   }
 
   private fromRecording(har: Har | null, method: string, url: URL): Answer {
@@ -265,13 +380,46 @@ interface Answer {
   source: ProxyHit["source"];
 }
 
-function readBody(req: IncomingMessage): Promise<Buffer> {
+function readBody(req: IncomingMessage, maxBytes?: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (c: Buffer) => chunks.push(c));
-    req.on("end", () => resolve(Buffer.concat(chunks)));
+    let size = 0;
+    let exceeded = false;
+    req.on("data", (c: Buffer) => {
+      if (exceeded) return;
+      if (maxBytes !== undefined && size + c.length > maxBytes) {
+        exceeded = true;
+        chunks.length = 0;
+        return;
+      }
+      size += c.length;
+      chunks.push(c);
+    });
+    req.on("end", () => exceeded ? reject(new Error("bounded detection request")) : resolve(Buffer.concat(chunks, size)));
     req.on("error", reject);
   });
+}
+
+async function boundedResponseBody(response: Response, maxBytes: number): Promise<Buffer> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await response.body?.cancel();
+    throw new Error("bounded detection response");
+  }
+  const reader = response.body?.getReader();
+  if (!reader) return Buffer.alloc(0);
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return Buffer.concat(chunks, size);
+    if (size + value.length > maxBytes) {
+      await reader.cancel();
+      throw new Error("bounded detection response");
+    }
+    chunks.push(Buffer.from(value));
+    size += value.length;
+  }
 }
 
 function samePath(recordedUrl: string, url: URL): boolean {

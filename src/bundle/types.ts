@@ -6,7 +6,7 @@ import type { SceneType } from "../types.ts";
 import type { AssertionInventory } from "../types.ts";
 import type { ReproductionMode } from "./rca-mode.ts";
 
-export type SceneMode = "live" | "live-concurrent:2" | "replay:failing.har" | "replay:passing.har" | "replay:failing.api.json" | "replay:passing.api.json" | `inject:${string}`;
+export type SceneMode = "live" | "live-concurrent:2" | "replay:failing.har" | "replay:passing.har" | "replay:failing.api.json" | "replay:passing.api.json" | `inject:${string}` | "detect:POST /api/book -> 200:booking.confirmed=false";
 
 export interface SceneV3 {
   sceneId: string;
@@ -53,8 +53,9 @@ export interface FailurePoint {
    * went stale), the request the failing assertion depends on. Browser
    * checks measure the last API call before the same step in the PASSING run;
    * Multistep binds the failing run's HTTP-200 booking request to source and
-   * leaves unavailable passing-run status and interval null. Breaking that
-   * request is the detection scene — a repaired check must still fail.
+   * leaves unavailable passing-run status and interval null. Its separate
+   * trusted local detection flips only the validated nested confirmation
+   * boolean at HTTP 200; a repaired hard assertion must still fail.
    */
   dependency: { method: string; url: string; path: string; passingStatus: number | null; msBeforeStep: number | null; stepLine: number | null; stepTitle: string } | null;
 }

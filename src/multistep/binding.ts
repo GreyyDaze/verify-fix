@@ -37,6 +37,33 @@ export function boundFailureAssertion(steps: MultiStepRecording["steps"],
     repairedSubject: "body.booking.confirmed", matcher: "toBe", target: "true", negated: false };
 }
 
+/** Local detection only: the ORIGINAL remote binding must already have been
+ * revalidated separately. Require the candidate's hard, unnegated repaired
+ * assertion at the reporter's exact failure line. The original v3 admission
+ * function above continues to require body.confirmed and a nested true body. */
+export function boundDetectionFailureAssertion(steps: MultiStepRecording["steps"],
+  source: Pick<MultiStepSourceModel, "script" | "errors"> | null, file: string,
+  protectedFailure: MultiStepFailureAssertion): boolean {
+  if (source?.errors.length || !source?.script || source.script.file !== file
+    || file.split("/").at(-1) !== "multistep-booking.spec.ts"
+    || protectedFailure.subject !== "body.confirmed" || protectedFailure.repairedSubject !== "body.booking.confirmed"
+    || protectedFailure.step !== "book 09:30" || protectedFailure.negated
+    || protectedFailure.matcher !== "toBe" || protectedFailure.target !== "true"
+    || protectedFailure.id !== assertionId("body.confirmed", "toBe", "true")) return false;
+  const book = steps[3];
+  if (steps.length !== 4 || !book || book.title !== "book 09:30" || book.status !== "failed"
+    || book.error !== "ASSERTION_FAILED" || !Number.isSafeInteger(book.failureLine) || (book.failureLine ?? 0) < 1
+    || (book.requests.length !== 0 && (book.requests.length !== 1 || book.requests[0]!.method !== "POST"
+      || book.requests[0]!.path !== "/api/book" || book.requests[0]!.status !== 200))
+    || (book.assertions.length !== 0 && !book.assertions.some((a) => a.expected === true
+      && a.actual !== true && a.passed !== true))) return false;
+  const onLine = source.script.assertions.filter((a) => a.sourceLine === book.failureLine && a.stepTitle === book.title);
+  const assertion = onLine[0];
+  return onLine.length === 1 && Boolean(assertion && assertion.subject === protectedFailure.repairedSubject
+    && assertion.matcher === protectedFailure.matcher && assertion.target === protectedFailure.target
+    && !assertion.negated && assertion.id === protectedFailure.id);
+}
+
 export interface RemoteBindingContext {
   side: "failing" | "passing";
   checkId: string;

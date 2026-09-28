@@ -46,7 +46,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import ts from "typescript";
-import type { TraceStep } from "../types.ts";
+import type { Bundle, Scene, TraceStep } from "../types.ts";
+import { trustedMultiStepDetection } from "./detection.ts";
 import { SEED_MODULE } from "../sandbox.ts";
 import { normalizeMultiStepCapture, type MultiStepCapture } from "./normalize.ts";
 import { startOriginBridge, type BridgeRequestEvidence, type OriginBridge } from "./origin-bridge.ts";
@@ -57,8 +58,8 @@ import { canonicalMultiStepScriptProblem, parseMultiStepProject } from "./source
 import { MAX_REPORTER_AUDIT_BYTES, parseReporterAudit, TRUSTED_REQUEST_REPORTER, type ReporterRequestEvidence } from "./reporter.ts";
 import { parseMultiStepScript } from "./source.ts";
 import { trustedRegionalAccounts } from "./accounts.ts";
-import { multiStepShapeProblems } from "./shape.ts";
-import { boundFailureAssertion } from "./binding.ts";
+import { multiStepDetectionShapeProblems, multiStepShapeProblems } from "./shape.ts";
+import { boundDetectionFailureAssertion, boundFailureAssertion } from "./binding.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -93,6 +94,8 @@ export interface MultiStepSandboxOptions {
   checkFile: string;
   /** Trusted recorded source, when invoked through the scene executor. */
   originalFiles?: Record<string, string>;
+  /** Only the revalidated remote failing-side detection scene can opt in. */
+  detection?: { bundle: Bundle; scene: Scene };
   seed?: number;
 }
 
@@ -196,6 +199,7 @@ export function staticBrowserFreeScript(file: string, source: string): { free: b
 export function bridgeReporterMismatch(
   bridge: BridgeRequestEvidence[], capture: MultiStepCapture, audit: ReporterRequestEvidence[] | null = null,
   trustedOrigin?: string,
+  trustedDetection = false,
 ): string | null {
   const jsonRequests = capture.steps.flatMap((s) => s.requests.map((r) => ({
     method: r.method ?? "OTHER",
@@ -211,7 +215,8 @@ export function bridgeReporterMismatch(
   if (bridge.length !== 4 || capture.steps.length !== (capture.kind === "failing" ? 4 : 5)) {
     return "bridge/reporter transaction is not the exact executed four-request sequence";
   }
-  if (jsonRequests.length !== 0 && (jsonRequests.length !== 4 || multiStepShapeProblems(capture).length)) {
+  if (jsonRequests.length !== 0 && (jsonRequests.length !== 4
+    || (trustedDetection ? multiStepDetectionShapeProblems(capture) : multiStepShapeProblems(capture)).length)) {
     return "bridge/reporter JSON response evidence is not the canonical transaction";
   }
   // The JSON reporter is advisory: Playwright normally filters pw:api steps
@@ -356,6 +361,12 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
     const original = parseMultiStepProject(new Map(Object.entries(ctx.originalFiles)), checkFile);
     const policy = evaluateMultiStepPolicy(original, projectModel);
     if (policy.rejected || policy.uncertain) return inconclusive("Multistep recorded source policy rejects or cannot prove this candidate — no runner was started");
+  }
+  const detection = ctx.detection && ctx.originalFiles && ctx.checkFile === ctx.detection.bundle.check.file
+    && JSON.stringify(ctx.originalFiles) === JSON.stringify(ctx.detection.bundle.files)
+    ? trustedMultiStepDetection(ctx.detection.bundle, ctx.detection.scene) : null;
+  if (ctx.detection && !detection) {
+    return inconclusive("Multistep detection lacks validated remote failing-side provenance — no runner was started");
   }
 
   const permitted = new Set(["REGION", "MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1"]);
@@ -554,7 +565,7 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
     }
     // Bridged execution: bridge evidence must corroborate the reporter.
     // Zero bridge requests with reporter traffic is UNCERTAIN by construction.
-    const mismatch = bridgeReporterMismatch(bridge.evidence, capture, audit, bridge.origin);
+    const mismatch = bridgeReporterMismatch(bridge.evidence, capture, audit, bridge.origin, Boolean(detection));
     if (mismatch) {
       return inconclusive(mismatch, { trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses, environmentOrigin: bridge.origin, proxyEvidence, reporterEvidence, diagnostics });
     }
@@ -562,10 +573,14 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
       // The reporter's last failed line must be the one uniquely protected
       // unnegated stale assertion in the validated source, after four 200s.
       // JSON request bodies, when available, were checked against the bridge.
-      const bound = boundFailureAssertion(capture.steps.map((step) => ({ ...step,
+      const failureSteps = capture.steps.map((step) => ({ ...step,
         error: step.error && /expect\s*\(/i.test(step.error) ? "ASSERTION_FAILED" : step.error,
-      })), projectModel?.script && projectModel.errors.length === 0 ? projectModel
-        : { script: sourceModel, errors: sourceModel.errors }, checkFile, true);
+      }));
+      const source = projectModel?.script && projectModel.errors.length === 0 ? projectModel
+        : { script: sourceModel, errors: sourceModel.errors };
+      const bound = detection
+        ? boundDetectionFailureAssertion(failureSteps, source, checkFile, detection.failureAssertion)
+        : boundFailureAssertion(failureSteps, source, checkFile, true);
       if (!bound || childResult.code === 0) {
         return inconclusive("Multistep failing assertion is not uniquely source-bound to the protected book contract", {
           trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses, environmentOrigin,

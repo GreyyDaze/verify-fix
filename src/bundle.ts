@@ -9,7 +9,8 @@ import { join, relative, resolve } from "node:path";
 import type { ApiRecording, Bundle, BundleConfig, Scene } from "./types.ts";
 import type { ManifestV3 } from "./bundle/types.ts";
 import { parseCheckConfig } from "./scene/config-diff.ts";
-import { parseMode } from "./scene/modes.ts";
+import { MULTISTEP_DETECTION_MODE, parseMode } from "./scene/modes.ts";
+import { recordedNestedBookingConfirmed } from "./multistep/shape.ts";
 import { validMultiStepStoredRecording } from "./multistep/recording-schema.ts";
 import { multistepProblemCategory } from "./multistep/sanitize.ts";
 import { multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_FILE_BYTES, MULTISTEP_MAX_SOURCE_FILES } from "./multistep/files.ts";
@@ -317,7 +318,8 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
     const bound = recorded.failing?.binding.failureAssertion;
     if (bound && expectedPoint) failureAssertion = { file, line: bound.line, id: bound.id, step: bound.step };
     const detection = m.scenes.filter((scene) => scene.type === "DETECTION");
-    if (recorded.failing && (detection.length !== 1 || detection[0]!.mode !== "inject:POST /api/book -> 500"
+    if (recorded.failing && (detection.length !== 1 || !recordedNestedBookingConfirmed(recorded.failing.steps)
+      || detection[0]!.mode !== MULTISTEP_DETECTION_MODE
       || detection[0]!.verdict.provenance.kind !== "recorded"
       || detection[0]!.verdict.provenance.runId !== recorded.failing.binding.resultId
       || detection[0]!.verdict.provenance.artifactId !== "recordings/failing.multistep.json"

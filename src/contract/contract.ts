@@ -6,6 +6,7 @@
 
 import type { Assertion, AssertionInventory, Bundle, EvidenceRow, Scene, SceneType } from "../types.ts";
 import { parseMultiStepProject } from "../multistep/source.ts";
+import { repairedBookingSubject } from "../multistep/repair.ts";
 import { parseProjectInventory, inventoryDiff, type InventoryDiff } from "../assertion/inventory.ts";
 
 export interface ContractReport {
@@ -43,13 +44,22 @@ function multistepTupleDiff(bundle: Bundle, before: Map<string, string>, after: 
   const removed: Assertion[] = [];
   const added: Assertion[] = [];
   const failure = bundle.multistep?.problems.length === 0 ? bundle.multistep.failureAssertion : null;
-  const repairedStaleField = (old: typeof oldModel.assertions[number]): boolean => {
-    if (!failure || oldModel.errors.length || newModel.errors.length
-      || failure.file !== bundle.check.file || failure.line !== old.sourceLine || failure.id !== old.id
-      || failure.step !== "book 09:30" || old.stepTitle !== failure.step || old.subject !== "body.confirmed"
-      || old.matcher !== "toBe" || old.target !== "true" || old.negated) return false;
-    return newModel.assertions.some((next) => next.stepTitle === failure.step && next.id === old.id
-      && !next.negated && next.matcher === old.matcher && next.target === old.target && next.subject === "body.booking.confirmed");
+  const originalStale = oldModel.assertions.find((item) => item.stepTitle === "book 09:30"
+    && item.sourceLine === failure?.line && item.id === failure?.id && item.subject === "body.confirmed"
+    && item.matcher === "toBe" && item.target === "true" && !item.negated);
+  const protectedRepair = Boolean(failure && originalStale && failure.file === bundle.check.file
+    && failure.step === "book 09:30" && !oldModel.errors.length && !newModel.errors.length
+    && newModel.assertions.some((item) => item.stepTitle === failure.step && item.id === failure.id
+      && item.subject === "body.booking.confirmed" && item.matcher === "toBe"
+      && item.target === "true" && !item.negated));
+  const repairedBookField = (old: typeof oldModel.assertions[number]): boolean => {
+    const subject = repairedBookingSubject(old.subject);
+    if (!protectedRepair || !failure || !subject || old.negated || old.stepTitle !== failure.step) return false;
+    const replacement = { ...old, subject };
+    // A duplicated assertion cannot be discharged by just one same-ID
+    // replacement. Require every occurrence to remain hard and step-scoped.
+    if ((newCounts.get(key(replacement)) ?? 0) < (oldCounts.get(key(old)) ?? 0)) return false;
+    return newModel.assertions.some((next) => key(next) === key(replacement));
   };
   for (let i = 0; i < oldModel.assertions.length; i++) {
     const tuple = oldModel.assertions[i]!;
@@ -58,7 +68,7 @@ function multistepTupleDiff(bundle: Bundle, before: Map<string, string>, after: 
     seenOld.set(tupleKey, seen);
     if (seen <= (newCounts.get(tupleKey) ?? 0)) continue;
     const assertion = original.assertions[i];
-    if (assertion) removed.push(repairedStaleField(tuple) ? { ...assertion, onCriticalPath: false } : assertion);
+    if (assertion) removed.push(repairedBookField(tuple) ? { ...assertion, onCriticalPath: false } : assertion);
   }
   for (let i = 0; i < newModel.assertions.length; i++) {
     const tuple = newModel.assertions[i]!;

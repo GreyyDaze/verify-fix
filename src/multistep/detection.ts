@@ -2,13 +2,12 @@
 // the unchanged remote v3 loader. A caller-supplied Scene/Bundle, a passing
 // side, a local asset, or a self-declared mode cannot grant this capability.
 // This does not add a recording schema, a provenance kind, or a verdict law.
-import { lstatSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { loadBundle } from "../bundle.ts";
 import type { Bundle, Scene } from "../types.ts";
 import { MULTISTEP_DETECTION_MODE } from "../scene/modes.ts";
 import type { MultiStepFailureAssertion } from "./capture.ts";
 import { validMultiStepStoredRecording } from "./recording-schema.ts";
+import { readBoundedBundleFile } from "./files.ts";
 import { recordedNestedBookingConfirmed } from "./shape.ts";
 
 export interface TrustedMultiStepDetection {
@@ -23,19 +22,22 @@ export function trustedMultiStepDetection(bundle: Bundle, scene: Scene): Trusted
     || scene.type !== "DETECTION" || scene.sceneId !== "detection"
     || scene.mode !== MULTISTEP_DETECTION_MODE || scene.verdict.mustFail !== true) return null;
   try {
-    const path = join(bundle.dir, "recordings/failing.multistep.json");
-    const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) return null;
-    const bytes = readFileSync(path, "utf8");
+    const recordPath = "recordings/failing.multistep.json";
+    const bytes = readBoundedBundleFile(bundle.dir, recordPath, 2 * 1024 * 1024);
     const loaded = loadBundle(bundle.dir).bundle;
-    if (readFileSync(path, "utf8") !== bytes) return null; // changed during admission
+    if (readBoundedBundleFile(bundle.dir, recordPath, 2 * 1024 * 1024) !== bytes) return null;
     const failure = loaded.multistep?.failureAssertion;
     const boundScene = loaded.scenes.find((item) => item.type === "DETECTION");
     if (loaded.multistep?.problems.length || !failure || !boundScene
       || JSON.stringify(scene) !== JSON.stringify(boundScene)
-      || JSON.stringify(bundle.files) !== JSON.stringify(loaded.files)
-      || bundle.check.file !== loaded.check.file || bundle.checkSource !== loaded.checkSource
-      || JSON.stringify(bundle.multistep?.failureAssertion) !== JSON.stringify(failure)
+      // Rebind every *authority-bearing* in-memory value. Determinism and
+      // environment assumptions are independent decision-law prerequisites:
+      // a synthetic test may supply them without gaining mutation authority.
+      // A caller cannot borrow a valid recording with a different source,
+      // scene, construct/config, or failing-side binding.
+      || (["dir", "check", "checkSource", "files", "configFile", "config", "scenes",
+        "multistep", "recordedOrigin", "oracleProvenance"] as const).some((key) =>
+        JSON.stringify(bundle[key]) !== JSON.stringify(loaded[key]))
       || !scene.assertionsInvolved.includes(failure.id)
       || scene.verdict.provenance.kind !== "recorded"
       || scene.verdict.provenance.artifactId !== "recordings/failing.multistep.json") return null;

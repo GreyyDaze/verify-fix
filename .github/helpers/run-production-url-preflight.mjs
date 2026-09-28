@@ -46,9 +46,10 @@ import {
 /** Stable reasons this runner can add (resolver reasons pass through). */
 // expected-deployment-id-invalid | expected-sha-invalid |
 // expected-environment-invalid | unsafe-event-url | repository-invalid |
-// github-token-missing | deployment-response-invalid | deployment-not-found |
-// statuses-not-readable | statuses-response-invalid | statuses-link-invalid |
-// statuses-truncated | runner-failed
+// github-token-missing | repository-response-invalid | default-branch-not-main |
+// main-response-invalid | main-revision-mismatch | deployment-response-invalid |
+// deployment-not-found | statuses-not-readable | statuses-response-invalid |
+// statuses-link-invalid | statuses-truncated | runner-failed
 
 const GITHUB_API_ORIGIN = "https://api.github.com";
 /** Upper bound on status-history pages (full pages of 100 only). */
@@ -57,6 +58,9 @@ const MAX_STATUS_PAGES = 5;
 const MAX_STATUSES = 500;
 /** Upper bound per page so a page cannot balloon the collection. */
 const STATUS_PAGE_SIZE = 100;
+/** A GitHub status page of 100 entries must fit this byte budget. */
+const MAX_GITHUB_JSON_BYTES = 1024 * 1024;
+const GITHUB_TIMEOUT_MS = 10_000;
 
 /**
  * Validate the next-page URL from a GitHub `Link` header before any request
@@ -82,7 +86,9 @@ export function resolveStatusesNextUrl(nextUrlCandidate, repo, deploymentId) {
   if (parsed.origin !== GITHUB_API_ORIGIN) return null;
   if (parsed.username !== "" || parsed.password !== "") return null;
   const expectedPath = `/repos/${repo}/deployments/${deploymentId}/statuses`;
-  if (parsed.pathname !== expectedPath) return null;
+  if (parsed.pathname !== expectedPath || parsed.hash) return null;
+  if (parsed.searchParams.size !== 2 || parsed.searchParams.get("per_page") !== String(STATUS_PAGE_SIZE)
+    || !/^[1-9]\d*$/.test(parsed.searchParams.get("page") ?? "")) return null;
   return parsed.href;
 }
 
@@ -97,6 +103,35 @@ function nextLinkFrom(linkHeader) {
   const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
   if (match === null) return null;
   return match[1] ?? null;
+}
+
+/** Bound and parse one JSON response; even a compromised or malformed API
+ * page cannot allocate arbitrarily or write response content to the log.
+ * @param {Response} response
+ * @returns {Promise<unknown>}
+ */
+async function boundedJson(response) {
+  const declared = response.headers.get("content-length");
+  if (declared !== null && (!/^\d+$/.test(declared) || !Number.isSafeInteger(Number(declared))
+    || Number(declared) > MAX_GITHUB_JSON_BYTES)) throw new Error("GitHub response bound");
+  if (!response.body) throw new Error("GitHub response has no body");
+  const reader = response.body.getReader();
+  /** @type {Buffer[]} */
+  const chunks = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const part = await reader.read();
+      if (part.done) break;
+      size += part.value.byteLength;
+      if (size > MAX_GITHUB_JSON_BYTES) throw new Error("GitHub response bound");
+      chunks.push(Buffer.from(part.value));
+    }
+  } catch {
+    await reader.cancel().catch(() => {});
+    throw new Error("GitHub response unreadable");
+  }
+  return JSON.parse(Buffer.concat(chunks, size).toString("utf8"));
 }
 
 /**
@@ -125,6 +160,8 @@ async function githubGet(url, token, fetchImpl = fetch) {
   }
   const response = await fetchImpl(parsed.href, {
     method: "GET",
+    redirect: "manual",
+    signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
     headers: {
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
@@ -132,10 +169,10 @@ async function githubGet(url, token, fetchImpl = fetch) {
     },
   });
   return {
-    ok: response.ok,
+    ok: response.status === 200,
     status: response.status,
     headers: response.headers,
-    json: () => response.json(),
+    json: () => boundedJson(response),
   };
 }
 
@@ -173,12 +210,15 @@ export async function fetchAllStatuses(repo, deploymentId, token, fetchImpl = fe
 
     const linkHeader = response.headers.get("link");
     const hasNext = linkHeader !== null && /rel="next"/.test(linkHeader);
-    if (!hasNext) return { statuses: collected };
+    // A full page without an explicit next link cannot prove that older
+    // potentially conflicting statuses were not truncated by a proxy.
+    if (!hasNext) return body.length === STATUS_PAGE_SIZE
+      ? { error: "statuses-truncated" } : { statuses: collected };
     const candidate = nextLinkFrom(linkHeader);
     const nextUrl2 = resolveStatusesNextUrl(candidate, repo, deploymentId);
-    if (nextUrl2 === null) {
-      // Malicious, off-host, wrong-path, or credentialed link: fail closed
-      // and never forward the token there.
+    if (nextUrl2 === null || Number(new URL(nextUrl2).searchParams.get("page")) !== page + 1) {
+      // Malicious, off-host, wrong-path, skipped/repeated page or credentialed
+      // link: fail closed and never forward the token there.
       return { error: "statuses-link-invalid" };
     }
     nextUrl = nextUrl2;
@@ -296,6 +336,35 @@ async function runPreflight() {
     return 1;
   }
 
+  // Establish CURRENT main before either deployment status can ever make a
+  // protected job eligible for approval. A temporary Arena-branch incident
+  // deployment must never request production approval, even if it has two
+  // superficially valid success statuses.
+  const repositoryResponse = await githubGet(`${GITHUB_API_ORIGIN}/repos/${repo}`, token);
+  if (!repositoryResponse.ok) { fail("repository-response-invalid"); return 1; }
+  let repository;
+  try { repository = await repositoryResponse.json(); }
+  catch { fail("repository-response-invalid"); return 1; }
+  if (!repository || typeof repository !== "object" || Array.isArray(repository)
+    || !("default_branch" in repository) || repository.default_branch !== "main") {
+    fail("default-branch-not-main"); return 1;
+  }
+  const mainResponse = await githubGet(`${GITHUB_API_ORIGIN}/repos/${repo}/branches/main`, token);
+  if (!mainResponse.ok) { fail("main-response-invalid"); return 1; }
+  let branch;
+  try { branch = await mainResponse.json(); }
+  catch { fail("main-response-invalid"); return 1; }
+  if (!branch || typeof branch !== "object" || Array.isArray(branch)
+    || !("name" in branch) || branch.name !== "main"
+    || !("commit" in branch) || !branch.commit || typeof branch.commit !== "object"
+    || !("sha" in branch.commit) || typeof branch.commit.sha !== "string"
+    || !/^[0-9a-f]{40}$/.test(branch.commit.sha)) {
+    fail("main-response-invalid"); return 1;
+  }
+  if (branch.commit.sha !== process.env.DEPLOYMENT_SHA) {
+    fail("main-revision-mismatch"); return 1;
+  }
+
   // Deployment metadata only — no Vercel API, no VERCEL_TOKEN.
   const deploymentUrl =
     `${GITHUB_API_ORIGIN}/repos/${repo}/deployments/${deploymentId}`;
@@ -341,6 +410,7 @@ async function runPreflight() {
     expectedDeploymentId: deploymentId,
     expectedSha: process.env.DEPLOYMENT_SHA ?? "",
     expectedEnvironment: process.env.DEPLOYMENT_ENVIRONMENT ?? "",
+    expectedRepository: repo,
     deployment: deploymentEvidence,
     statuses: statusesOutcome.statuses,
     eventUrl: process.env.EVENT_URL ?? "",
@@ -367,6 +437,12 @@ async function runPreflight() {
   writeOutput("reason", resolution.reason);
   writeOutput("verification_url", resolution.verificationUrl);
   writeOutput("monitoring_url", resolution.monitoringUrl);
+  // Outputs carry numeric IDs and a Git SHA, not raw status JSON. These
+  // identify which exact pair was approved and can be rechecked after approval.
+  writeOutput("deployment_id", String(resolution.deploymentId));
+  writeOutput("deployment_sha", resolution.sha);
+  writeOutput("generated_status_id", String(resolution.generatedStatusId));
+  writeOutput("stable_status_id", String(resolution.stableStatusId));
   return 0;
 }
 

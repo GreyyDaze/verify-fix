@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -85,6 +85,7 @@ test("workflows never execute TypeScript entrypoints or experimental Node flags"
 });
 
 test("every job that executes helpers runs setup-node with NODE_VERSION first", () => {
+  assert.match(protectedGate, /NODE_VERSION: "24\.21\.0"/);
   const invokerJobs = Object.entries(jobs).filter(([, block]) =>
     /^\s*run: node .*\.github\/helpers\//m.test(block),
   );
@@ -184,21 +185,11 @@ test("URL roles stay separated: verification is gated+verified, monitoring is de
     2,
     "exactly the preview and force steps bind ENVIRONMENT_URL",
   );
-  const monitoringLines = deployCode
-    .split("\n")
-    .filter((line) => line.includes("outputs.monitoring_url"));
-  assert.equal(
-    monitoringLines.length,
-    2,
-    "monitoring_url appears only in the preview and force ENVIRONMENT_URL bindings",
-  );
-  for (const line of monitoringLines) {
-    assert.match(
-      line,
-      /^ {10}ENVIRONMENT_URL: \$\{\{ needs\.production-preflight\.outputs\.monitoring_url \}\}$/,
-      `monitoring_url may only be a deploy ENVIRONMENT_URL binding: ${line}`,
-    );
-  }
+  // Other references to monitoring_url may compare the approved status pair
+  // after the protected approval; none may send it as a verification target.
+  assert.doesNotMatch(deployCode, /TARGET_URL: .*outputs\.monitoring_url/);
+  assert.doesNotMatch(deployCode, /VERIFIED_URL: .*outputs\.monitoring_url/);
+  assert.match(deployCode, /APPROVED_MONITORING: .*outputs\.monitoring_url/);
   for (const line of environmentUrlLines) {
     assert.ok(
       line.includes("needs.production-preflight.outputs.monitoring_url"),
@@ -254,62 +245,40 @@ test("candidate and preview jobs never receive production verification outputs",
   const candidateCode = codeLines(candidate).join("\n");
   assert.ok(!candidateCode.includes("verification_url"));
   assert.ok(!candidateCode.includes("monitoring_url"));
-  assert.ok(!candidateCode.includes("trusted_ref"));
+  assert.match(candidateCode, /TRUSTED_REF: \$\{\{ inputs\.trusted_ref \}\}/);
+  assert.ok(!candidateCode.includes("outputs.generated_status_id"));
+  assert.ok(!candidateCode.includes("outputs.stable_status_id"));
 });
 
 /** The environment-provided Multistep monitoring account secret names. */
 const MULTISTEP_IDENTITY_NAMES = ["MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1"] as const;
 
-test("multistep monitoring identities are wired only into the production Checkly deploy step as secret references", () => {
-  const deployJob = jobs["production-verify-and-deploy"];
-  assert.ok(deployJob, "production-verify-and-deploy job must exist");
-
-  // Both secret references exist and are supplied to the Checkly deploy step.
-  const runIdx = deployJob.indexOf("run: npx checkly deploy --force");
-  assert.ok(runIdx !== -1, "the production Checkly deploy step must exist");
-  const stepStart = deployJob.lastIndexOf("- name:", runIdx);
-  assert.ok(stepStart !== -1 && stepStart < runIdx, "deploy step must carry a name header");
-  const stepSegment = deployJob.slice(stepStart, runIdx);
+test("approved verifier inputs and both production deploy steps receive regional identities from secret references", () => {
+  const prod = jobs["production-verify-and-deploy"]!;
+  const preview = jobs["preview-gate"]!;
+  const deployStart = prod.indexOf("- name: Preview monitoring source before force");
+  const deploySegment = prod.slice(deployStart, prod.indexOf("- name: Upload production", deployStart));
   for (const name of MULTISTEP_IDENTITY_NAMES) {
-    const ref = `${name}: \${{ secrets.${name} }}`;
-    assert.ok(
-      stepSegment.includes(ref),
-      `the deploy step must supply ${name} from secrets.${name}`,
-    );
+    const line = `${name}: \${{ secrets.${name} }}`;
+    assert.equal(prod.split("\n").filter((entry) => entry.trim() === line).length, 3,
+      `${name}: once in verifier file builder, twice in Checkly deploy`);
+    assert.equal(preview.split("\n").filter((entry) => entry.trim() === line).length, 1,
+      `${name}: scoped to approved preview verifier input builder`);
+    assert.equal(deploySegment.split("\n").filter((entry) => entry.trim() === line).length, 2);
+    assert.match(prod, new RegExp(`input_names=.*${name}`));
   }
-
-  // They occur only in the protected production job — nowhere else.
-  for (const [jobName, block] of Object.entries(jobs)) {
-    if (jobName === "production-verify-and-deploy") continue;
-    for (const name of MULTISTEP_IDENTITY_NAMES) {
-      assert.ok(!block.includes(name), `${name} must not appear in job ${jobName}`);
-    }
-  }
-  const identityLines = protectedGate.split("\n").filter((line) => line.includes("MULTISTEP_USER"));
-  assert.equal(
-    identityLines.length,
-    4,
-    "exactly one env entry per identity in each of the two production deploy steps",
-  );
-  for (const line of identityLines) {
-    // No value is committed: each line is exactly the bare name paired with
-    // its OWN secret reference — nothing more.
-    const matched = MULTISTEP_IDENTITY_NAMES.some(
-      (name) => line.trim() === `${name}: \${{ secrets.${name} }}`,
-    );
-    assert.ok(matched, `identity line must be a pure secret reference: ${line}`);
-  }
-
-  // Browser identities and the API token stay separate entries alongside.
-  assert.match(stepSegment, /TEST_USER_US_EAST_1: \$\{\{ secrets\.TEST_USER_US_EAST_1 \}\}/);
-  assert.match(stepSegment, /TEST_USER_EU_WEST_1: \$\{\{ secrets\.TEST_USER_EU_WEST_1 \}\}/);
-  assert.match(stepSegment, /API_TOKEN: \$\{\{ secrets\.API_TOKEN \}\}/);
-  assert.ok(stepSegment.includes("MULTISTEP_USER_US_EAST_1"), "multistep identities are distinct from TEST_USER_*");
+  assert.match(prod, /Multistep and browser identities overlap/);
+  assert.match(preview, /Legacy API\/Playwright preview jobs never expose Multistep account/);
+  assert.match(preview, /if \[\[ "\$bundle_type" == MULTI_STEP \]\]; then/);
+  assert.match(deploySegment, /TEST_USER_US_EAST_1: \$\{\{ secrets\.TEST_USER_US_EAST_1 \}\}/);
+  assert.match(deploySegment, /TEST_USER_EU_WEST_1: \$\{\{ secrets\.TEST_USER_EU_WEST_1 \}\}/);
+  assert.match(deploySegment, /API_TOKEN: \$\{\{ secrets\.API_TOKEN \}\}/);
 });
 
 test("multistep monitoring identities never reach preflights, outputs, helpers, or the caller", () => {
-  // Not passed to production-preflight or candidate-preflight (nor preview).
-  for (const jobName of ["production-preflight", "candidate-preflight", "preview-gate"]) {
+  // Never exposed before a protected approval. Preview identities are scoped
+  // to its approved job and only written for a Multistep incident.
+  for (const jobName of ["production-preflight", "candidate-preflight"]) {
     const block = jobs[jobName];
     assert.ok(block, `${jobName} must exist`);
     for (const name of MULTISTEP_IDENTITY_NAMES) {
@@ -334,15 +303,13 @@ test("multistep monitoring identities never reach preflights, outputs, helpers, 
       `${file} must not reference multistep identities`,
     );
   }
-  // Existing URL-role and protected-verifier boundaries remain unchanged:
-  // no helper source differs from the committed snapshot.
-  const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
-  const helperDiff = execFileSync(
-    "git",
-    ["diff", "HEAD", "--", ".github/helpers"],
-    { cwd: repoRoot, encoding: "utf8" },
-  );
-  assert.equal(helperDiff, "", "helper boundaries must be unchanged by this wiring");
+  // Helpers are reviewed in this phase; a Git diff against HEAD is not a
+  // security boundary. Assert the surviving secret and network invariants.
+  for (const file of readdirSync(helpersDir)) {
+    const source = readFileSync(`${helpersDir}${file}`, "utf8");
+    assert.doesNotMatch(source, /process\.env\.VERCEL_TOKEN|api\.vercel\.com/);
+    assert.doesNotMatch(source, /process\.env\.MULTISTEP_USER_/);
+  }
 });
 
 test("production Checkly deploy previews immediately before force with identical monitoring inputs", () => {
@@ -373,24 +340,24 @@ test("production Checkly deploy previews immediately before force with identical
   assert.ok(forceIdx !== -1, "the force step must exist in the production job");
   assert.ok(previewIdx < forceIdx, "preview must execute before force");
 
-  // Immediate execution-order adjacency: no other step starts between the
-  // preview run line and the force step header, and the preview cannot be
-  // skipped on failure.
+  // Final status/identity recheck is intentionally *after* preview and
+  // directly before force: a long preview must not hide a revoked status.
   const forceHeaderIdx = deployJob.lastIndexOf("- name:", forceIdx);
   assert.ok(forceHeaderIdx > previewIdx, "force step header must follow the preview run");
   const between = deployJob.slice(previewIdx, forceHeaderIdx);
-  assert.doesNotMatch(
-    between,
-    /^\s*-\s+(name|uses|run):/m,
-    "no step may sit between preview and force",
-  );
+  assert.deepEqual([...between.matchAll(/^\s*- name: (.+)$/gm)].map((m) => m[1]), [
+    "Recheck current main and both status IDs immediately before deploy",
+    "Preserve the approved role identities and PASS as bounded evidence",
+  ]);
+  assert.match(between, /run-production-url-preflight\.mjs/);
+  assert.match(between, /test "\$FINAL_STABLE_ID" = "\$APPROVED_STABLE_ID"/);
 
   // Both steps inherit the job-level production-preflight success gate and
   // run only after the verify-fix verification command has passed.
   assert.match(deployJob, /needs: production-preflight/);
   assert.match(deployJob, /needs\.production-preflight\.outputs\.ready == 'true'/);
-  const verifyIdx = deployJob.search(/^\s+node bin\/verify-fix verify/m);
-  assert.ok(verifyIdx !== -1, "the verify-fix verification command must exist");
+  const verifyIdx = deployJob.search(/^\s+node trusted\/bin\/verify-fix verify/m);
+  assert.ok(verifyIdx !== -1, "the pinned verify-fix verification command must exist");
   assert.ok(
     verifyIdx < previewIdx && verifyIdx < forceIdx,
     "both deploy commands must run only after verify-fix verification",
@@ -484,4 +451,118 @@ test("production Checkly deploy previews immediately before force with identical
     const source = readFileSync(`${helpersDir}${file}`, "utf8");
     assert.ok(!source.includes("secrets."), `${file} must not reference secrets`);
   }
+});
+
+test("current-main production preflight precedes protected approval; non-main deployments cannot ask for approval", () => {
+  const preflight = jobs["production-preflight"]!;
+  const protectedJob = jobs["production-verify-and-deploy"]!;
+  const code = codeLines(preflight).join("\n");
+  assert.match(preflight, /if: >-\n\s+inputs\.environment_url != '' && inputs\.environment == 'Production'/);
+  assert.match(code, /run-production-url-preflight\.mjs/);
+  assert.match(preflight, /deployment_id: \$\{\{ steps\.resolve\.outputs\.deployment_id \}\}/);
+  assert.match(preflight, /deployment_sha: \$\{\{ steps\.resolve\.outputs\.deployment_sha \}\}/);
+  assert.match(preflight, /generated_status_id: \$\{\{ steps\.resolve\.outputs\.generated_status_id \}\}/);
+  assert.match(preflight, /stable_status_id: \$\{\{ steps\.resolve\.outputs\.stable_status_id \}\}/);
+  assert.doesNotMatch(preflight, /secrets\.(?!GITHUB_TOKEN)/, "preflight needs no production secrets");
+  assert.match(protectedJob, /needs\.production-preflight\.outputs\.ready == 'true'/);
+  assert.match(protectedJob, /environment: verify-fix-production/);
+  assert.match(protectedJob, /needs: production-preflight/);
+  const runner = readFileSync(new URL("../../.github/helpers/run-production-url-preflight.mjs", import.meta.url), "utf8");
+  const main = runner.indexOf("/branches/main");
+  const statuses = runner.indexOf("const statusesOutcome = await fetchAllStatuses");
+  assert.ok(main > 0 && statuses > main, "check current main before deployment status history");
+  assert.match(runner, /default_branch !== "main"/);
+  assert.match(runner, /main-revision-mismatch/);
+});
+
+test("protected job uses pinned verifier, private target metadata and complete bounded role rechecks before force", () => {
+  const job = jobs["production-verify-and-deploy"]!;
+  const checkout = job.indexOf("path: trusted\n");
+  const runtime = job.indexOf("path: candidate-runtime\n");
+  const verify = job.indexOf("node trusted/bin/verify-fix verify");
+  const preview = job.indexOf("npx checkly deploy --preview");
+  const final = job.indexOf("id: final-roles");
+  const comparison = job.indexOf("FINAL_GENERATED_ID");
+  const force = job.indexOf("npx checkly deploy --force");
+  assert.ok(runtime > 0 && checkout > runtime && verify > checkout, "trusted verifier checkout is distinct from deployed source");
+  assert.ok(verify < preview && preview < final && final < comparison && comparison < force,
+    "PASS then preview then latest identity/status recheck then deploy");
+  assert.doesNotMatch(job, /\bnode bin\/verify-fix verify\b/, "never run an untrusted verifier from candidate source");
+  assert.match(job, /--bundle "trusted\/\$VERIFY_FIX_BUNDLE"/);
+  assert.match(job, /APPROVED_BUNDLE: \$\{\{ vars\.VERIFY_FIX_BUNDLE \}\}/);
+  assert.match(job, /Require a reviewed Phase 7 Multistep incident bundle/);
+  assert.match(job, /\.check\.checkType == "MULTI_STEP"/);
+  assert.match(job, /--candidate-project candidate-runtime/);
+  assert.match(job, /--project "candidate-runtime\/\$CANDIDATE_PROJECT_PATH"/);
+  assert.match(job, /--target-metadata "\$VERIFY_FIX_TARGET_METADATA"/);
+  assert.match(job, /--target "\$TARGET_URL"/);
+  assert.match(job, /test "\$\(jq -r \.verdict artifacts\/verify-fix-production\.json\)" = PASS/g);
+  assert.match(job, /candidateRevision\.headSha artifacts\/verify-fix-production\.json\)" = "\$TARGET_REVISION"/);
+  assert.match(job, /candidateRevision\.dirty artifacts\/verify-fix-production\.json\)" = false/);
+  assert.match(job, /targetBinding\.deployment\.deploymentId artifacts\/verify-fix-production\.json\)" = "\$APPROVED_DEPLOYMENT_ID"/);
+  assert.match(job, /test "\$FINAL_VERIFICATION" = "\$APPROVED_VERIFICATION"/);
+  assert.match(job, /test "\$FINAL_MONITORING" = "\$APPROVED_MONITORING"/);
+  assert.match(job, /test "\$FINAL_GENERATED_ID" = "\$APPROVED_GENERATED_ID"/);
+  assert.match(job, /test "\$FINAL_STABLE_ID" = "\$APPROVED_STABLE_ID"/);
+  assert.match(job, /test "\$FINAL_SHA" = "\$APPROVED_SHA"/);
+  assert.match(job, /DEPLOYMENT_SHA: \$\{\{ inputs\.deployment_sha \}\}/);
+  assert.match(job, /name: Require the protected production bypass to be configured/);
+  assert.match(job, /test -n "\$BYPASS"/);
+  assert.match(job, /name: Require the verification target to be ready/);
+  assert.match(job, /working-directory: candidate-runtime\/\$\{\{ env\.CANDIDATE_PROJECT_PATH \}\}/);
+  assert.doesNotMatch(job, /VERCEL_TOKEN|api\.vercel\.com/);
+});
+
+test("temporary browser/Multistep inputs are 0600, separated, never printed, and cleaned even after failure", () => {
+  for (const jobName of ["preview-gate", "production-verify-and-deploy"]) {
+    const job = jobs[jobName]!;
+    assert.match(job, /mktemp "\$RUNNER_TEMP\/verify-fix-[^"\s]+XXXXXX"/);
+    assert.match(job, /chmod 0600 "\$env_file" "\$metadata_file"/);
+    assert.match(job, /umask 077/);
+    assert.match(job, /trap 'rm -f -- "\$env_file" "\$metadata_file"' ERR/);
+    assert.match(job, /if: always\(\)[\s\S]*?run: \|[\s\S]*?for file in "\$\{VERIFY_FIX_ENV_FILE:-\}"/);
+    assert.doesNotMatch(job, /set -x|cat "\$VERIFY_FIX_ENV_FILE"/);
+  }
+  const prod = jobs["production-verify-and-deploy"]!;
+  assert.match(prod, /--env-file "\$VERIFY_FIX_ENV_FILE"/);
+  assert.match(prod, /--executor hybrid/);
+  assert.match(prod, /BYPASS: \$\{\{ secrets\.VERCEL_AUTOMATION_BYPASS_SECRET \}\}/);
+  assert.match(prod, /MULTISTEP_USER_US_EAST_1: \$\{\{ secrets\.MULTISTEP_USER_US_EAST_1 \}\}/);
+  assert.match(prod, /MULTISTEP_USER_EU_WEST_1: \$\{\{ secrets\.MULTISTEP_USER_EU_WEST_1 \}\}/);
+  assert.match(prod, /chmod 0600 "\$env_file" "\$metadata_file"/);
+  assert.match(prod, /rm -f -- "\$file"/);
+  // The Checkly deployment receives monitoring identities; the pinned
+  // verifier reads them from the private file, not a command-line argument.
+  const verifyStep = prod.slice(prod.indexOf("- name: Verify production"), prod.indexOf("- name: Preview monitoring"));
+  assert.doesNotMatch(verifyStep, /MULTISTEP_USER_US_EAST_1: \$\{\{ secrets/);
+  assert.doesNotMatch(verifyStep, /MULTISTEP_USER_EU_WEST_1: \$\{\{ secrets/);
+});
+
+test("all multiline workflow shell blocks parse under bash -n", () => {
+  // Static syntax check: no GitHub calls, tokens, checkout, Checkly deploy or
+  // deployment implied. The installed runner uses bash on ubuntu-latest.
+  let count = 0;
+  const lines = protectedGate.split("\n");
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!/^ {8}run: \|$/.test(lines[index]!)) continue;
+    const script: string[] = [];
+    for (let next = index + 1; next < lines.length; next += 1) {
+      const line = lines[next]!;
+      if (line.trim() && !line.startsWith("          ")) break;
+      script.push(line.slice(10));
+    }
+    execFileSync("bash", ["-n"], { input: script.join("\n"), encoding: "utf8" });
+    count += 1;
+  }
+  assert.ok(count >= 13, `checked only ${count} multiline run blocks`);
+});
+
+test("the reusable workflow pins all three verifier checkouts to its trusted_ref, not an obsolete API-era SHA", () => {
+  assert.equal([...protectedGate.matchAll(/^\s+path: trusted$/gm)].length, 3);
+  assert.equal([...protectedGate.matchAll(/^\s+ref: \$\{\{ inputs\.trusted_ref \}\}$/gm)].length, 6,
+    "three verifier and three helper checkouts use the SAME immutable ref");
+  assert.equal([...protectedGate.matchAll(/Require the protected verifier checkout to equal the trusted pin/g)].length, 3);
+  assert.doesNotMatch(protectedGate, /9b39750e61daabc21d80fd7ea3e17d651c3b6088/);
+  assert.match(gate, /protected-gate\.yml@9b4322c6e4f14d71ce89274a28c7a18444b00a61/,
+    "the old caller pin stays unchanged; new workflow is staged until a reviewed later pin update");
 });

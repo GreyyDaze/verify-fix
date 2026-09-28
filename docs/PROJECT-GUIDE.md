@@ -1088,10 +1088,14 @@ changes. A protected GitHub environment must approve cloud credentials. A fork
 needs that approval plus an explicit fork flag. JSON and Markdown reports are
 uploaded.
 
-The production job accepts only the current `main` commit. It verifies the
-production deployment first. Only then does the workflow run `npx checkly
-deploy --force`. The verify-fix process itself never deploys or provisions
-anything.
+The *staged* Phase 7 production preflight (in `protected-gate.yml`) checks
+current `main` before protected approval, then rechecks exact deployment,
+status IDs and both URL roles after approval and after Checkly's deployment
+preview. The trusted verifier runs against the generated immutable URL; only
+the verified stable alias reaches `checkly deploy --preview` and `--force`.
+`gate.yml` remains pinned to the earlier reviewed snapshot, so the staged
+workflow is **not currently active**. The verifier itself never deploys or
+provisions anything.
 
 **Cost.** Each report contains candidate identity, verdict, Checkly test
 sessions, cloud check runs, local runs, browser processes, mutation runs, total
@@ -1311,14 +1315,39 @@ the operating-system temp directory, outside this repository. It exercises
 local candidate snapshots through both bad and good repairs. The Phase 5
 candidates were also run manually through real Chromium against the local app.
 
-Next up is Phase 7: one Multistep booking-workflow check in this same app and
-Checkly project, captured evidence-first from a real flat-to-nested booking
-incident; Phase 8 stays blocked until it completes. URL roles are fixed going
-forward: verification targets the generated deployment URL, while monitoring
-uses the manually verified stable alias from GitHub's deployment status — no
-new Vercel API token enters the workflow, and the Phase 6 preview's temporary
-domain exception has been removed. Phase 7's capture sends real logins and
-bookings from the user's machine, so it is not run from this sandbox.
+### Phase 7 checkpoint — pre-real-account implementation, not real proof
+
+The app now returns the nested booking success payload while the checked-in
+single Multistep check still tests the historical flat `body.confirmed` on its
+book step. Its five ordered steps and one construct are checked in **without**
+deploying the check or editing that canonical stale assertion. The verifier's
+remote-v3 admission, source policy, bounded asset/file/ZIP readers, exact
+HTTP-200 nested-field mutation, independent reporter/proxy/request audits and
+regional account isolation have local **synthetic** fixtures. The local test
+child receives only two regional names; a Multistep Checkly CLI child receives
+those names and its approved bypass/environment label, not the shared browser
+or API values. A synthetic
+`PASS` with fabricated determinism/assumptions is not a Checkly, browser,
+deployment or cloud verdict. Historic Phase 6 `158/158` is not the current
+Phase 7 suite. The pre-commit Node v24.21.0 local checkpoint ran 286/286
+focused workflow/Multistep tests and 452 full-suite tests (445 pass, exactly
+seven known legacy seeded failures, zero skips). Those failures are old DSL
+assertions against the newly nested app response, not real Checkly failures;
+an eighth failure or a skip is unacceptable.
+
+| Gate | Locally implemented/staged | Not yet established |
+| --- | --- | --- |
+| Real evidence | v3 schema and admission exercised with mock authenticated-result paths and bounded synthetic ZIPs. | Actual passing and failing Multistep result assets, source line and parser/token semantics must be inspected; sanitized bundle must be produced with packed `verify-fix bundle` after explicit account approval. No new RCA is triggered here. |
+| URL roles | Secret-free GitHub preflight requires current `main`, same deployment ID/SHA/environment, distinct safe HTTPS origins, latest authenticated Vercel Bot success and a human status marked exactly `verify-fix:stable-alias-verified` (create it with `auto_inactive: false`). Missing/ambiguous/revoked status waits or fails before approval; after approval and after deployment preview recheck both IDs and URLs. | Human verification of the stable alias for the *same deployment*, generated URL HTTP-200 health readiness, approved bypass secret and account-backed Checkly parity. No Vercel API token or host guess. |
+| Protected job | Reusable workflow checks out the verifier and incident from the immutable `trusted_ref`, candidate dependencies separately, uses 0600 temporary files, verifies the generated URL before any deploy, then uses only the stable origin for Checkly deployment. An explicit reviewed Phase 7 bundle and bypass must exist or it fails closed. | Current `gate.yml` caller pin still points to the **older** reusable workflow; this staged one cannot run until a separately reviewed pin advance. A real protected PASS, actual `checkly deploy` and repaired scheduled green in both locations have not occurred. |
+
+When real parity is authorized, use `checkly test --record --grep
+'^slots booking multistep transaction$' --retries 0` and **one** environment
+input mechanism (`--env-file` or `--env`, not both). Do not mix browser users
+and Multistep users; the latter must be distinct in both regions. Phase 8
+remains blocked until the captured incident, protected repair proof and
+repaired scheduled green exist. The detailed sequence and URL-role policy are
+in [`PLAN.md`](PLAN.md); no private account/cloud operation was run here.
 
 ---
 

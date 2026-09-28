@@ -5,7 +5,24 @@
 // test session. It never deploys or changes a scheduled monitor.
 
 import { runChecklySandbox } from "../checkly-sandbox.ts";
+import { trustedRegionalAccounts } from "../multistep/accounts.ts";
 import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExecutor, type ObservationValue, type RunContext, type Scene, type SceneObservation, type TraceStep } from "../types.ts";
+
+const MULTISTEP_REMOTE_NAMES = ["MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1",
+  "CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET", "ENVIRONMENT_NAME"] as const;
+
+/** Only the identities required by the checked Multistep construct and the
+ * approved bypass/name may cross into a cloud checkly-test child. The shared
+ * input file also holds browser/API credentials; those must never be sent to
+ * a Multistep test session. The sandbox binds ENVIRONMENT_URL to its exact
+ * trusted target separately. Null is an inconclusive pre-run rejection. */
+export function scopedChecklyEnvironment(bundle: Bundle, env: Record<string, string>): Record<string, string> | null {
+  if (bundle.check.checkType !== "MULTI_STEP") return { ...env };
+  if (!trustedRegionalAccounts(env)) return null;
+  return Object.fromEntries(MULTISTEP_REMOTE_NAMES
+    .filter((key) => env[key] !== undefined)
+    .map((key) => [key, env[key]!]));
+}
 
 export interface ChecklyCliExecutorOptions {
   target: string | null;
@@ -79,6 +96,15 @@ export class ChecklyCliExecutor implements ExperimentExecutor {
     const config = ctx?.config ?? bundle.config;
     const locations = config?.locations.length ? config.locations : bundle.config?.locations ?? [];
     if (locations.length === 0) return this.uncertain(scene, "candidate config has no Checkly location", 0, [], [], [], environment);
+    const combinedEnv = { ...this.env, ...(scene.env ?? {}) };
+    if (bundle.check.checkType === "MULTI_STEP" && Object.keys(scene.env ?? {}).some((key) =>
+      key !== "MULTISTEP_USER_US_EAST_1" && key !== "MULTISTEP_USER_EU_WEST_1")) {
+      return this.uncertain(scene, "Multistep scene cannot add unrelated cloud environment inputs", 0, [], [], [], environment);
+    }
+    const scopedEnv = scopedChecklyEnvironment(bundle, combinedEnv);
+    if (scopedEnv === null) {
+      return this.uncertain(scene, "Multistep regional cloud identities are missing or overlap", 0, [], [], [], environment);
+    }
     const checkFile = ctx?.checkFile ?? bundle.check.file;
     const files = { ...(ctx?.files ?? bundle.files), [checkFile]: patchSource };
     const checkName = ctx?.checkName ?? bundle.check.name ?? bundle.check.logicalId;
@@ -106,7 +132,7 @@ export class ChecklyCliExecutor implements ExperimentExecutor {
         assets: ctx?.assets,
         target: this.target!,
         targetRevision: this.targetRevision,
-        env: { ...this.env, ...(scene.env ?? {}) },
+        env: scopedEnv,
         location,
         checkName,
         testSessionName: `verify-fix ${bundle.incidentId} ${scene.sceneId} ${repetition + 1}/${repetitions} ${location}`,

@@ -599,6 +599,15 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
         : "Multistep browser process observed — API-only execution not proven",
       { trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses, environmentOrigin, proxyEvidence, reporterEvidence, diagnostics });
     }
+    // A failing-side recording or manifest swapped while the candidate ran
+    // cannot support a conclusive detection, even if the reporter/proxy agreed
+    // with the earlier copy. Reopen the complete remote-bound bundle again.
+    if (ctx.detection && !trustedMultiStepDetection(ctx.detection.bundle, ctx.detection.scene)) {
+      return inconclusive("Multistep detection provenance changed during execution", {
+        trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses,
+        environmentOrigin, proxyEvidence, reporterEvidence, diagnostics,
+      });
+    }
     const failed = capture.stats !== null
       ? capture.stats.unexpected > 0
       : capture.steps.some((s) => s.status === "failed");

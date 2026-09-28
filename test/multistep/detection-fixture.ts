@@ -43,6 +43,7 @@ export function startDetectionApp(options: {
   extraBookField?: string;
   versionMismatch?: boolean;
   accountMismatch?: boolean;
+  bookHeaders?: Record<string, string>;
 } = {}): Promise<DetectionApp> {
   const paths: string[] = [];
   const accounts: string[] = [];
@@ -78,7 +79,8 @@ export function startDetectionApp(options: {
         status = 401;
         body = { error: "invalid synthetic transaction" };
       }
-      res.writeHead(status, { "content-type": "application/json" });
+      res.writeHead(status, { "content-type": "application/json",
+        ...(req.method === "POST" && route === "/api/book" ? options.bookHeaders : {}) });
       res.end(JSON.stringify(body));
     });
   });

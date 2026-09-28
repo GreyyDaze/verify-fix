@@ -4,7 +4,7 @@
 // Nothing in a bundle drives the target by itself: the scene layer reads each
 // scene's `mode` and shapes traffic at the proxy (src/scene/proxy.ts).
 
-import { closeSync, constants, fstatSync, openSync, readFileSync, readSync, existsSync, lstatSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import type { ApiRecording, Bundle, BundleConfig, Scene } from "./types.ts";
 import type { ManifestV3 } from "./bundle/types.ts";
@@ -13,7 +13,7 @@ import { MULTISTEP_DETECTION_MODE, parseMode } from "./scene/modes.ts";
 import { recordedNestedBookingConfirmed } from "./multistep/shape.ts";
 import { validMultiStepStoredRecording } from "./multistep/recording-schema.ts";
 import { multistepProblemCategory } from "./multistep/sanitize.ts";
-import { multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_FILE_BYTES, MULTISTEP_MAX_SOURCE_FILES } from "./multistep/files.ts";
+import { readBoundedBundleFile, multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_FILE_BYTES, MULTISTEP_MAX_SOURCE_FILES } from "./multistep/files.ts";
 import { parseMultiStepProject } from "./multistep/source.ts";
 import { failurePointFromRecording, matchesRemoteMultiStepBinding } from "./multistep/binding.ts";
 import type { MultiStepRecording } from "./multistep/capture.ts";
@@ -57,24 +57,10 @@ function readMultiStepTree(dir: string): Record<string, string> {
         if (stat.size > MULTISTEP_MAX_SOURCE_FILE_BYTES || files.size >= MULTISTEP_MAX_SOURCE_FILES) {
           throw new Error("MULTISTEP_SOURCE_CLOSURE_BOUND");
         }
-        // Check the opened descriptor as well as the directory entry: a
-        // changed/symlinked file or a growing file must not bypass the bound.
-        const fd = openSync(full, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-        try {
-          const opened = fstatSync(fd);
-          if (!opened.isFile() || opened.size > MULTISTEP_MAX_SOURCE_FILE_BYTES) throw new Error("MULTISTEP_SOURCE_CLOSURE_BOUND");
-          const parts: Buffer[] = [];
-          let size = 0;
-          while (size <= MULTISTEP_MAX_SOURCE_FILE_BYTES) {
-            const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, MULTISTEP_MAX_SOURCE_FILE_BYTES + 1 - size));
-            const n = readSync(fd, chunk, 0, chunk.length, null);
-            if (n === 0) break;
-            size += n;
-            if (size > MULTISTEP_MAX_SOURCE_FILE_BYTES) throw new Error("MULTISTEP_SOURCE_CLOSURE_BOUND");
-            parts.push(chunk.subarray(0, n));
-          }
-          files.set(path, Buffer.concat(parts, size).toString("utf8"));
-        } finally { closeSync(fd); }
+        // The shared descriptor reader also rejects escaping parent links,
+        // hardlinks and growth during the read. The relative path came only
+        // from this checked directory walk, not a manifest pointer.
+        files.set(path, readBoundedBundleFile(dir, path, MULTISTEP_MAX_SOURCE_FILE_BYTES));
         const problem = multiStepSourceClosureProblem(files);
         if (problem) throw new Error(problem);
       }
@@ -95,10 +81,9 @@ export function loadBundle(dirIn: string): LoadedBundle {
   const dir = resolve(dirIn);
   const manifestPath = join(dir, "manifest.json");
   if (!existsSync(manifestPath)) throw new Error(`bundle manifest not found: ${manifestPath}`);
-  if (lstatSync(manifestPath).size > 4 * 1024 * 1024 || lstatSync(manifestPath).isSymbolicLink()) {
-    throw new Error("bundle manifest is not a bounded regular file");
-  }
-  const raw = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+  // Descriptor- and root-checked before parsing any untrusted metadata. No
+  // manifest-controlled pointer or symlink may escape the bundle directory.
+  const raw = JSON.parse(readBoundedBundleFile(dir, "manifest.json", 4 * 1024 * 1024)) as Record<string, unknown>;
   const isMultiStep = (raw.schemaVersion === "v3" || raw.schemaVersion === "v2")
     && (raw.check as Record<string, unknown> | undefined)?.checkType === "MULTI_STEP";
   const files = isMultiStep ? readMultiStepTree(join(dir, "check")) : readTree(join(dir, "check"));
@@ -273,11 +258,10 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
       }
       for (const issue of m.multistep?.[side]?.problems ?? []) problems.push(multistepProblemCategory(issue));
       if (pointer !== expected) { problems.push(`MULTISTEP_${side.toUpperCase()}_RECORDING_MISSING`); continue; }
-      const full = join(dir, expected); // never join an untrusted manifest pointer
       try {
-        const stat = lstatSync(full);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) throw new Error("not a bounded regular recording");
-        const value: unknown = JSON.parse(readFileSync(full, "utf8"));
+        // Both the pointer and the path are literal; no parent symlink,
+        // hardlink, or file growth is admitted while reopening the bytes.
+        const value: unknown = JSON.parse(readBoundedBundleFile(dir, expected, 2 * 1024 * 1024));
         if (!validMultiStepStoredRecording(value, side)) throw new Error("invalid values-free recording schema");
         const assets = m.provenance.assets.filter((entry) => entry.result === side && entry.name === "test-results.json");
         if (assets.length !== 1 || !files[file] || !matchesRemoteMultiStepBinding(value, {
@@ -286,10 +270,7 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
         })) throw new Error("remote result/source/asset/reporter binding mismatch");
         // Offline result metadata is part of the binding, too. A manifest
         // edit cannot silently borrow a different result's id or timestamps.
-        const metadata = join(dir, `results/${side}.json`);
-        const resultStat = lstatSync(metadata);
-        if (!resultStat.isFile() || resultStat.isSymbolicLink() || resultStat.size > 1024 * 1024) throw new Error("result metadata unsafe");
-        const stored: unknown = JSON.parse(readFileSync(metadata, "utf8"));
+        const stored: unknown = JSON.parse(readBoundedBundleFile(dir, `results/${side}.json`, 1024 * 1024));
         if (!stored || typeof stored !== "object" || Array.isArray(stored)
           || JSON.stringify(Object.keys(stored).sort()) !== JSON.stringify([
             "attempts", "errorCategory", "hasErrors", "hasFailures", "id", "resultType", "runLocation", "startedAt", "stoppedAt",

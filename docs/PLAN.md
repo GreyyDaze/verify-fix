@@ -1,4 +1,4 @@
-# verify-fix — build plan (updated 2026-09-25)
+# verify-fix — build plan (updated 2026-09-28)
 
 Goal: test the tool the way a Checkly customer works. Real app, real Checkly
 check, real deploy, real incident — captured by the tool's own command, never
@@ -8,9 +8,9 @@ collected by hand. Everything lives in this repo.
 verify-fix/
 ├── src/                       the tool
 ├── packages/create-verify-fix/ Phase 8: standalone live-learning project generator
-├── examples/slots-booking/    Next.js app + Playwright suite + ApiCheck, one project (web/)
+├── examples/slots-booking/    Next.js app + browser suite + ApiCheck + Multistep, one project (web/)
 ├── fixtures/bundles/          sanitized bundles produced by `verify-fix bundle`
-└── .github/workflows/         gate.yml + protected-gate.yml (Phases 5–6)
+└── .github/workflows/         gate.yml (immutable caller) + staged protected-gate.yml
 ```
 
 | Phase | What | Done when | Status |
@@ -24,7 +24,7 @@ verify-fix/
 | 5 | Live loop + CI gate: hybrid executor sends HEALTHY/REGRESSION to the customer project's `checkly test --record --reporter json --retries 0`; REPRODUCTION/DETECTION stay in the local scene proxy. `--candidate-project` reads PR monitoring files. `gate.yml` binds verification to the exact Vercel deployment SHA/URL. PRs only test. Production runs `checkly deploy --force` after PASS. Every report records cloud/local/mutation runs, browser processes, and wall time. | gate blocks a bad fix on a real PR; three real alternatives PASS; ten fakes FAIL on the real account | **done** — local matrix passed; the protected exact-revision Checkly/Vercel gate passed at commit `01f71b8` in run `36041826149`. |
 | 5.5 | Candidate revision intake: replace the production idea of one agent patch with the complete final project state. Support both a local working tree and a pull request URL. Treat every agent change as untrusted. Bind PR verification to the exact preview revision. | the same multi-file candidate is verified from a fixed local snapshot and from an exact PR head; reports record source identity and all file changes; the candidate cannot replace the verifier, incident, policy, or gate | **done** — immutable dirty-tree and exact GitHub PR snapshots, stable logical-ID matching, rename/deletion/import handling, complete source reports, target metadata binding, fork/approval controls, protected two-stage workflow, package proof, 123/123 local tests, and the successful protected proof at exact commit `01f71b8`. |
 | 6 | Authenticated booking API + Checkly `ApiCheck` in the existing Next.js and Checkly project: `{{ENVIRONMENT_URL}}` with no fallback, real setup, exact contract, real field-rename incident, sanitized API evidence, deterministic API scenes, and complete-candidate verification | real Vercel deployment and Checkly API check produce a fresh `availability` → `status` incident; strict direct and imported-helper repairs PASS; weakening, redirect, response rewriting, retry, and timeout candidates FAIL; missing input is UNCERTAIN | **done** — real authenticated booking API and `ApiCheck` shipped in the existing project; the app-only `availability` → `status` rename produced the fresh incident; the packed CLI captured the sanitized bundle `incidents/slots-availability-api` (2 passing + 2 failing scheduled results, 20/20 recurring failures, Rocky RCA); the strict repair passed HEALTHY/REPRODUCTION/DETECTION with 15 completed requests/replays and oracle strength 1.000; local verification 158/158 (API 35/35) with root build, Next build, complete local candidate, and packed-CLI proof; protected preview proof (run `36059967113`), merge `f8bf9f06`, then production proof (run `36119394291`) through the manually verified stable alias after the generated-URL attempt (run `36109648763`) failed on HTTP 302 Deployment Protection; `checkly deploy` ran only after PASS and the real repaired run is green |
-| 7 | Multistep Check support starts only after API support is complete | a meaningful booking workflow incident is captured and verified with the same protected boundaries | **ready** — Phase 6 complete; evidence-first plan below (URL hardening still PLANNED) |
+| 7 | One canonical five-step Multistep booking check in the same project, strict remote v3 admission and bounded semantic detection, exact-revision protected gate | real passing/failing scheduled capture, sanitized bundle, recorded parity, protected PASS and repaired scheduled green | **local/pre-real-account work staged** — source/construct and synthetic-only verifier tests exist; secret-free URL-role preflight and protected production wiring are staged in the reusable workflow, **not active** while `gate.yml` stays pinned to the old reviewed snapshot. No real Multistep bundle, cloud PASS, scheduled run or protected-bypass proof has occurred. |
 | 8 | CLI initialization plus a copied live learning project: `verify-fix init` prepares the CLI inside an existing Checkly project. The separate create command copies the maintained slots-booking example into a standalone directory. The copied README teaches the complete learner-owned setup and workflow. | packed `verify-fix init` configures an external customer project; the packed creator copies the real example outside this repo; a learner completes GitHub → Vercel → Upstash → Checkly → incident → bundle → repair → PR gate with no mock inside the copied project | blocked on Phase 7 |
 
 ## Phase 5.5 — Complete candidate revisions from local work or a pull request
@@ -178,46 +178,60 @@ gate passes for the real repair.
 
 ## Phase 7 — Meaningful Multistep Check support
 
-Phase 7 starts now that Phase 6 API support and its real account proof are
-complete. It uses the same booking application (`examples/slots-booking/web/`)
-and the same Checkly project. The scope must be a meaningful booking workflow.
-It must not add check types only to create a catalogue. The Phase 7 plan is
-approved: the baseline check and gate hardening can happen before capture, and
-Multistep result parsing, replay, and the bundle schema are finalized only
-after real Multistep result evidence is inspected.
+**Status: pre-real-account implementation staged; real proof deferred.** Phase 6
+API support and its historical account-backed proof are complete. Phase 7 keeps
+the same app, project, verdict law and `src/assertion/id.ts`. The app now returns
+`{ booking: { confirmed, status, account, slot, sessionVersion } }` on a
+successful booking; the *original* Multistep check deliberately still asserts
+the flat `body.confirmed` at the canonical book step. That stale assertion is
+not a Phase 7 repair and must remain unchanged until a real incident is
+captured. The single `MultiStepCheck` construct and its five awaited steps
+(login → session → slots → book → confirm) are checked in, not deployed here.
+The browser and Phase 6 API contracts remain separate.
 
-Planned scope (evidence-first):
+| Checkpoint | Implemented and locally exercised | Still requires real evidence/approval |
+| --- | --- | --- |
+| 7.0 baseline | One construct, fixed five-step script, nested live app contract, separate account *names* for `us-east-1`/`eu-west-1`; no committed values. | Configure distinct real regional Multistep identities, separately from browser users, before any deployment. |
+| 7.1 remote-bound bundle | Bounded sanitized v3 Multistep result/asset intake and strict source/step/assertion/side binding; forged, partial, local-only or passing-side evidence is UNCERTAIN. Local fixtures mock the authenticated Checkly asset path. | Inspect actual passing and failing Checkly result assets *outside this repo*, confirm observed schema and source line, capture using the packed CLI, review and pin a sanitized real bundle. Do not fabricate assets or trigger new Rocky analysis without approval. |
+| 7.2 detection | Fixed HTTP-200 proxy changes only nested `booking.confirmed: true → false` after a valid original transaction; reporter, independent request audit, proxy hits and two isolated region accounts must agree. Local synthetic fixtures can exercise the gate; they do not confer production authority. | Exact `checkly test --record --grep '^slots booking multistep transaction$' --retries 0`, one input mechanism (`--env-file` **or** `--env`, never both); prove both regions, browser count and original/repair behaviour on the actual target. Parser/token/bypass details not validated by those recordings remain deferred. |
+| 7.3 production URL gate | Staged secret-free preflight checks current `main`, deployment identity and both URL roles *before* production approval; pinned verifier checks the generated URL. Post-approval and post-preview status/identity rechecks precede force deployment to the stable URL. The protected job requires an explicitly configured, pinned Phase 7 Multistep bundle and a configured bypass; missing prerequisites fail closed. | Review and later advance the immutable caller pin **in a separate approval step**. The current `gate.yml` still calls the previous snapshot; edits to `protected-gate.yml` in this branch are not active. Configure/review the real bundle and bypass separately; do not guess the bypass value or Vercel API mechanism. |
+| 7.4 production/scheduled proof | No real Phase 7 deployment, cloud parity, gate PASS, Checkly deployment or scheduled green is claimed. | Verify generated-URL readiness (HTTP 200 + health JSON, no redirects), protected PASS at exact revision, preview and force deploy only after PASS, then observe the repaired scheduled Multistep green in *both* locations. Only then start Phase 8. |
 
-- One Multistep booking check in the same app/project, an ordered workflow
-  (login → session validation → slots → book → confirm) rather than a
-  collection of checks.
-- The incident moves the booking response from flat to nested JSON while the
-  first-party UI is updated in the same change; the deployed check stays stale
-  and fails against it.
-- Evidence order: observe the real scheduled passing and failing Multistep
-  results; inspect the temporary raw result assets outside the repository;
-  implement Multistep result and bundle support from that evidence; run
-  `verify-fix bundle`; commit only the CLI-produced sanitized bundle.
-- No new verdict law: the decision table stays unchanged, `src/assertion/id.ts`
-  stays untouched, and the 158-test baseline must remain green (new tests only
-  add).
-- Phase 8 stays blocked until Phase 7 completes.
+**URL-role policy (same GitHub deployment, not two unrelated deployments).**
+The generated immutable verification origin comes from the Vercel Bot / `vercel`
+GitHub App success status. The stable monitoring origin comes from a *human*
+User status with exact description `verify-fix:stable-alias-verified` and no
+GitHub App provenance, manually verified and created with
+`auto_inactive: false`. Both statuses must belong to the same authenticated
+GitHub deployment ID, SHA (equal to **current main HEAD**) and `Production`
+environment; their latest role-specific status IDs must still be successful.
+Each role has a single consistent HTTPS bare origin, the two origins differ,
+and the triggering event URL matches one of them. Missing role = wait without
+approval; conflicting history, unsafe URL, spoofed provenance, non-main SHA,
+revoked status or truncated history = fail closed. Preflight reads only bounded
+GitHub metadata/statuses (no Vercel API token), and sends only sanitized IDs,
+SHA, origins and reason codes. The approved job verifies the generated origin
+before any Checkly deploy; both deploy commands use **only** the manually
+verified stable origin. Browser/API secrets and regional Multistep names live
+in 0600 runner-temp input files; only the two regional names reach a local Multistep test child. For a
+Multistep cloud session, the Checkly CLI child receives those two names, the
+approved bypass and environment label; it cannot receive the shared browser or
+API values. The protected bypass is absent until separately configured. HTTP 302 is
+never readiness; no temporary domain exception is an accepted replacement.
 
-URL hardening — **PLANNED** (not yet implemented):
-
-- Verification runs target the generated deployment URL; monitoring uses the
-  manually verified stable alias registered from GitHub's deployment status.
-- No new `VERCEL_TOKEN` or Vercel API token is added: the workflow uses
-  GitHub deployment metadata and statuses. An approved automation-bypass
-  secret may be used for protected targets only after its later explicit
-  configuration checkpoint. The core verifier remains provider-neutral.
-- Stage 2 must add a secret-free production preflight that resolves and
-  validates the statuses before any protected production job, so
-  generated-URL events cannot deploy Checkly or request protected approval
-  prematurely.
-- Protected targets must use the planned approved bypass once it is configured
-  and proven through real parity — never a permanent domain exception. HTTP 302
-  is never "ready": readiness is HTTP 200 plus a valid health JSON body.
+**Evidence/accounting legend.** Historical Phase 6 `158/158` and its Checkly
+runs belong to Phase 6, not Phase 7. A local fixture labeled `PASS` proves only
+the verifier's mechanics under explicit synthetic assumptions; it is not a
+Checkly capture, browser session, deployed revision, Vercel readiness or cloud
+proof. The pre-commit Phase 7 checkpoint on Node v24.21.0 (lockfile installs
+with `--ignore-scripts`) had **286/286** focused workflow/Multistep tests and
+a **452-test full suite: 445 pass, seven known seeded failures, zero skips**;
+these seven are the legacy real-app DSL assertions against the now-nested app
+response, not new Phase 7 failures. A new eighth failure or a skip is
+unacceptable. The Next production build and synthetic in-memory collision
+check (5/5) passed; the CLI was packed and installed into an external locked,
+script-disabled consumer. The committed-HEAD recheck and exact hashes belong in
+the final review report. Real checkpoints above remain open.
 
 ## Phase 8 — CLI setup and copied live learning project
 

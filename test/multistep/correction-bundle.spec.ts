@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, linkSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, linkSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildBundle } from "../../src/bundle/build.ts";
@@ -16,6 +16,8 @@ import { openZip, openZipBounded, readZipEntry, listZip } from "../../src/trace/
 import { writeZip } from "../helpers/zip-writer.ts";
 import { buildMultiStepRecording, readMultiStepAssets } from "../../src/multistep/capture.ts";
 import { validMultiStepStoredRecording } from "../../src/multistep/recording-schema.ts";
+import { trustedMultiStepDetection } from "../../src/multistep/detection.ts";
+import { readBoundedBundleFile } from "../../src/multistep/files.ts";
 import { MULTISTEP_DETECTION_MODE, parseMode } from "../../src/scene/modes.ts";
 import { SceneProxy } from "../../src/scene/proxy.ts";
 import { SceneExecutor } from "../../src/executor/scene.ts";
@@ -816,6 +818,7 @@ test("detection cannot invent a nested response, coerce HTTP 500, change an upst
     ["wrong live version", { versionMismatch: true }],
     ["wrong live account", { accountMismatch: true }],
     ["unapproved body field", { extraBookField: CANARY }],
+    ["oversized upstream response", { extraBookField: "synthetic-padding".repeat(2048) }],
   ] as const) {
     const app = await startDetectionApp(options);
     const executor = new SceneExecutor({ target: app.origin, projectDir: DETECTION_WEB, env: DETECTION_ENV,
@@ -901,7 +904,7 @@ test("fixed proxy mutation changes exactly booking.confirmed on a completed HTTP
   // This directly tests the response bytes. Only SceneExecutor may set the
   // proxy capability for a verdict, after trustedMultiStepDetection reloads
   // the failing remote v3 bundle; this standalone proxy test is not proof.
-  const app = await startDetectionApp();
+  const app = await startDetectionApp({ bookHeaders: { "set-cookie": `session=${CANARY}`, "x-private": CANARY } });
   const proxy = new SceneProxy();
   try {
     const [origin] = await proxy.arm({ mode: parseMode(MULTISTEP_DETECTION_MODE), target: app.origin,
@@ -920,7 +923,11 @@ test("fixed proxy mutation changes exactly booking.confirmed on a completed HTTP
       body: JSON.stringify({ slot: "09:30" }) });
     assert.equal(booked.status, 200);
     assert.equal(booked.headers.get("content-type"), "application/json");
-    assert.deepEqual(await booked.json(), { booking: { confirmed: false, status: "CONFIRMED",
+    assert.equal(booked.headers.get("set-cookie"), null);
+    assert.equal(booked.headers.get("x-private"), null);
+    const mutatedBytes = await booked.text();
+    assert.equal(booked.headers.get("content-length"), String(Buffer.byteLength(mutatedBytes)));
+    assert.deepEqual(JSON.parse(mutatedBytes), { booking: { confirmed: false, status: "CONFIRMED",
       account, slot: "09:30", sessionVersion: loginBody.version } });
     assert.deepEqual(proxy.hits().map((hit) => [hit.ordinal, hit.path, hit.status, hit.source]), [
       [1, "/api/login", 200, "target"], [2, "/api/session", 200, "target"],
@@ -966,4 +973,75 @@ test("semantic fault stays an HTTP-200 nested booking response with the ORIGINAL
     assert.ok(!JSON.stringify(result.trace).includes(DETECTION_EAST), "local traces never contain the account value");
     assert.equal(result.browserProcesses, 0);
   } finally { await app.close(); }
+});
+
+test("remote-bound detection rejects altered in-memory authority and hardlinked/escaping bundle bytes", async () => {
+  const out = await captureRemote();
+  const bundle = loadBundle(out.outDir).bundle;
+  const scene = bundle.scenes.find((entry) => entry.type === "DETECTION")!;
+  assert.ok(trustedMultiStepDetection(bundle, scene));
+  assert.equal(trustedMultiStepDetection({ ...bundle, check: { ...bundle.check, name: "synthetic-tamper" } }, scene), null);
+  assert.equal(trustedMultiStepDetection({ ...bundle, scenes: bundle.scenes.map((entry) =>
+    entry.type === "REPRODUCTION" ? { ...entry, description: "synthetic-tamper" } : entry) }, scene), null);
+  assert.equal(trustedMultiStepDetection({ ...bundle, files: { ...bundle.files, [FILE]: SPEC + "\n// synthetic-tamper" } }, scene), null);
+
+  const target = join(out.outDir, "recordings", "failing.multistep.json");
+  const bytes = readFileSync(target);
+  const outside = mkdtempSync(join(tmpdir(), "verify-fix-untrusted-hardlink-"));
+  const outer = join(outside, "recording.json");
+  writeFileSync(outer, bytes);
+  unlinkSync(target);
+  linkSync(outer, target);
+  assert.ok(loadBundle(out.outDir).bundle.multistep?.problems.includes("MULTISTEP_FAILING_RECORDING_INVALID"));
+  assert.equal(trustedMultiStepDetection(bundle, scene), null);
+  unlinkSync(target);
+  writeFileSync(target, bytes);
+  assert.ok(trustedMultiStepDetection(bundle, scene));
+
+  const storedDir = join(outside, "recordings");
+  renameSync(join(out.outDir, "recordings"), storedDir);
+  symlinkSync(storedDir, join(out.outDir, "recordings"), "dir");
+  assert.ok(loadBundle(out.outDir).bundle.multistep?.problems.includes("MULTISTEP_FAILING_RECORDING_INVALID"));
+  assert.equal(trustedMultiStepDetection(bundle, scene), null, "parent symlink cannot redirect a fixed recording path");
+  unlinkSync(join(out.outDir, "recordings"));
+  renameSync(storedDir, join(out.outDir, "recordings"));
+  assert.ok(trustedMultiStepDetection(bundle, scene));
+
+  const manifest = join(out.outDir, "manifest.json");
+  const source = join(outside, "manifest.json");
+  writeFileSync(source, readFileSync(manifest));
+  unlinkSync(manifest);
+  linkSync(source, manifest);
+  assert.throws(() => loadBundle(out.outDir), /MULTISTEP_BUNDLE_FILE_UNSAFE/);
+  assert.equal(trustedMultiStepDetection(bundle, scene), null);
+  unlinkSync(manifest);
+  writeFileSync(manifest, readFileSync(source));
+  assert.throws(() => readBoundedBundleFile(out.outDir, "recordings/failing.multistep.json", 16),
+    /MULTISTEP_BUNDLE_FILE_UNSAFE/, "the bytes budget applies before parsing");
+});
+
+test("scene executor isolates mixed protected env-file inputs; direct Multistep child still rejects unrelated keys", { timeout: 60_000 }, async () => {
+  const out = await captureRemote();
+  const bundle = loadBundle(out.outDir).bundle;
+  const app = await startDetectionApp();
+  const mixed = { ...DETECTION_ENV, TEST_USER: "synthetic-browser-user", API_TOKEN: "synthetic-api-token",
+    CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass" };
+  const executor = new SceneExecutor({ target: app.origin, projectDir: DETECTION_WEB, env: mixed,
+    maxRunsPerScene: 1 });
+  try {
+    const scene = bundle.scenes.find((entry) => entry.type === "REPRODUCTION")!;
+    const observation = await executor.runScene(bundle, repairedNestedSpec(), scene);
+    assert.equal(observation.observed, "pass", observation.reason ?? "");
+    assert.ok(!JSON.stringify(observation).includes(mixed.API_TOKEN));
+    assert.ok(!JSON.stringify(observation).includes(mixed.TEST_USER));
+    const direct = await runMultiStepSandbox({ projectDir: DETECTION_WEB, baseUrl: app.origin,
+      files: { ...bundle.files, [FILE]: repairedNestedSpec() }, originalFiles: bundle.files, checkFile: FILE,
+      env: { REGION: "us-east-1", ...mixed } });
+    assert.equal(direct.inconclusive, true);
+    assert.equal(direct.environmentOrigin, null);
+    assert.match(direct.reason ?? "", /minimal approved Multistep environment/);
+  } finally {
+    await executor.close();
+    await app.close();
+  }
 });

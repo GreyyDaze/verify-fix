@@ -23,8 +23,10 @@ export function recordedNestedBookingConfirmed(steps: MultiStepCapture["steps"])
   const body = object(request?.responseBody);
   const booking = object(body?.booking);
   return steps.length === 4 && request?.method === "POST" && request.path === "/api/book"
-    && request.status === 200 && body !== null && !Object.hasOwn(body, "confirmed")
-    && booking?.confirmed === true && booking.status === "CONFIRMED"
+    && request.status === 200 && body !== null && Object.keys(body).length === 1
+    && Object.hasOwn(body, "booking") && booking !== null
+    && JSON.stringify(Object.keys(booking).sort()) === JSON.stringify(["account", "confirmed", "sessionVersion", "slot", "status"])
+    && booking.confirmed === true && booking.status === "CONFIRMED"
     && identity(booking.account) && booking.slot === "09:30" && version(booking.sessionVersion);
 }
 

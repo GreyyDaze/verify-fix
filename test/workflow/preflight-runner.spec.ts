@@ -78,11 +78,16 @@ function stubFetch(responses: Response[]): () => void {
 async function runWithOutput(
   responses: Response[],
   body: (output: string, code: number) => void,
+  mainEvidence: { default_branch: string; sha: string } = { default_branch: "main", sha: SHA },
 ): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "verify-fix-preflight-"));
   const outputFile = join(dir, "github-output.txt");
   const saved = primeEnv(outputFile);
-  const restoreFetch = stubFetch(responses);
+  const restoreFetch = stubFetch([
+    jsonResponse({ default_branch: mainEvidence.default_branch }),
+    jsonResponse({ name: "main", commit: { sha: mainEvidence.sha } }),
+    ...responses,
+  ]);
   try {
     const code = await main();
     const output = readFileSync(outputFile, "utf8");
@@ -179,8 +184,29 @@ test("ready evidence writes both role URLs and exits 0", async () => {
       assert.match(output, /^reason=complete-url-role-pair$/m);
       assert.match(output, new RegExp(`^verification_url=${VERIFICATION_URL}$`, "m"));
       assert.match(output, new RegExp(`^monitoring_url=${MONITORING_URL}$`, "m"));
+      assert.match(output, /^deployment_id=41$/m);
+      assert.match(output, new RegExp(`^deployment_sha=${SHA}$`, "m"));
+      assert.match(output, /^generated_status_id=10$/m);
+      assert.match(output, /^stable_status_id=100$/m);
     },
   );
+});
+
+test("current-main SHA is required BEFORE status lookup or protected approval", async () => {
+  await runWithOutput([jsonResponse(deploymentRecord()), jsonResponse([])], (output, code) => {
+    assert.equal(code, 1);
+    assert.match(output, /^ready=false$/m);
+    assert.match(output, /^reason=main-revision-mismatch$/m);
+    assert.doesNotMatch(output, /_url=|status_id=/);
+  }, { default_branch: "main", sha: "b".repeat(40) });
+});
+
+test("a non-main default branch cannot open the protected production gate", async () => {
+  await runWithOutput([jsonResponse(deploymentRecord()), jsonResponse([])], (output, code) => {
+    assert.equal(code, 1);
+    assert.match(output, /^reason=default-branch-not-main$/m);
+    assert.doesNotMatch(output, /_url=|status_id=/);
+  }, { default_branch: "incident", sha: SHA });
 });
 
 test("unexpected exceptions print only stable runner-failed evidence — never the exception details", async () => {

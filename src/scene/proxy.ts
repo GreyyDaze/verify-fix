@@ -334,9 +334,9 @@ export class SceneProxy {
     // target response, after their presence and relationships were checked.
     // Do not forward upstream headers (including cookies, validators, or
     // secret-bearing extensions) on this newly encoded response.
-    return { status: 200, headers: { "content-type": "application/json" },
-      body: Buffer.from(JSON.stringify({ booking: { ...(booking as Record<string, unknown>), confirmed: false } })),
-      source: "injected" };
+    const mutated = Buffer.from(JSON.stringify({ booking: { ...(booking as Record<string, unknown>), confirmed: false } }));
+    return { status: 200, headers: { "content-type": "application/json", "content-length": String(mutated.byteLength) },
+      body: mutated, source: "injected" };
   }
 
   private async forwardToTarget(target: string, proxyOrigin: string, method: string, url: URL, req: IncomingMessage, body: Buffer,
@@ -401,8 +401,9 @@ function readBody(req: IncomingMessage, maxBytes?: number): Promise<Buffer> {
 }
 
 async function boundedResponseBody(response: Response, maxBytes: number): Promise<Buffer> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > maxBytes) {
+  const rawLength = response.headers.get("content-length");
+  if (rawLength !== null && (!/^\d+$/.test(rawLength)
+    || !Number.isSafeInteger(Number(rawLength)) || Number(rawLength) > maxBytes)) {
     await response.body?.cancel();
     throw new Error("bounded detection response");
   }

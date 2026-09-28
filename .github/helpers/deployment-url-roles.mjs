@@ -81,6 +81,7 @@ const GITHUB_STATUS_STATES = new Set([
  * @property {string} state
  * @property {string | null} description
  * @property {string | null} environment_url
+ * @property {string} [deployment_url] GitHub REST URL; when present it must name this deployment.
  * @property {{ login: string, type: string }} creator
  * @property {{ slug: string } | null} [performed_via_github_app]
  */
@@ -98,13 +99,15 @@ const GITHUB_STATUS_STATES = new Set([
  * @property {string} expectedSha
  * @property {string} expectedEnvironment
  * @property {DeploymentEvidence | null} deployment
+ * @property {string} [expectedRepository] Trusted owner/name for deployment_url cross-checks.
  * @property {unknown[]} statuses
  * @property {string} eventUrl
  */
 
 /**
  * @typedef {{ state: "waiting", reason: string }
- *   | { state: "ready", reason: string, verificationUrl: string, monitoringUrl: string }
+ *   | { state: "ready", reason: string, verificationUrl: string, monitoringUrl: string,
+ *       generatedStatusId: number, stableStatusId: number, deploymentId: number, sha: string }
  *   | { state: "invalid", reason: string }} UrlRoleResolution
  */
 
@@ -133,7 +136,7 @@ const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
  * @returns {string | null}
  */
 export function normalizeHttpsOrigin(value) {
-  if (typeof value !== "string" || value.length === 0) return null;
+  if (typeof value !== "string" || value.length === 0 || value.length > 2048) return null;
   if (CONTROL_CHARACTERS.test(value)) return null;
   let parsed;
   try {
@@ -250,6 +253,50 @@ function currentOf(rows) {
   return current;
 }
 
+/** A status from a nested deployment-statuses endpoint may also carry its
+ * parent REST URL. When GitHub supplies it, reject a contradictory parent;
+ * absence does not replace the authenticated, id-scoped endpoint itself.
+ * @param {Record<string, unknown>} row
+ * @param {UrlRoleInputs} input
+ * @returns {boolean}
+ */
+function statusParentMatches(row, input) {
+  if (row.deployment_url === undefined) return true;
+  if (typeof row.deployment_url !== "string" || row.deployment_url.length > 2048) return false;
+  try {
+    const url = new URL(row.deployment_url);
+    if (url.origin !== "https://api.github.com" || url.username || url.password || url.search || url.hash) return false;
+    const parent = input.expectedRepository
+      ? `/repos/${input.expectedRepository}/deployments/${input.expectedDeploymentId}`
+      : null;
+    if (parent !== null) return url.pathname === parent;
+    const match = /^\/repos\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/deployments\/(\d+)$/.exec(url.pathname);
+    return match !== null && Number(match[1]) === input.expectedDeploymentId;
+  } catch {
+    return false;
+  }
+}
+
+/** A role may have lifecycle history, but not two different URL candidates.
+ * An older successful alias cannot be silently superseded by a different
+ * 'newest' success; that needs a new, explicitly reviewed deployment.
+ * @param {DeploymentStatusEvidence[]} rows
+ * @param {"verification" | "monitoring"} role
+ * @returns {{ url: string | null, error: string | null }}
+ */
+function uniqueRoleOrigin(rows, role) {
+  /** @type {Set<string>} */
+  const origins = new Set();
+  for (const row of rows) {
+    if (row.environment_url === null) continue;
+    const url = normalizeHttpsOrigin(row.environment_url);
+    if (url === null) return { error: `unsafe-${role}-url`, url: null };
+    origins.add(url);
+  }
+  if (origins.size > 1) return { error: `ambiguous-${role}-url`, url: null };
+  return { url: normalizeHttpsOrigin(currentOf(rows).environment_url), error: null };
+}
+
 /**
  * Decide the URL-role state for one deployment.
  *
@@ -292,8 +339,11 @@ export function resolveUrlRoles(input) {
   const participatingIds = new Map();
 
   for (const row of input.statuses) {
-    // Validate every raw entry before classification; never throw.
+    // Validate every raw entry before classification; never throw. Statuses
+    // come from this deployment's authenticated endpoint, and any explicit
+    // parent URL in the row must agree with it as well.
     if (!isPlainObject(row)) return invalid("status-record-invalid");
+    if (!statusParentMatches(row, input)) return invalid("status-deployment-mismatch");
     const provenance = mapStatusProvenance(row);
     if (!provenance.ok) return invalid(provenance.reason);
     const { creatorLogin: _login, creatorType, githubAppSlug } = provenance;
@@ -347,9 +397,13 @@ export function resolveUrlRoles(input) {
     return invalid("manual-current-not-successful");
   }
 
-  const verificationUrl = normalizeHttpsOrigin(generatedCurrent.environment_url);
+  const generatedOrigin = uniqueRoleOrigin(generatedRows, "verification");
+  if (generatedOrigin.error !== null) return invalid(generatedOrigin.error);
+  const verificationUrl = generatedOrigin.url;
   if (verificationUrl === null) return invalid("unsafe-verification-url");
-  const monitoringUrl = normalizeHttpsOrigin(manualCurrent.environment_url);
+  const manualOrigin = uniqueRoleOrigin(manualRows, "monitoring");
+  if (manualOrigin.error !== null) return invalid(manualOrigin.error);
+  const monitoringUrl = manualOrigin.url;
   if (monitoringUrl === null) return invalid("unsafe-monitoring-url");
   if (verificationUrl === monitoringUrl) return invalid("overlapping-url-roles");
 
@@ -364,5 +418,9 @@ export function resolveUrlRoles(input) {
     reason: "complete-url-role-pair",
     verificationUrl,
     monitoringUrl,
+    generatedStatusId: generatedCurrent.id,
+    stableStatusId: manualCurrent.id,
+    deploymentId: input.deployment.id,
+    sha: input.deployment.sha,
   };
 }

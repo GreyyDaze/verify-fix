@@ -81,6 +81,12 @@ test("next link: wrong repository/deployment status path is rejected", () => {
   }
 });
 
+test("next link cannot alter page size, skip pages, or smuggle unrelated parameters", () => {
+  for (const suffix of ["?per_page=1&page=2", "?per_page=100&page=0", "?per_page=100&page=2&auth=token", "?per_page=100&page=2#part"]) {
+    assert.equal(resolveStatusesNextUrl(`https://api.github.com${EXPECTED_PATH}${suffix}`, REPO, DEPLOYMENT_ID), null);
+  }
+});
+
 test("next link: garbage and empty candidates are rejected", () => {
   assert.equal(resolveStatusesNextUrl(null, REPO, DEPLOYMENT_ID), null);
   assert.equal(resolveStatusesNextUrl("", REPO, DEPLOYMENT_ID), null);
@@ -99,18 +105,10 @@ function makeFetch(pages: Page[]) {
     calls.push({ url: String(url), auth: headers.Authorization });
     const page = pages[Math.min(index, pages.length - 1)]!;
     index += 1;
-    return {
-      ok: page.status >= 200 && page.status < 300,
+    return new Response(page.jsonError ? "{not-json" : JSON.stringify(page.body), {
       status: page.status,
-      headers: {
-        get: (name: string): string | null =>
-          name.toLowerCase() === "link" ? page.link : null,
-      },
-      json: async () => {
-        if (page.jsonError) throw new Error("invalid json");
-        return page.body;
-      },
-    } as unknown as Response;
+      headers: page.link === null ? {} : { link: page.link },
+    });
   };
   return { calls, fetchImpl: fetchImpl as unknown as typeof fetch };
 }
@@ -179,13 +177,11 @@ test("statuses: a credentialed or wrong-path next link fails closed without a se
 });
 
 test("statuses: endless next links hit the fixed page bound and fail closed", async () => {
-  const { calls, fetchImpl } = makeFetch([
-    {
-      status: 200,
-      body: [{ id: 1 }],
-      link: `<https://api.github.com${EXPECTED_PATH}?per_page=100&page=next>; rel="next"`,
-    },
-  ]);
+  const { calls, fetchImpl } = makeFetch(Array.from({ length: 5 }, (_, index) => ({
+    status: 200,
+    body: [{ id: index + 1 }],
+    link: `<https://api.github.com${EXPECTED_PATH}?per_page=100&page=${index + 2}>; rel="next"`,
+  })));
   const outcome = await fetchAllStatuses(REPO, DEPLOYMENT_ID, TOKEN, fetchImpl);
   assert.deepEqual(outcome, { error: "statuses-truncated" });
   assert.equal(calls.length, 5, "exactly MAX_STATUS_PAGES requests are allowed");
@@ -202,6 +198,23 @@ test("statuses: only rel=prev links mean no next page", async () => {
   const outcome = await fetchAllStatuses(REPO, DEPLOYMENT_ID, TOKEN, fetchImpl);
   assert.deepEqual(outcome, { statuses: [{ id: 1 }] });
   assert.equal(calls.length, 1);
+});
+
+test("an unlinked full page or skipped page cannot silently omit older statuses", async () => {
+  const full = makeFetch([{ status: 200, body: Array.from({ length: 100 }, (_, id) => ({ id })), link: null }]);
+  assert.deepEqual(await fetchAllStatuses(REPO, DEPLOYMENT_ID, TOKEN, full.fetchImpl), { error: "statuses-truncated" });
+  const skipped = makeFetch([{ status: 200, body: [{ id: 1 }],
+    link: `<https://api.github.com${EXPECTED_PATH}?per_page=100&page=3>; rel="next"` }]);
+  assert.deepEqual(await fetchAllStatuses(REPO, DEPLOYMENT_ID, TOKEN, skipped.fetchImpl), { error: "statuses-link-invalid" });
+  assert.equal(skipped.calls.length, 1);
+});
+
+test("an oversized or redirected GitHub status response never becomes evidence", async () => {
+  const huge = makeFetch([{ status: 200, body: "x".repeat(1024 * 1024), link: null }]);
+  assert.deepEqual(await fetchAllStatuses(REPO, DEPLOYMENT_ID, TOKEN, huge.fetchImpl), { error: "statuses-response-invalid" });
+  const redirected = makeFetch([{ status: 302, body: {}, link: null }]);
+  assert.deepEqual(await fetchAllStatuses(REPO, DEPLOYMENT_ID, TOKEN, redirected.fetchImpl), { error: "statuses-not-readable" });
+  assert.equal(redirected.calls.length, 1);
 });
 
 test("statuses: HTTP errors, non-array bodies, and JSON failures fail closed", async () => {

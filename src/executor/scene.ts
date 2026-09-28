@@ -283,9 +283,16 @@ export class SceneExecutor implements ExperimentExecutor {
     if (isMultiStep && (regions.length !== 2 || regions[0] !== "us-east-1" || regions[1] !== "eu-west-1")) {
       return this.uncertain(scene, "Multistep requires both trusted regions in canonical order — no runner was started", 0, [], environment);
     }
-    if (isMultiStep && (baseEnv.REGION !== undefined || Object.keys(baseEnv).some((key) => ![
-      "MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1",
-    ].includes(key)))) {
+    // A shared protected env-file also supplies browser/API credentials and
+    // the readiness bypass. Those unrelated names remain available to other
+    // scene types, but are NEVER sent to a Multistep child. Only the two
+    // regional identities cross the child boundary. A scene itself may not
+    // introduce extra names, and no caller may override trusted runner keys.
+    const multistepNames = ["MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1"];
+    const protectedRunnerKeys = ["REGION", "PATH", "HOME", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS",
+      "LD_LIBRARY_PATH", "ENVIRONMENT_URL", "ENVIRONMENT_NAME", "SANDBOX_SEED", "CI"];
+    if (isMultiStep && (Object.keys(baseEnv).some((key) => protectedRunnerKeys.includes(key.toUpperCase()))
+      || Object.keys(scene.env ?? {}).some((key) => !multistepNames.includes(key)))) {
       return this.uncertain(scene, "Multistep env-file overrides a trusted runner key — no runner was started", 0, [], environment);
     }
     if (isMultiStep && (!trustedRegionalAccounts(baseEnv))) {
@@ -412,6 +419,9 @@ export class SceneExecutor implements ExperimentExecutor {
           if (outcome.inconclusive) return this.uncertain(scene, `${tag}${outcome.reason ?? "runner produced no admissible result"}`, rep + 1, mergedTrace, environment);
           if (!outcome.passed) repPassed = false;
         }
+      }
+      if (mode.kind === "multistep-detection" && !trustedMultiStepDetection(bundle, scene)) {
+        return this.uncertain(scene, "Multistep failing-side evidence changed during the scene", rep + 1, mergedTrace, environment);
       }
       costRow.repetitions += 1;
       observedOutcomes.push(repPassed ? "pass" : "fail");

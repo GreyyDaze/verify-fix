@@ -242,7 +242,7 @@ export function multiStepInventory(model: MultiStepSourceModel): AssertionInvent
   return {
     checkFile: script.file,
     assertions,
-    steps: script.steps.map((s) => `test.step:${s.title}`),
+    steps: script.steps.filter((s) => s.executed && s.awaited).map((s) => `test.step:${s.title}`),
     totalAssertions: assertions.length,
   };
 }

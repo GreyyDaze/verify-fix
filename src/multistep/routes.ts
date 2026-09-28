@@ -21,7 +21,8 @@ export function routeFromUrl(url: string | null | undefined): MultiStepRoute | n
   if (!url) return null;
   try {
     const parsed = new URL(url);
-    return !parsed.search && !parsed.hash ? knownRoute(parsed.pathname) : null;
+    return parsed.protocol === "https:" && !parsed.username && !parsed.password && !parsed.search && !parsed.hash
+      ? knownRoute(parsed.pathname) : null;
   } catch {
     return null;
   }

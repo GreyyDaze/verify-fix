@@ -1,24 +1,28 @@
-// A MULTI_STEP bundle is an evidence object, not a dump of Checkly's result
-// document. Keep only typed run metadata, fixed incident/scene categories and
-// the independently sanitized recording; omit error strings, page URLs, trace
-// metadata, RCA prose, arbitrary remote asset URLs and free-form warnings.
-// The original check source in check/ is code (needed for the contract), not
-// telemetry, and is deliberately not rewritten by this projection.
-import type { ManifestV3 } from "../bundle/types.ts";
+// Multistep bundles are constructed as a fresh allow-list projection. Nothing
+// supplied by a remote result, RCA, asset URL, log or arbitrary manifest field
+// is spread into stored metadata. The check/ source remains separate code;
+// the bundle writer validates/bounds that closure before writing it.
+import type { ManifestV3, SceneV3, ResultRef, FailurePoint, OverlappingRun } from "../bundle/types.ts";
 import type { CheckResultSummary } from "../checkly/types.ts";
-import { knownRoute } from "./routes.ts";
+import type { MultiStepCapture } from "./normalize.ts";
+import { knownRoute, knownStepTitle, MULTISTEP_ROUTES } from "./routes.ts";
+import { multiStepSourcePath } from "./files.ts";
 
 const ASSET_NAMES = new Set(["test-results.json", "check-run-data.json", "logs.txt"]);
+const API_OPERATIONS = new Set(["asset", "get-check", "list-results", "list-assets", "get-result", "error-group", "rca"]);
 const SAFE_ASSUMPTIONS = new Set(["locations", "run-parallel", "env-vars", "target-resolution", "overlapping-run"]);
 const TRUSTED_LOCATIONS = new Set(["us-east-1", "eu-west-1"]);
 const TRUSTED_ENV_KEYS = new Set(["ENVIRONMENT_URL", "MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1"]);
 const safeLocation = (value: string): string => TRUSTED_LOCATIONS.has(value) ? value : "<unknown-location>";
-const safeId = (value: string | null): string | null => value && /^[a-zA-Z0-9_-]{1,128}$/.test(value) ? value : null;
-const safeDate = (value: string | null): string | null => {
+const safeId = (value: unknown): string | null => typeof value === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(value) ? value : null;
+const safeDate = (value: unknown): string | null => {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(value)) return null;
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
 };
+const count = (value: unknown, max = 1_000_000): number => Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= max ? value as number : 0;
+const rate = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1 ? value : null;
+const assertionIds = (values: string[]): string[] => values.filter((id) => /^assert:[0-9a-f]{8}$/.test(id)).slice(0, 200);
 
 /** A result JSON is a typed run summary, never a raw Checkly detail. */
 export function multiStepRunMetadata(summary: CheckResultSummary): Record<string, unknown> {
@@ -35,104 +39,186 @@ export function multiStepRunMetadata(summary: CheckResultSummary): Record<string
   };
 }
 
-export function constrainMultiStepManifest(manifest: ManifestV3): ManifestV3 {
-  if (manifest.check.checkType !== "MULTI_STEP") return manifest;
-  manifest.incidentId = `multistep:${safeId(manifest.check.id) ?? "unknown"}:${safeId(manifest.results.failing?.id ?? manifest.results.passing?.id ?? null) ?? "unknown"}`;
-  manifest.incident.title = manifest.results.failing ? "Multistep check incident" : "Multistep check baseline";
-  manifest.incident.description = manifest.results.failing
-    ? "Recorded Multistep failure; raw result errors and RCA text omitted. See sanitized step and request categories."
-    : "Recorded Multistep baseline; raw result details omitted.";
-  manifest.incident.sourceReference = null;
-  manifest.check.repo = null;
-  manifest.check.id = safeId(manifest.check.id) ?? "<unrecognized-id>";
-  manifest.check.deployedId = safeId(manifest.check.deployedId) ?? "<unrecognized-id>";
-  manifest.config.locations = manifest.config.locations.map(safeLocation);
-  manifest.config.environmentVariables = manifest.config.environmentVariables.filter((entry) => TRUSTED_ENV_KEYS.has(entry.key));
-  manifest.config.privateLocations = [];
-  manifest.config.retryStrategy = null;
-  manifest.config.tags = [];
-  manifest.config.runtimeId = null;
-  manifest.config.repair.intent = null;
-  manifest.target.recordedOrigin = null;
-  manifest.target.note = "The runner derives ENVIRONMENT_URL from the explicit target; recorded origins are not retained.";
-  for (const ref of [manifest.results.failing, manifest.results.passing]) {
-    if (!ref) continue;
-    ref.id = safeId(ref.id) ?? "<unrecognized-id>";
-    ref.runLocation = safeLocation(ref.runLocation);
-    ref.startedAt = safeDate(ref.startedAt) ?? "<unknown-timestamp>";
-    ref.stoppedAt = safeDate(ref.stoppedAt);
-    ref.resultType = ref.resultType === "FINAL" ? "FINAL" : null;
-    ref.attempts = Number.isSafeInteger(ref.attempts) && (ref.attempts ?? 0) >= 0 && (ref.attempts ?? 0) <= 100 ? ref.attempts : null;
-    ref.errors = [];
-    ref.failingTest = null;
-    ref.trace = null;
-    ref.errorGroupIds = [];
+function ref(input: ResultRef | null): ResultRef | null {
+  if (!input) return null;
+  return {
+    id: safeId(input.id) ?? "<unrecognized-id>",
+    startedAt: safeDate(input.startedAt) ?? "<unknown-timestamp>",
+    stoppedAt: safeDate(input.stoppedAt),
+    runLocation: safeLocation(input.runLocation),
+    resultType: input.resultType === "FINAL" ? "FINAL" : null,
+    attempts: input.attempts === null ? null : count(input.attempts, 100),
+    errorGroupIds: [], errors: [], failingTest: null, trace: null,
+  };
+}
+
+function failurePoint(manifest: ManifestV3, capture: MultiStepCapture | null, passing: MultiStepCapture | null): FailurePoint | null {
+  if (!capture || !manifest.check.file || !multiStepSourcePath(manifest.check.file)) return null;
+  const step = capture.steps.find((item) => item.status === "failed");
+  if (!step || !knownStepTitle(step.title)) return null;
+  const attributed = manifest.failurePoint?.assertion;
+  const line = step.failureLine;
+  const assertion = attributed && line !== null && line !== undefined && line === attributed.line
+    && attributed.file === manifest.check.file && /^assert:[0-9a-f]{8}$/.test(attributed.assertionId ?? "")
+    ? { file: manifest.check.file, line, column: null, assertionId: attributed.assertionId } : null;
+  const own = step.requests.at(-1) ?? null;
+  const route = knownRoute(own?.path);
+  const method = route ? MULTISTEP_ROUTES[route] : null;
+  const request = own && route && own.method === method && typeof own.status === "number" && own.status >= 400
+    ? {
+        method: method!, url: `https://recorded.invalid${route}`, path: route,
+        status: count(own.status, 599), passingStatus: null, failureText: "REQUEST_FAILURE",
+      } : null;
+  const opposite = passing?.steps.find((item) => item.title === step.title)?.requests[0] ?? null;
+  // A dependency is a cross-side, same-step/same-route relation, never a
+  // guessed final request from an unrelated step. The fixed zero means only
+  // "same step"; it is not a measured inter-request interval.
+  const dependency = !request && assertion && own && route && opposite?.path === route
+    && opposite.method === method && opposite.status === 200 && own.method === method
+    ? { method: method!, url: `https://recorded.invalid${route}`, path: route,
+        passingStatus: 200, msBeforeStep: 0, stepLine: assertion.line, stepTitle: step.title }
+    : null;
+  return {
+    action: { apiName: "test.step", title: step.title, error: step.error === "ASSERTION_FAILED" ? "ASSERTION_FAILED" : "STEP_ERROR" },
+    request, assertion, dependency,
+  };
+}
+
+function sceneProjection(scene: SceneV3, manifest: ManifestV3,
+  available: { failing: boolean; passing: boolean }, point: FailurePoint | null): SceneV3 | null {
+  if (!["HEALTHY", "REPRODUCTION", "DETECTION"].includes(scene.type)
+    || !["healthy-live", "reproduction", "detection"].includes(scene.sceneId)) return null;
+  const provenance = scene.verdict.provenance;
+  let proof: SceneV3["verdict"]["provenance"];
+  if (provenance.kind === "recorded") {
+    const side = provenance.artifactId === "recordings/failing.multistep.json" ? "failing"
+      : provenance.artifactId === "recordings/passing.multistep.json" ? "passing" : null;
+    if (!side || !available[side] || !manifest.results[side] || provenance.runId !== manifest.results[side]!.id
+      || (scene.type === "HEALTHY" ? side !== "passing" : side !== "failing")) return null;
+    proof = { kind: "recorded", runId: provenance.runId, artifactId: provenance.artifactId };
+  } else if (provenance.kind === "code" && /^assert:[0-9a-f]{8}$/.test(provenance.assertionId)) {
+    proof = { kind: "code", assertionId: provenance.assertionId };
+  } else return null;
+
+  let mode: SceneV3["mode"];
+  if (scene.type === "HEALTHY") mode = "live";
+  else if (scene.type === "REPRODUCTION") {
+    if (scene.mode !== "live" && scene.mode !== "live-concurrent:2") return null;
+    mode = scene.mode;
+  } else {
+    const req = point?.request ?? point?.dependency;
+    const route = knownRoute(req?.path);
+    if (!route || !req || req.method !== MULTISTEP_ROUTES[route] || proof.kind !== "recorded") return null;
+    mode = `inject:${req.method} ${route} -> ${point?.request ? count(point.request.status, 599) : 500}`;
   }
-  manifest.rca = null;
-  manifest.errorGroup = null;
-  manifest.provenance.checkId = safeId(manifest.provenance.checkId) ?? "<unrecognized-id>";
-  manifest.provenance.failingResultId = safeId(manifest.provenance.failingResultId);
-  manifest.provenance.passingResultId = safeId(manifest.provenance.passingResultId);
-  manifest.provenance.errorGroupId = null;
-  manifest.provenance.rcaId = null;
-  manifest.reproduction.overlappingRuns = manifest.reproduction.overlappingRuns.map((run) => ({
-    ...run, runId: safeId(run.runId) ?? "<unrecognized-id>",
-    runLocation: safeLocation(run.runLocation),
-    startedAt: safeDate(run.startedAt) ?? "<unknown-timestamp>",
-    stoppedAt: safeDate(run.stoppedAt),
+  const isDetection = scene.type === "DETECTION";
+  return {
+    sceneId: scene.sceneId, type: scene.type, mode,
+    state: `Multistep ${scene.type.toLowerCase()} state; raw diagnostics omitted.`,
+    verdict: { mustFail: isDetection, provenance: proof,
+      envAssumptions: scene.verdict.envAssumptions.filter((id) => SAFE_ASSUMPTIONS.has(id)) },
+    experiments: scene.experiments.slice(0, 1).map((e) => ({ durationSec: count(e.durationSec, 300), repetitions: count(e.repetitions, 10), expectStable: e.expectStable === true })),
+    assertionsInvolved: assertionIds(scene.assertionsInvolved),
+    environment: "target", notes: [],
+  };
+}
+
+/** Replace the input object; never mutate-and-retain unknown fields. The
+ * optional captures are already sanitized, typed, and selected by result side.
+ * An absent side never receives a pointer or scene from the opposite side. */
+export function constrainMultiStepManifest(m: ManifestV3,
+  captures: { failing?: MultiStepCapture | null; passing?: MultiStepCapture | null } = {}): ManifestV3 {
+  if (m.check.checkType !== "MULTI_STEP") return m;
+  const failing = ref(m.results.failing);
+  const passing = ref(m.results.passing);
+  const paths = m.check.files.filter((file) => multiStepSourcePath(file) === file).slice(0, 32);
+  const primary = m.check.file && paths.includes(m.check.file) ? m.check.file : null;
+  const available = {
+    failing: Boolean(failing && m.recordings.multistepFailing === "recordings/failing.multistep.json" && captures.failing?.kind === "failing"),
+    passing: Boolean(passing && m.recordings.multistepPassing === "recordings/passing.multistep.json" && captures.passing?.kind === "passing"),
+  };
+  const point = failurePoint(m, available.failing ? captures.failing ?? null : null,
+    available.passing ? captures.passing ?? null : null);
+  const scenes = m.scenes.flatMap((scene) => sceneProjection(scene, m, available, point) ?? []);
+  const problems = (side: "failing" | "passing"): { problems: string[] } | null => {
+    const selected = m.multistep?.[side]?.problems.filter((item) => /^MULTISTEP_[A-Z_]+$/.test(item)).slice(0, 16) ?? [];
+    if (m.results[side] && !available[side]) selected.push("MULTISTEP_CAPTURE_BINDING_INVALID");
+    if (side === "failing" && available.failing && !point?.assertion && !point?.request) selected.push("MULTISTEP_FAILURE_STEP_UNBOUND");
+    if (side === "failing" && available.failing && !scenes.some((scene) => scene.type === "DETECTION")) selected.push("MULTISTEP_FAILURE_STEP_UNBOUND");
+    return selected.length ? { problems: [...new Set(selected)] } : null;
+  };
+  const history = m.determinism.history;
+  const overlappingRuns: OverlappingRun[] = m.reproduction.overlappingRuns.slice(0, 100).map((run) => ({
+    runId: safeId(run.runId) ?? "<unrecognized-id>", runLocation: safeLocation(run.runLocation),
+    startedAt: safeDate(run.startedAt) ?? "<unknown-timestamp>", stoppedAt: safeDate(run.stoppedAt),
+    startDeltaMs: typeof run.startDeltaMs === "number" && Number.isFinite(run.startDeltaMs) && Math.abs(run.startDeltaMs) < 1e9 ? run.startDeltaMs : 0,
+    overlapMs: run.overlapMs === null ? null : count(run.overlapMs), passed: run.passed === true,
   }));
-  const history = manifest.determinism.history;
-  history.byLocation = Object.fromEntries(Object.entries(history.byLocation)
-    .filter(([name]) => TRUSTED_LOCATIONS.has(name)));
-  history.from = safeDate(history.from);
-  history.to = safeDate(history.to);
-  if (manifest.determinism.sequential) manifest.determinism.sequential.sessions = manifest.determinism.sequential.sessions.flatMap((id) => safeId(id) ?? []);
-  if (manifest.determinism.overlap) manifest.determinism.overlap.sessions = manifest.determinism.overlap.sessions.flatMap((id) => safeId(id) ?? []);
-  manifest.provenance.apiCalls = manifest.provenance.apiCalls.map((call) => ({
-    method: call.method === "GET" || call.method === "POST" ? call.method : "OTHER",
-    url: "<checkly-request>", status: call.status,
-  }));
-  manifest.provenance.assets = manifest.provenance.assets.map((asset) => ({
-    result: asset.result,
-    name: ASSET_NAMES.has(asset.name) ? asset.name : "<unknown-asset>",
-    type: asset.type === "local-asset" ? "local-asset" : "remote-asset",
-    bytes: asset.bytes, sha256: asset.sha256,
-  }));
-  manifest.reproduction.matchedText = null;
-  manifest.reproduction.reason = "Multistep reproduction mode derived from run history; raw diagnostic text omitted.";
-  // A missing capture does NOT acquire provenance from an unrelated side.
-  // The loader checks the expected side even if a manifest pointer is removed.
-  for (const scene of manifest.scenes) {
-    scene.state = `Multistep ${scene.type.toLowerCase()} state; raw diagnostic text omitted.`;
-    if (scene.verdict.provenance.kind === "recorded") {
-      scene.verdict.provenance.runId = safeId(scene.verdict.provenance.runId) ?? "<unrecognized-id>";
-      const artifact = scene.verdict.provenance.artifactId;
-      if (artifact !== "recordings/failing.multistep.json" && artifact !== "recordings/passing.multistep.json") {
-        scene.verdict.provenance.artifactId = scene.type === "HEALTHY"
-          ? "recordings/passing.multistep.json" : "recordings/failing.multistep.json";
-      }
-    }
-    scene.notes = [];
-    scene.verdict.envAssumptions = scene.verdict.envAssumptions.filter((id) => id !== "shared-account");
-  }
-  manifest.envAssumptions = manifest.envAssumptions.filter((item) => SAFE_ASSUMPTIONS.has(item.id)).map((item) => ({
-    id: item.id,
-    text: item.id === "locations" ? "The check has configured locations." :
-      item.id === "run-parallel" ? "The check is configured to run in parallel." :
-      item.id === "env-vars" ? "Environment variable names are recorded; values are omitted." :
-      item.id === "target-resolution" ? "The script reads ENVIRONMENT_URL; the target must be explicit." :
-      "Run timestamps show an overlapping execution.",
-    verified: item.verified, verifiedBy: item.verifiedBy,
-  }));
-  if (manifest.failurePoint) {
-    const point = manifest.failurePoint;
-    if (point.request && !knownRoute(point.request.path)) point.request = null;
-    if (point.dependency && !knownRoute(point.dependency.path)) point.dependency = null;
-    // Even an error object returned by the result API is never copied into a
-    // scene or README. The sanitized step category is all that is retained.
-    if (point.action) point.action = { apiName: "test.step", title: point.action.title, error: point.action.error === "ASSERTION_FAILED" ? "ASSERTION_FAILED" : "STEP_ERROR" };
-    if (point.request) point.request.failureText = "REQUEST_FAILURE";
-  }
-  manifest.notes = ["Multistep evidence uses fixed route/body schemas and error categories; raw diagnostics omitted."];
-  return manifest;
+  const projected: ManifestV3 = {
+    schemaVersion: "v3", generatedBy: "verify-fix bundle", generatedAt: safeDate(m.generatedAt) ?? "1970-01-01T00:00:00.000Z",
+    incidentId: `multistep:${safeId(m.check.id) ?? "unknown"}:${safeId(failing?.id ?? passing?.id) ?? "unknown"}`,
+    incident: { title: failing ? "Multistep check incident" : "Multistep check baseline",
+      description: failing ? "Recorded Multistep failure; raw diagnostics and RCA omitted." : "Recorded Multistep baseline; raw diagnostics omitted.",
+      sourceReference: null, status: failing ? "captured" : "no-failure-yet" },
+    check: { id: safeId(m.check.id) ?? "<unrecognized-id>", deployedId: safeId(m.check.deployedId) ?? "<unrecognized-id>",
+      name: "Multistep check", checkType: "MULTI_STEP", repo: null, file: primary, files: paths,
+      logicalId: safeId(m.check.logicalId), projectCommit: /^[a-f0-9]{40}$/.test(m.check.projectCommit ?? "") ? m.check.projectCommit : null },
+    config: {
+      frequencyMinutes: m.config.frequencyMinutes === null ? null : count(m.config.frequencyMinutes, 1440),
+      locations: m.config.locations.map(safeLocation).slice(0, 2), privateLocations: [], runParallel: m.config.runParallel === true,
+      retryStrategy: null, doubleCheck: typeof m.config.doubleCheck === "boolean" ? m.config.doubleCheck : null,
+      activated: m.config.activated === true, muted: m.config.muted === true, tags: [], runtimeId: null,
+      environmentVariables: m.config.environmentVariables.filter((entry) => TRUSTED_ENV_KEYS.has(entry.key))
+        .map((entry) => ({ key: entry.key, secret: entry.secret === true })),
+      playwright: null, apiRequest: null,
+      repair: { intent: null, aiAutoRepairEnabled: typeof m.config.repair.aiAutoRepairEnabled === "boolean" ? m.config.repair.aiAutoRepairEnabled : null },
+    },
+    target: { resolution: m.target.resolution === "code" ? "code" : "unknown", variable: "ENVIRONMENT_URL", recordedOrigin: null,
+      note: "The runner derives ENVIRONMENT_URL from the explicit target; no recorded origin is retained." },
+    results: { failing, passing }, rca: null, errorGroup: null,
+    reproduction: { mode: m.reproduction.mode === "live-concurrent:2" ? "live-concurrent:2" : m.reproduction.mode === "live" ? "live" : "both",
+      matchedRule: null, matchedText: null, reason: "Multistep mode derived from typed result history; raw diagnostic text omitted.",
+      decidedBy: m.reproduction.decidedBy === "result-timestamps" || m.reproduction.decidedBy === "history" ? m.reproduction.decidedBy : "none",
+      overlappingRuns },
+    failurePoint: point,
+    recordings: { failing: null, passing: null, bodies: "none", apiFailing: null, apiPassing: null,
+      multistepFailing: available.failing ? "recordings/failing.multistep.json" : null,
+      multistepPassing: available.passing ? "recordings/passing.multistep.json" : null },
+    multistep: { failing: problems("failing"), passing: problems("passing") },
+    scenes, assertions: null,
+    envAssumptions: m.envAssumptions.filter((item) => SAFE_ASSUMPTIONS.has(item.id)).map((item) => ({
+      id: item.id, verified: item.verified === true,
+      verifiedBy: item.verifiedBy === "result-timestamps" ? "result-timestamps" : "source-policy",
+      text: item.id === "locations" ? "Two locations are configured." : item.id === "run-parallel" ? "The check is configured to run in parallel."
+        : item.id === "env-vars" ? "Only environment variable names are retained." : item.id === "target-resolution" ? "An explicit target is required."
+          : "An overlapping run was observed in the result timestamps.",
+    })),
+    determinism: { measured: m.determinism.measured === true,
+      method: m.determinism.method === "checkly-cloud" || m.determinism.method === "local-runner" ? m.determinism.method : null,
+      history: { window: count(history.window), finalRuns: count(history.finalRuns), passed: count(history.passed), failed: count(history.failed),
+        passRate: rate(history.passRate), byLocation: Object.fromEntries(Object.entries(history.byLocation)
+          .filter(([loc]) => TRUSTED_LOCATIONS.has(loc))
+          .map(([loc, value]) => [loc, { runs: count(value.runs), passed: count(value.passed) }])),
+        from: safeDate(history.from), to: safeDate(history.to) },
+      sequential: m.determinism.sequential ? { runs: count(m.determinism.sequential.runs), passed: count(m.determinism.sequential.passed),
+        passRate: rate(m.determinism.sequential.passRate) ?? 0, sessions: m.determinism.sequential.sessions.flatMap((id) => safeId(id) ?? []) } : null,
+      overlap: m.determinism.overlap ? { pairs: count(m.determinism.overlap.pairs), pairsWithFailure: count(m.determinism.overlap.pairsWithFailure),
+        failRate: rate(m.determinism.overlap.failRate) ?? 0, sessions: m.determinism.overlap.sessions.flatMap((id) => safeId(id) ?? []) } : null,
+      lastVerifiedAt: safeDate(m.determinism.lastVerifiedAt) ?? "1970-01-01T00:00:00.000Z" },
+    runBudget: { maxPerScene: count(m.runBudget.maxPerScene, 10), used: count(m.runBudget.used, 10) },
+    oracleProvenance: { recorded: scenes.filter((scene) => scene.verdict.provenance.kind === "recorded").length,
+      codeDerived: scenes.filter((scene) => scene.verdict.provenance.kind === "code").length },
+    provenance: { accountIdHash: /^[a-f0-9]{8}$/.test(m.provenance.accountIdHash) ? m.provenance.accountIdHash : "00000000",
+      checkId: safeId(m.check.id) ?? "<unrecognized-id>", failingResultId: failing?.id ?? null, passingResultId: passing?.id ?? null,
+      errorGroupId: null, rcaId: null,
+      assets: m.provenance.assets.filter((asset) => (asset.result === "failing" || asset.result === "passing")
+        && ASSET_NAMES.has(asset.name) && /^[a-f0-9]{64}$/.test(asset.sha256)
+        && Number.isSafeInteger(asset.bytes) && asset.bytes >= 0 && asset.bytes <= 64 * 1024 * 1024)
+        .map((asset) => ({ result: asset.result, name: asset.name, type: asset.type === "local-asset" ? "local-asset" : "remote-asset",
+          bytes: asset.bytes, sha256: asset.sha256 })),
+      apiCalls: m.provenance.apiCalls.slice(0, 1000).map((call) => ({ method: call.method === "GET" || call.method === "POST" ? call.method : "OTHER",
+        url: API_OPERATIONS.has(call.url) ? call.url : "<checkly-request>", status: count(call.status, 599) })) },
+    notes: ["Multistep evidence uses fixed routes, typed bodies, source bindings and error categories. Locally constructed fixtures prove mechanics only."],
+  };
+  return projected;
 }

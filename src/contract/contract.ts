@@ -4,7 +4,8 @@
 // the diff for weakened/removed/guarded core-path assertions, and verifies
 // envAssumptions + the reproduction-determinism gate (PR-7).
 
-import type { AssertionInventory, Bundle, EvidenceRow, Scene, SceneType } from "../types.ts";
+import type { Assertion, AssertionInventory, Bundle, EvidenceRow, Scene, SceneType } from "../types.ts";
+import { parseMultiStepProject } from "../multistep/source.ts";
 import { parseProjectInventory, inventoryDiff, type InventoryDiff } from "../assertion/inventory.ts";
 
 export interface ContractReport {
@@ -23,6 +24,52 @@ export interface ContractReport {
 }
 
 const LEGAL_PROVENANCE = new Set(["recorded", "code"]);
+
+/** Multistep identity is a full, counted (step, subject, matcher, target)
+ * tuple. assertionId remains unchanged and can legitimately collide for two
+ * different subjects; no same-ID shortcut may erase removed/added evidence. */
+function multistepTupleDiff(bundle: Bundle, before: Map<string, string>, after: Map<string, string>,
+  original: AssertionInventory, patched: AssertionInventory, base: InventoryDiff, candidateFile: string): InventoryDiff {
+  const oldModel = parseMultiStepProject(before, bundle.check.file)?.script;
+  const newModel = parseMultiStepProject(after, candidateFile)?.script;
+  if (!oldModel || !newModel) return base;
+  const key = (a: typeof oldModel.assertions[number]): string => JSON.stringify([a.stepTitle, a.id, a.subject, a.matcher, a.target]);
+  const oldCounts = new Map<string, number>();
+  const newCounts = new Map<string, number>();
+  for (const item of oldModel.assertions) oldCounts.set(key(item), (oldCounts.get(key(item)) ?? 0) + 1);
+  for (const item of newModel.assertions) newCounts.set(key(item), (newCounts.get(key(item)) ?? 0) + 1);
+  const seenOld = new Map<string, number>();
+  const seenNew = new Map<string, number>();
+  const removed: Assertion[] = [];
+  const added: Assertion[] = [];
+  const failure = bundle.multistep?.problems.length === 0 ? bundle.multistep.failureAssertion : null;
+  const repairedStaleField = (old: typeof oldModel.assertions[number]): boolean => {
+    if (!failure || oldModel.errors.length || newModel.errors.length
+      || failure.file !== bundle.check.file || failure.line !== old.sourceLine || failure.id !== old.id
+      || failure.step !== "book 09:30" || old.stepTitle !== failure.step || old.subject !== "body.confirmed") return false;
+    return newModel.assertions.some((next) => next.stepTitle === failure.step && next.id === old.id
+      && next.matcher === old.matcher && next.target === old.target && next.subject === "body.booking.confirmed");
+  };
+  for (let i = 0; i < oldModel.assertions.length; i++) {
+    const tuple = oldModel.assertions[i]!;
+    const tupleKey = key(tuple);
+    const seen = (seenOld.get(tupleKey) ?? 0) + 1;
+    seenOld.set(tupleKey, seen);
+    if (seen <= (newCounts.get(tupleKey) ?? 0)) continue;
+    const assertion = original.assertions[i];
+    if (assertion) removed.push(repairedStaleField(tuple) ? { ...assertion, onCriticalPath: false } : assertion);
+  }
+  for (let i = 0; i < newModel.assertions.length; i++) {
+    const tuple = newModel.assertions[i]!;
+    const tupleKey = key(tuple);
+    const seen = (seenNew.get(tupleKey) ?? 0) + 1;
+    seenNew.set(tupleKey, seen);
+    if (seen <= (oldCounts.get(tupleKey) ?? 0)) continue;
+    const assertion = patched.assertions[i];
+    if (assertion) added.push(assertion);
+  }
+  return { ...base, removed, added };
+}
 
 export function sceneExpected(scene: Scene): { observed: "pass" | "fail"; oracle: string } {
   const p = scene.verdict.provenance;
@@ -53,7 +100,10 @@ export function buildContract(bundle: Bundle, patchedSource: string, patchedFile
   candidateFiles.set(candidateCheckFile, patchedSource);
   const original = parseProjectInventory(bundle.check.file, originalFiles, bundle.check.logicalId);
   const patched = parseProjectInventory(candidateCheckFile, candidateFiles, bundle.check.logicalId);
-  const diff = inventoryDiff(original, patched);
+  const genericDiff = inventoryDiff(original, patched);
+  const diff = bundle.check.checkType === "MULTI_STEP"
+    ? multistepTupleDiff(bundle, originalFiles, candidateFiles, original, patched, genericDiff, candidateCheckFile)
+    : genericDiff;
 
   const unverifiedAssumptions: string[] = [];
   for (const a of bundle.envAssumptions) {

@@ -250,34 +250,35 @@ function makeFakeProject(): string {
   mkdirSync(pw, { recursive: true });
   writeFileSync(join(project, "package.json"), JSON.stringify({ name: "fake-project", private: true }));
   writeFileSync(join(pw, "package.json"), JSON.stringify({ name: "@playwright/test", version: "1.0.0", exports: { "./cli": "./cli.cjs" } }));
+  writeFileSync(join(project, "fake-cli-options.json"), JSON.stringify({}));
   writeFileSync(join(pw, "cli.cjs"), [
     "const fs = require('node:fs')",
-    // env snapshot for assertions (fresh HOME, replaced NODE_OPTIONS, no LD_LIBRARY_PATH)
-    "if (process.env.FAKE_ENV_SNAPSHOT) {",
-    "  fs.writeFileSync(process.env.FAKE_ENV_SNAPSHOT, JSON.stringify({",
-    "    HOME: process.env.HOME, NODE_OPTIONS: process.env.NODE_OPTIONS,",
-    "    LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH ?? null,",
-    "    NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS ?? null,",
-    "    PATH: process.env.PATH, ENVIRONMENT_URL: process.env.ENVIRONMENT_URL,",
-    "  }))",
-    "}",
-    "if (process.env.FAKE_STDERR_MARKER) process.stderr.write(process.env.FAKE_STDERR_MARKER)",
-    "if (process.env.FAKE_STDOUT_PAD_BYTES) {",
-    "  process.stdout.write('x'.repeat(Number(process.env.FAKE_STDOUT_PAD_BYTES)))",
-    "}",
-    // one real request through the bridge, then the (mismatching) report
+    "const path = require('node:path')",
+    "const root = path.join(__dirname, '../../..')",
+    "const options = JSON.parse(fs.readFileSync(path.join(root, 'fake-cli-options.json'), 'utf8'))",
+    "if (options.snapshot) fs.writeFileSync(options.snapshot, JSON.stringify({",
+    "  HOME: process.env.HOME, NODE_OPTIONS: process.env.NODE_OPTIONS,",
+    "  LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH ?? null,",
+    "  NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS ?? null,",
+    "  PATH: process.env.PATH, ENVIRONMENT_URL: process.env.ENVIRONMENT_URL,",
+    "  injected: Object.keys(process.env).filter(k => k.startsWith('FAKE_'))",
+    "}))",
+    "if (options.stderr) process.stderr.write(options.stderr)",
     "async function main() {",
-    "  if (process.env.FAKE_FETCH_ROUNDS) {",
-    "    for (let i = 0; i < Number(process.env.FAKE_FETCH_ROUNDS); i++) {",
-    "      await fetch(process.env.ENVIRONMENT_URL + '/api/login', { method: 'POST', body: JSON.stringify({ probe: true }), headers: { 'content-type': 'application/json' } })",
-    "    }",
+    "  if (options.pad) await new Promise(resolve => process.stdout.write('x'.repeat(options.pad), resolve))",
+    "  for (let i = 0; i < (options.rounds || 0); i++) {",
+    "    await fetch(process.env.ENVIRONMENT_URL + '/api/login', { method: 'POST', body: JSON.stringify({ probe: true }), headers: { 'content-type': 'application/json' } })",
     "  }",
-    "  process.stdout.write(fs.readFileSync(process.env.FAKE_REPORT_FILE, 'utf8'))",
+    "  process.stdout.write(fs.readFileSync(path.join(root, 'fake-report.json'), 'utf8'))",
     "  process.exit(0)",
     "}",
     "main().catch((e) => { process.stderr.write(String(e)); process.exit(1) })",
   ].join("\n"));
   return project;
+}
+
+function fakeCliOptions(project: string, options: Record<string, unknown>): void {
+  writeFileSync(join(project, "fake-cli-options.json"), JSON.stringify(options));
 }
 
 function specFiles(project: string, report: string): { project: string; files: Record<string, string> } {
@@ -294,23 +295,24 @@ test("rev3/executor: the child runs with a FRESH HOME (removed afterwards), a re
     projectDir: p,
     files,
     checkFile: "multistep-booking.spec.ts",
-    env: { FAKE_REPORT_FILE: join(p, "fake-report.json"), FAKE_ENV_SNAPSHOT: snapshot, LD_LIBRARY_PATH: "/must/not/leak" },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", LD_LIBRARY_PATH: "/must/not/leak" },
   });
   // NOTE: LD_LIBRARY_PATH in ctx.env is a RESERVED key → rejected before running
   assert.equal(outcome.inconclusive, true, outcome.reason ?? "");
-  assert.match(outcome.reason ?? "", /reserved runner key/);
+  assert.match(outcome.reason ?? "", /minimal approved Multistep environment/);
   assert.ok(!existsSync(snapshot), "a rejected environment must never spawn the runner");
 
   // now without the collision: fresh HOME + replaced NODE_OPTIONS
   const project2 = makeFakeProject();
   const snapshot2 = join(project2, "env-snapshot.json");
   const { project: p2, files: files2 } = specFiles(project2, passingTestResults());
+  fakeCliOptions(project2, { snapshot: snapshot2 });
   const outcome2 = await runMultiStepSandbox({
     baseUrl: "https://fixture.invalid",
     projectDir: p2,
     files: files2,
     checkFile: "multistep-booking.spec.ts",
-    env: { FAKE_REPORT_FILE: join(p2, "fake-report.json"), FAKE_ENV_SNAPSHOT: snapshot2 },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east" },
   });
   assert.equal(outcome2.inconclusive, true, "a fake JSON report without bridge/reporter traffic cannot PASS");
   assert.equal(outcome2.passed, false);
@@ -321,6 +323,7 @@ test("rev3/executor: the child runs with a FRESH HOME (removed afterwards), a re
   assert.ok(env.HOME !== process.env.HOME, "HOME must not be the parent's home");
   assert.match(env.NODE_OPTIONS ?? "", /^--import=.*verify-fix-seed\.mjs$/, "NODE_OPTIONS is fully replaced with the seed import");
   assert.equal(env.LD_LIBRARY_PATH, null, "LD_LIBRARY_PATH is never inherited");
+  assert.deepEqual((env as FakeEnv & { injected: string[] }).injected, [], "fake controls never enter the child environment");
   assert.ok(env.NODE_EXTRA_CA_CERTS?.includes("ca.pem"), "HTTPS targets also get a per-run bridge CA");
   assert.match(env.ENVIRONMENT_URL ?? "", /^https:\/\/127\.0\.0\.1:\d+$/, "every ENVIRONMENT_URL is a trusted bridge origin");
   assert.ok(env.PATH, "PATH remains available");
@@ -330,34 +333,28 @@ test("rev3/executor: the child runs with a FRESH HOME (removed afterwards), a re
 test("rev3/executor: reporter stdout over the bound yields no admissible evidence (UNCERTAIN)", async () => {
   const project = makeFakeProject();
   const { project: p, files } = specFiles(project, passingTestResults());
+  fakeCliOptions(project, { pad: 17 * 1024 * 1024 });
   const outcome = await runMultiStepSandbox({
-    baseUrl: "https://fixture.invalid",
-    projectDir: p,
-    files,
+    baseUrl: "https://fixture.invalid", projectDir: p, files,
     checkFile: "multistep-booking.spec.ts",
-    env: {
-      FAKE_REPORT_FILE: join(p, "fake-report.json"),
-      FAKE_STDOUT_PAD_BYTES: String(17 * 1024 * 1024), // over the 16 MiB bound
-    },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east" },
   });
   assert.equal(outcome.passed, false);
   assert.equal(outcome.inconclusive, true);
-  assert.match(outcome.reason ?? "", /no admissible JSON step evidence/);
+  assert.match(outcome.reason ?? "", /output exceeded a safe bound/);
 });
 
 test("rev3/executor: raw stderr content is never retained or used as evidence", async () => {
   const project = makeFakeProject();
   const { project: p, files } = specFiles(project, passingTestResults());
   const marker = '{"path":"/api/login","evidence-from":"stderr"}';
+  fakeCliOptions(project, { stderr: marker });
   const outcome = await runMultiStepSandbox({
     baseUrl: "https://fixture.invalid",
     projectDir: p,
     files,
     checkFile: "multistep-booking.spec.ts",
-    env: {
-      FAKE_REPORT_FILE: join(p, "fake-report.json"),
-      FAKE_STDERR_MARKER: marker,
-    },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east" },
   });
   assert.equal(outcome.inconclusive, true, "stderr cannot supply missing bridge/reporter observations");
   assert.equal(outcome.passed, false);
@@ -374,19 +371,17 @@ test("rev3/executor: bridge/reporter mismatch — bridge traffic that does not m
   try {
     const project = makeFakeProject();
     const { project: p, files } = specFiles(project, passingTestResults());
+    fakeCliOptions(project, { rounds: 1 });
     const outcome = await runMultiStepSandbox({
       baseUrl: upstream.url,
       projectDir: p,
       files,
       checkFile: "multistep-booking.spec.ts",
-      env: {
-        FAKE_REPORT_FILE: join(p, "fake-report.json"),
-        FAKE_FETCH_ROUNDS: "1",
-      },
+      env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east" },
     });
     assert.equal(outcome.passed, false);
     assert.equal(outcome.inconclusive, true);
-    assert.match(outcome.reason ?? "", /bridge\/reporter dedicated request audit missing/);
+    assert.match(outcome.reason ?? "", /transaction is not the exact executed four-request sequence|dedicated request audit missing/);
     assert.equal(outcome.proxyEvidence.length, 1, "the bridge saw the single real request");
   } finally {
     await upstream.close();
@@ -439,7 +434,7 @@ test("rev3/executor: the canonical API-only spec is statically browser-free; a b
     projectDir: project,
     files: { "bad.spec.ts": bad },
     checkFile: "bad.spec.ts",
-    env: { FAKE_REPORT_FILE: join(project, "fake-report.json") },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east" },
   });
   assert.equal(outcome.passed, false);
   assert.equal(outcome.inconclusive, true);
@@ -615,12 +610,12 @@ test("rev3/zip: duplicate entry names and oversized direct files are rejected as
   const nameLen2 = zip.readUInt16LE(p + 28);
   assert.equal(nameLen2, nameLen1, "the patch assumes equal-length names");
   zip.write(first, p + 46, nameLen2, "utf8");
-  assert.throws(() => openZipBounded(zip), /duplicate entry name/);
+  assert.throws(() => openZipBounded(zip), /duplicate entry name|local and central headers disagree/);
 
   const dir = mkdtempSync(join(tmpdir(), "verify-fix-rev3-dupzip-"));
   writeFileSync(join(dir, "assets.zip"), zip);
   const read = readMultiStepAssets(dir);
-  assert.match(read.failing!.invalid ?? "", /duplicate|invalid/);
+  assert.match(read.failing!.invalid ?? "", /duplicate|invalid|local and central headers disagree/);
 
   // direct oversized file bound
   const dir2 = mkdtempSync(join(tmpdir(), "verify-fix-rev3-bigfile-"));
@@ -677,7 +672,7 @@ test("rev3/source: every request URL must provably derive from process.env.ENVIR
     "  await test.step('login', async () => { await request.get(`${origin}/api/x`) })",
     "})",
   ].join("\n"));
-  assert.deepEqual(derived.errors, []);
+  assert.deepEqual(derived.errors, ["request URL is not exactly an approved environment origin followed by one fixed route — UNCERTAIN before execution"]);
   assert.equal(derived.requests.length, 1);
   assert.equal(derived.requests[0]!.urlTemplate, "`${origin}/api/x`");
 

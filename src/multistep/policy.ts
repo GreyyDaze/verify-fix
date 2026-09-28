@@ -71,6 +71,9 @@ export function evaluateMultiStepPolicy(
       rejections.push("MultiStepCheck logical ID changed — check identity must not change");
     }
     if (candidate.construct && original?.construct) {
+      if (original.construct.executed && !candidate.construct.executed) {
+        rejections.push("MultiStepCheck construct moved into dead or helper code — incident check no longer executes");
+      }
       const keep = (c: NonNullable<MultiStepSourceModel["construct"]>) => ({
         name: c.name, entrypoint: c.entrypoint, frequencyMinutes: c.frequencyMinutes,
         locations: c.locations, runParallel: c.runParallel, activated: c.activated,
@@ -83,13 +86,17 @@ export function evaluateMultiStepPolicy(
     if (!candidate.script && original?.script) {
       rejections.push("Multistep transaction script missing from the candidate");
     } else if (candidate.script) {
-      const required = original?.script?.steps ?? [];
-      const seen = candidate.script.steps;
-      // ordering + presence of every required step
+      const required = (original?.script?.steps ?? []).filter((step) => step.executed);
+      const allCandidateSteps = candidate.script.steps;
+      const seen = allCandidateSteps.filter((step) => step.executed);
+      // A same-title call in an uncalled helper, detached callback, or dead
+      // branch cannot satisfy an executed required step. Unknown titles are
+      // unsupported data flow, not proof that a known step was removed.
       const seenTitles = seen.map((s) => s.title);
       const requiredTitles = required.map((s) => s.title);
       const missing = requiredTitles.filter((title) => !seenTitles.includes(title));
-      if (missing.length > 0) {
+      const unknownTitle = candidate.errors.some((error) => /test\.step title.*not a static string/.test(error));
+      if (missing.length > 0 && (!unknownTitle || missing.some((title) => allCandidateSteps.some((step) => step.title === title && !step.executed)))) {
         rejections.push(`required test.step() removed or skipped (${missing.length} required step(s))`);
       }
       const requiredPresent = requiredTitles.filter((title) => seenTitles.includes(title));
@@ -101,7 +108,7 @@ export function evaluateMultiStepPolicy(
       if (extra.length > 0 && requiredTitles.length > 0) {
         notes.push(`candidate adds ${extra.length} step(s) not in the original transaction`);
       }
-      for (const step of seen) {
+      for (const step of allCandidateSteps) {
         if (requiredTitles.includes(step.title) && !step.awaited) {
           rejections.push("missing await on required test.step — definite FAILED");
         }
@@ -124,24 +131,38 @@ export function evaluateMultiStepPolicy(
         if (JSON.stringify(candidate.script.requests.map(requestTuple)) !== JSON.stringify(original.script.requests.map(requestTuple))) {
           rejections.push("ordered Multistep requests changed (method, URL provenance, step, headers or body shape) — the captured transaction may not be bypassed");
         }
-        // Assertion IDs remain exactly as defined by src/assertion/id.ts. A
-        // candidate may replace an obsolete unique assertion (the inventory
-        // and contract decide whether that repair is valid), but it must not
-        // launder an old ID into another step, alter a same-ID tuple, reorder
-        // surviving assertions or drop one copy of a duplicated ID.
+        // ID deliberately hashes matcher+target, not subject. Diff *tuples*,
+        // with occurrence counts and order, before consulting IDs. A stale
+        // book-body field may acquire the corresponding nested booking field
+        // with the same ID: that is removed+added contract evidence, not a
+        // substituted retained assertion. Other same-ID substitutions cannot
+        // launder a check or move an assertion to a different step.
         const originalAssertions = original.script.assertions;
         const candidateAssertions = candidate.script.assertions;
-        const originalIds = new Set(originalAssertions.map((a) => a.id));
-        const candidateIds = new Set(candidateAssertions.map((a) => a.id));
-        const shared = new Set([...originalIds].filter((id) => candidateIds.has(id)));
-        const tuple = (a: typeof candidateAssertions[number]) => [a.stepTitle, a.id, a.subject, a.matcher, a.target];
-        const retainedOld = originalAssertions.filter((a) => shared.has(a.id)).map(tuple);
-        const retainedNew = candidateAssertions.filter((a) => shared.has(a.id)).map(tuple);
+        const tuple = (a: typeof candidateAssertions[number]) => JSON.stringify([a.stepTitle, a.id, a.subject, a.matcher, a.target]);
+        const retainedOld = originalAssertions.map(tuple).filter((key) => candidateAssertions.some((a) => tuple(a) === key));
+        const retainedNew = candidateAssertions.map(tuple).filter((key) => originalAssertions.some((a) => tuple(a) === key));
         if (JSON.stringify(retainedOld) !== JSON.stringify(retainedNew)) {
           rejections.push("step-scoped assertion tuples with retained IDs were moved, substituted, duplicated or reordered");
         }
-        const removedCount = [...originalIds].filter((id) => !candidateIds.has(id)).length;
-        if (removedCount > 0) notes.push(`${removedCount} original assertion(s) replaced (inventory diff governs the verdict)`);
+        const oldCounts = new Map<string, number>();
+        const newCounts = new Map<string, number>();
+        for (const a of originalAssertions) oldCounts.set(tuple(a), (oldCounts.get(tuple(a)) ?? 0) + 1);
+        for (const a of candidateAssertions) newCounts.set(tuple(a), (newCounts.get(tuple(a)) ?? 0) + 1);
+        const missingTuples = originalAssertions.filter((a) => (newCounts.get(tuple(a)) ?? 0) < (oldCounts.get(tuple(a)) ?? 0));
+        const addedTuples = candidateAssertions.filter((a) => (oldCounts.get(tuple(a)) ?? 0) < (newCounts.get(tuple(a)) ?? 0));
+        const nestedRepair = (old: typeof originalAssertions[number], next: typeof candidateAssertions[number]): boolean =>
+          old.stepTitle === "book 09:30" && next.stepTitle === old.stepTitle && next.id === old.id
+          && next.matcher === old.matcher && next.target === old.target && old.subject.startsWith("body.")
+          && next.subject === `body.booking.${old.subject.slice("body.".length)}`;
+        for (const old of missingTuples) {
+          const colliding = addedTuples.filter((next) => next.id === old.id);
+          if (colliding.length && !colliding.some((next) => nestedRepair(old, next))) {
+            rejections.push("step-scoped assertion tuples with retained IDs were moved, substituted, duplicated or reordered");
+            break;
+          }
+        }
+        if (missingTuples.length) notes.push(`${missingTuples.length} original assertion tuple(s) replaced (full step-scoped inventory diff governs the verdict)`);
       }
     }
   }

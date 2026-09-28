@@ -38,8 +38,8 @@ test("client: API calls carry bearer + account headers; presigned downloads carr
   const h2 = calls[1].init.headers as Record<string, string>;
   assert.equal(h2.authorization, undefined, "no credentials to a presigned URL");
   assert.equal(h2["x-checkly-account"], undefined);
-  // provenance log strips query strings
-  assert.deepEqual(c.calls.map((x) => x.url), ["https://api.checklyhq.com/v1/checks/abc", "https://s3.example/trace.zip"]);
+  // provenance records fixed operation categories, never paths or signatures
+  assert.deepEqual(c.calls.map((x) => x.url), ["get-check", "asset"]);
 });
 
 test("client: list results builds the v2 query, RCA 202 is 'pending', errors carry status", async () => {
@@ -158,4 +158,52 @@ test("credentials: env wins; otherwise the Checkly CLI login files are read; val
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("client boundary: HTTPS origins, redirects and credential isolation hold before a second fetch", async () => {
+  assert.throws(() => new ChecklyClient(creds, { baseUrl: "http://127.0.0.1:9999" }), /HTTPS/);
+  assert.throws(() => new ChecklyClient(creds, { baseUrl: "https://user:pw@api.checklyhq.com" }), /HTTPS/);
+  const external = fakeFetch(() => new Response(null, { status: 302, headers: { location: "https://untrusted.invalid/steal" } }));
+  const api = new ChecklyClient(creds, { baseUrl: "https://api.checklyhq.com", fetchImpl: external.fetch });
+  await assert.rejects(api.getCheck("a"), /redirect changed its authorized origin/);
+  assert.equal(external.calls.length, 1);
+  assert.equal((external.calls[0]!.init.headers as Record<string, string>).authorization, "Bearer cu_test_key");
+
+  const wrongOperation = fakeFetch(() => new Response(null, { status: 301, headers: { location: "/v1/error-groups/other" } }));
+  await assert.rejects(new ChecklyClient(creds, { fetchImpl: wrongOperation.fetch }).getCheck("a"), /operation/);
+  assert.equal(wrongOperation.calls.length, 1);
+
+  const assetRedirect = fakeFetch((url, init) => {
+    assert.equal((init.headers as Record<string, string>).authorization, undefined);
+    return new Response(null, { status: 302, headers: { location: url.includes("assets.invalid")
+      ? "https://api.checklyhq.com/v1/checks/a" : "http://assets.invalid/insecure" } });
+  });
+  await assert.rejects(new ChecklyClient(creds, { fetchImpl: assetRedirect.fetch }).download("https://assets.invalid/signed?signature=HIDDEN"), /HTTPS/);
+  assert.ok(assetRedirect.calls.every((call) => !(call.init.headers as Record<string, string>).authorization));
+  assert.ok(!JSON.stringify(api.calls).includes("steal"));
+});
+
+test("client boundary: finite deadline, retry cap and bounded streamed asset", async () => {
+  const blocked = fakeFetch((_url, init) => new Promise<Response>((_resolve, reject) => {
+    init.signal?.addEventListener("abort", () => reject(new Error("request aborted")), { once: true });
+  }));
+  await assert.rejects(new ChecklyClient(creds, { fetchImpl: blocked.fetch, timeoutMs: 25 }).getCheck("never"), /time limit exceeded/);
+  assert.equal(blocked.calls.length, 1);
+
+  const delays: number[] = [];
+  const throttled = fakeFetch(() => new Response("retry", { status: 429, headers: { "retry-after": "9999999999" } }));
+  await assert.rejects(new ChecklyClient(creds, { fetchImpl: throttled.fetch, retries: 999_999,
+    sleep: async (ms) => { delays.push(ms); } }).getCheck("bounded"), (error: unknown) =>
+      error instanceof ChecklyApiError && error.status === 429);
+  assert.equal(throttled.calls.length, 4, "only three retries are allowed even with an excessive caller budget");
+  assert.deepEqual(delays, [30_000, 30_000, 30_000]);
+
+  let chunks = 0;
+  const streaming = fakeFetch(() => new Response(new ReadableStream({ pull(controller) {
+    chunks++;
+    controller.enqueue(new Uint8Array(7));
+    if (chunks > 10) controller.close();
+  } }), { status: 200 }));
+  await assert.rejects(new ChecklyClient(creds, { fetchImpl: streaming.fetch }).download("https://assets.invalid/signed", 16), /stream/);
+  assert.ok(chunks < 11, "the reader stopped before consuming an unbounded response");
 });

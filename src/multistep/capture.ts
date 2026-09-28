@@ -223,6 +223,21 @@ export interface MultiStepCaptureInput {
 
 export interface MultiStepRecording {
   schemaVersion: typeof MULTISTEP_RECORDING_SCHEMA;
+  /** Set only by bundle creation after the trusted source/result is selected.
+   * Standalone mechanics fixtures are deliberately unbound and cannot load. */
+  binding?: {
+    side: "failing" | "passing";
+    checkId: string;
+    resultId: string;
+    runLocation: string;
+    startedAt: string;
+    stoppedAt: string | null;
+    sourceFile: string;
+    sourceSha256: string;
+    testResultsSha256: string;
+    reporter: "playwright-json-nested";
+    bridge: "required-at-local-execution";
+  };
   kind: MultiStepCapture["kind"];
   stats: MultiStepCapture["stats"];
   steps: MultiStepCapture["steps"];

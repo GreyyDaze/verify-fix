@@ -3,11 +3,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, linkSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildBundle } from "../../src/bundle/build.ts";
 import { loadBundle } from "../../src/bundle.ts";
+import { buildContract } from "../../src/contract/contract.ts";
 import type { ChecklyClient } from "../../src/checkly/client.ts";
 import type { AssetManifestEntry, CheckResultSummary } from "../../src/checkly/types.ts";
 import { openZip, openZipBounded, readZipEntry, listZip } from "../../src/trace/zip.ts";
@@ -59,6 +60,7 @@ interface FakeOpts {
   remote?: (id: string) => { assets: AssetManifestEntry[]; truncated?: boolean };
   download?: (url: string, maxBytes: number) => Promise<Buffer>;
   canary?: boolean;
+  shortSecret?: boolean;
 }
 function fakeClient(opts: FakeOpts = {}): ChecklyClient {
   const fail = opts.fail ?? summary("synthetic-fail", true);
@@ -76,7 +78,7 @@ function fakeClient(opts: FakeOpts = {}): ChecklyClient {
           { key: "ENVIRONMENT_URL", value: FAKE_ORIGIN, secret: false },
           { key: "MULTISTEP_USER_US_EAST_1", value: FAKE_ACCOUNT, secret: true },
           { key: "MULTISTEP_USER_EU_WEST_1", value: "other-fixture", secret: true },
-          { key: "CANARY_NAME", value: CANARY, secret: true },
+          { key: "CANARY_NAME", value: opts.shortSecret ? "abc" : CANARY, secret: true },
         ],
       };
     },
@@ -293,4 +295,177 @@ test("a direct file and assets.zip together are ambiguous evidence, and local sy
   const rec = buildMultiStepRecording({ texts: { testResults: null, logs: null, checkRunData: null, invalid: `secret ${CANARY} in archive` } });
   assert.equal(rec.ok, false);
   if (!rec.ok) assert.ok(!JSON.stringify(rec).includes(CANARY), "raw error paths and names become fixed categories");
+});
+
+test("only a result/source/reporter-bound failed assertion may narrow the stale-field contract removal", async () => {
+  const out = await capture({}, assetDir());
+  const manifestPath = join(out.outDir, "manifest.json");
+  const recordingPath = join(out.outDir, "recordings", "failing.multistep.json");
+  const initialManifest = readFileSync(manifestPath, "utf8");
+  const initialRecording = readFileSync(recordingPath, "utf8");
+  const patch = SPEC.replace("expect(body.confirmed).toBe(true)", "expect(body.booking.confirmed).toBe(true)");
+  assert.notEqual(patch, SPEC);
+  const baseline = loadBundle(out.outDir).bundle;
+  assert.deepEqual(baseline.multistep?.problems, []);
+  assert.deepEqual(baseline.multistep?.failureAssertion, {
+    file: FILE, line: 142,
+    id: baseline.multistep!.failureAssertion!.id, step: "book 09:30",
+  });
+  const diff = buildContract(baseline, patch).diff;
+  const removed = diff.removed.find((item) => item.subject === "body.confirmed" && item.target === "true");
+  const added = diff.added.find((item) => item.subject === "body.booking.confirmed" && item.target === "true");
+  assert.ok(removed && added, "a colliding assertion ID must still produce removed AND added tuple evidence");
+  assert.equal(removed.id, added.id);
+  assert.equal(removed.onCriticalPath, false, "the proven stale-field replacement alone is the narrow repair exception");
+
+  const manifestAttacks: Array<(m: Record<string, any>) => void> = [
+    (m) => { m.failurePoint.assertion.line = 144; },
+    (m) => { m.failurePoint.assertion.file = "checks/other.spec.ts"; },
+    (m) => { m.failurePoint.assertion.assertionId = "assert:00000000"; },
+    (m) => { m.failurePoint.action.title = "session"; },
+    (m) => { m.results.failing.id = "different-run"; },
+    (m) => { m.results.failing.runLocation = "us-east-1"; },
+    (m) => { m.results.failing.startedAt = "2026-09-25T22:19:13.000Z"; },
+    (m) => { m.provenance.assets.find((asset: { result: string; name: string }) =>
+      asset.result === "failing" && asset.name === "test-results.json").sha256 = "0".repeat(64); },
+    (m) => { m.scenes.find((scene: { verdict: { provenance: { kind: string } } }) =>
+      scene.verdict.provenance.kind === "recorded").verdict.provenance.runId = "another-run"; },
+    (m) => { const detection = m.scenes.find((scene: { type: string }) => scene.type === "DETECTION");
+      detection.verdict.provenance = { kind: "recorded", runId: m.results.passing.id,
+        artifactId: "recordings/passing.multistep.json" }; },
+    (m) => { m.scenes.find((scene: { type: string }) => scene.type === "DETECTION").mode = "inject:GET /api/slots -> 500"; },
+    (m) => { m.failurePoint.dependency.path = "/api/slots"; m.failurePoint.dependency.method = "GET"; },
+    (m) => { m.scenes = m.scenes.filter((scene: { type: string }) => scene.type !== "DETECTION"); },
+    (m) => { m.scenes.find((scene: { type: string }) => scene.type === "DETECTION").verdict.provenance =
+      { kind: "code", assertionId: m.failurePoint.assertion.assertionId }; },
+    (m) => { m.scenes.find((scene: { type: string }) => scene.type === "DETECTION").sceneId = "healthy-live"; },
+  ];
+  for (const [index, mutate] of manifestAttacks.entries()) {
+    const m = JSON.parse(initialManifest);
+    mutate(m);
+    writeFileSync(manifestPath, JSON.stringify(m));
+    const loaded = loadBundle(out.outDir).bundle;
+    assert.ok(loaded.multistep?.problems.length, `manifest attack ${index} cannot retain admissible evidence`);
+    const changed = buildContract(loaded, patch).diff.removed.find((item) => item.subject === "body.confirmed" && item.target === "true");
+    assert.equal(changed?.onCriticalPath, true, "invalid attribution does not downgrade the removed contract");
+  }
+  writeFileSync(manifestPath, initialManifest);
+  const recordingAttacks: Array<(r: Record<string, any>) => void> = [
+    (r) => { r.binding.side = "passing"; },
+    (r) => { r.binding.reporter = "forged-stdout"; },
+    (r) => { r.binding.bridge = "not-required"; },
+    (r) => { r.binding.sourceSha256 = "0".repeat(64); },
+    (r) => { r.steps[3].failureLine = 144; },
+    (r) => { r.steps[3].assertions = []; },
+    (r) => { r.steps[3].requests[0].expected = "<redacted>"; },
+  ];
+  for (const mutate of recordingAttacks) {
+    const r = JSON.parse(initialRecording);
+    mutate(r);
+    writeFileSync(recordingPath, JSON.stringify(r));
+    const loaded = loadBundle(out.outDir).bundle;
+    assert.ok(loaded.multistep?.problems.length, "a changed stored recording must become UNCERTAIN");
+    assert.equal(buildContract(loaded, patch).diff.removed.find((item) => item.subject === "body.confirmed")?.onCriticalPath, true);
+  }
+});
+
+test("Multistep bundle output is bounded: reused directories cannot redirect files through links", async () => {
+  const root = mkdtempSync(join(tmpdir(), "verify-fix-output-bound-"));
+  const outside = join(root, "outside");
+  mkdirSync(outside);
+  const leaked = join(outside, "private.txt");
+  writeFileSync(leaked, "leave intact");
+  const assets = assetDir();
+  const buildAt = (outDir: string) => buildBundle({ checkId: "synthetic-check", outDir, projectDir: project(), assetsDir: assets, log: () => {} },
+    { client: fakeClient(), accountId: "synthetic", now: () => new Date("2026-09-27T00:00:00.000Z") });
+  const folder = join(root, "symlinked-child");
+  mkdirSync(folder);
+  symlinkSync(outside, join(folder, "check"));
+  await assert.rejects(buildAt(folder), /MULTISTEP_OUTPUT_PATH_UNSAFE/);
+  assert.deepEqual(readdirSync(outside), ["private.txt"], "the target outside --out stays untouched");
+  const file = join(root, "symlinked-file");
+  mkdirSync(file);
+  symlinkSync(leaked, join(file, "manifest.json"));
+  await assert.rejects(buildAt(file), /MULTISTEP_OUTPUT_PATH_UNSAFE/);
+  const hardlink = join(root, "hardlinked-file");
+  mkdirSync(hardlink);
+  linkSync(leaked, join(hardlink, "manifest.json"));
+  await assert.rejects(buildAt(hardlink), /MULTISTEP_OUTPUT_PATH_UNSAFE/);
+  assert.equal(readFileSync(leaked, "utf8"), "leave intact");
+  const safe = join(root, "safe-bundle");
+  await buildAt(safe);
+  await buildAt(safe);
+  assert.deepEqual(loadBundle(safe).bundle.multistep?.problems, [], "an ordinary bounded recapture can replace its own regular files");
+});
+
+test("nested Playwright report, step assertions, required bodies and real token sites are mandatory — store:memory is no substitute", () => {
+  const raw = JSON.parse(passingTestResults());
+  const run = raw.suites[0].suites[0].specs[0].tests[0].results[0];
+  const attacks: Array<[string, (report: any) => void]> = [
+    ["flattened report", (r) => { r.steps = r.suites[0].suites[0].specs[0].tests[0].results[0].steps; r.suites = []; }],
+    ["missing required step assertion", (r) => { r.suites[0].suites[0].specs[0].tests[0].results[0].steps[0].steps.splice(1, 1); }],
+    ["missing login request body", (r) => { r.suites[0].suites[0].specs[0].tests[0].results[0].steps[0].steps[0].checklyData[0].requestBody = null; }],
+    ["missing book response body", (r) => { r.suites[0].suites[0].specs[0].tests[0].results[0].steps[3].steps[0].checklyData[0].body = null; }],
+    ["only a synthetic store label, not a token", (r) => { r.suites[0].suites[0].specs[0].tests[0].results[0].steps[0].steps[0].checklyData[0].body.token = null; }],
+  ];
+  assert.equal(run.steps.length, 5);
+  for (const [label, mutate] of attacks) {
+    const report = structuredClone(raw);
+    mutate(report);
+    const result = buildMultiStepRecording({ texts: { testResults: JSON.stringify(report), logs: passingLogs(), checkRunData: null } });
+    assert.equal(result.ok, false, `${label} cannot become admissible evidence`);
+  }
+});
+
+test("a symlinked check/ ROOT is not a bounded source closure at bundle load", async () => {
+  const out = await capture({}, assetDir());
+  renameSync(join(out.outDir, "check"), join(out.outDir, "original-source"));
+  symlinkSync(join(out.outDir, "original-source"), join(out.outDir, "check"));
+  assert.throws(() => loadBundle(out.outDir), /MULTISTEP_SOURCE_PATH_UNSAFE/);
+});
+
+test("a manifest cannot refer to an inherited property or escaping source file", async () => {
+  const out = await capture({}, assetDir());
+  const path = join(out.outDir, "manifest.json");
+  const original = JSON.parse(readFileSync(path, "utf8"));
+  for (const file of ["__proto__", "../../private.spec.ts", "checks/unrecorded.spec.ts"]) {
+    writeFileSync(path, JSON.stringify({ ...original, check: { ...original.check, file } }));
+    assert.throws(() => loadBundle(out.outDir), /MULTISTEP_SOURCE_PATH_UNSAFE|missing under check/);
+  }
+});
+
+test("short environment secrets that cannot be reliably screened prevent Multistep bundle output", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "verify-fix-short-secret-output-"));
+  await assert.rejects(buildBundle({ checkId: "synthetic-check", outDir: dir, projectDir: project(), assetsDir: assetDir(), log: () => {} },
+    { client: fakeClient({ shortSecret: true }), accountId: "synthetic" }), /MULTISTEP_SECRET_UNSCREENABLE/);
+  assert.deepEqual(readdirSync(dir), [], "no partial bundle was written");
+});
+
+test("legacy v2 Multistep bundles cannot read a symlinked or escaping source tree", () => {
+  const root = mkdtempSync(join(tmpdir(), "verify-fix-v2-multistep-"));
+  const outside = mkdtempSync(join(tmpdir(), "verify-fix-v2-private-"));
+  writeFileSync(join(outside, "private.spec.ts"), `PRIVATE_SYNTHETIC_CANARY ${CANARY}`);
+  const manifest = (file: string) => JSON.stringify({ schemaVersion: "v2",
+    check: { file, checkType: "MULTI_STEP" }, scenes: [] });
+  symlinkSync(outside, join(root, "check"));
+  writeFileSync(join(root, "manifest.json"), manifest("private.spec.ts"));
+  assert.throws(() => loadBundle(root), /MULTISTEP_SOURCE_PATH_UNSAFE/,
+    "v2 must not read a symlinked check/ root before it knows the source closure is safe");
+
+  const escaped = mkdtempSync(join(tmpdir(), "verify-fix-v2-escape-"));
+  mkdirSync(join(escaped, "check"));
+  writeFileSync(join(escaped, "check", "normal.spec.ts"), "// bounded synthetic script");
+  writeFileSync(join(escaped, "manifest.json"), manifest("../../private.spec.ts"));
+  assert.throws(() => loadBundle(escaped), /MULTISTEP_SOURCE_PATH_UNSAFE/,
+    "even a valid check/ tree cannot authorize an escaping v2 main-source path");
+
+  const claimed = mkdtempSync(join(tmpdir(), "verify-fix-v2-claim-"));
+  mkdirSync(join(claimed, "check"));
+  writeFileSync(join(claimed, "check", "safe.spec.ts"), "// bounded synthetic script");
+  writeFileSync(join(claimed, "manifest.json"), JSON.stringify({ schemaVersion: "v2",
+    check: { file: "safe.spec.ts", checkType: "MULTI_STEP" }, scenes: [],
+    multistep: { kind: "passing", steps: ["login"], problems: [] } }));
+  assert.deepEqual(loadBundle(claimed).bundle.multistep,
+    { kind: null, steps: [], problems: ["MULTISTEP_LEGACY_BUNDLE_UNBOUND"] },
+    "a v2 self-declared passing result is not result/asset/source-bound Multistep evidence");
 });

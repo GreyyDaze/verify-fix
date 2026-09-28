@@ -145,11 +145,11 @@ test("unknown or conflicting region is UNCERTAIN before a runner starts; CI is r
     assert.equal(multistepRegionForLocation("ap-south-1"), null);
     const a = await unknown.runScene(bundle(["ap-south-1", "eu-west-1"]), SPEC, scene());
     assert.equal(a.observed, "uncertain");
-    assert.match(a.reason ?? "", /trusted REGION\/account mapping/);
+    assert.match(a.reason ?? "", /both trusted regions/);
     assert.equal(unknown.costReport().localRuns, 0);
     const c = await conflict.runScene(bundle(), SPEC, scene());
     assert.equal(c.observed, "uncertain");
-    assert.match(c.reason ?? "", /REGION conflicts/);
+    assert.match(c.reason ?? "", /overrides a trusted runner key/);
     assert.equal(conflict.costReport().localRuns, 0);
     assert.equal(app.paths.length, 0);
     const out = await runMultiStepSandbox({ projectDir: WEB, baseUrl: app.origin,
@@ -157,7 +157,7 @@ test("unknown or conflicting region is UNCERTAIN before a runner starts; CI is r
     assert.equal(out.inconclusive, true);
     assert.equal(out.browserProcesses, null);
     assert.equal(out.environmentOrigin, null);
-    assert.match(out.reason ?? "", /reserved runner key/);
+    assert.match(out.reason ?? "", /not a minimal approved Multistep environment/);
   } finally {
     await unknown.close();
     await conflict.close();
@@ -183,7 +183,7 @@ test("a real browser-like DESCENDANT process is sampled, propagated to scene cos
   const executor = new SceneExecutor({ target: app.origin, projectDir,
     env: { MULTISTEP_USER_US_EAST_1: EAST, MULTISTEP_USER_EU_WEST_1: WEST } });
   try {
-    const observation = await executor.runScene(bundle(["us-east-1"]), SPEC, { ...scene(), mode: "live" });
+    const observation = await executor.runScene(bundle(), SPEC, { ...scene(), mode: "live" });
     assert.equal(observation.observed, "uncertain", "a stub CLI cannot satisfy the bridge/reporter proof");
     assert.equal(app.paths.length, 0);
     const counts = executor.costReport().multiStepBrowserCounts;
@@ -215,6 +215,25 @@ test("successful ordered bridge+reporter traffic without browser sampling remain
     assert.match(out.reason ?? "", /measurement unavailable/);
   } finally {
     process.env.PATH = saved;
+    await app.stop();
+  }
+});
+
+test("concurrency one runs BOTH trusted regions sequentially, not only the first account", { timeout: 180_000 }, async () => {
+  const app = await startApp();
+  const b = bundle();
+  b.config!.runParallel = false; // canonical two-region check scheduled one at a time
+  const executor = new SceneExecutor({ target: app.origin, projectDir: WEB,
+    env: { MULTISTEP_USER_US_EAST_1: EAST, MULTISTEP_USER_EU_WEST_1: WEST } });
+  try {
+    const observation = await executor.runScene(b, SPEC, scene());
+    assert.equal(observation.observed, "pass", observation.reason);
+    assert.deepEqual(app.accounts, [EAST, WEST]);
+    assert.equal(app.paths.length, 8);
+    assert.deepEqual(executor.costReport().multiStepBrowserCounts, [0, 0]);
+    assert.equal(executor.costReport().httpRequests, 8);
+  } finally {
+    await executor.close();
     await app.stop();
   }
 });

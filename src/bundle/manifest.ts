@@ -457,7 +457,7 @@ export function detectMultiStepFailurePoint(
       dependency: null,
     };
   }
-  const dependency = request
+  const dependency = request && assertion && /expect\s*\(/i.test(error)
     ? {
         method: request.method ?? "GET",
         url: request.url ?? "",

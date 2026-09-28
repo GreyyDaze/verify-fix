@@ -190,12 +190,12 @@ test("unsupported Multistep syntax is UNCERTAIN before any scene/runner executes
   assert.match(invalid.reason ?? "", /source is unsupported before execution/);
   assert.equal(invalid.environmentOrigin, null, "source preflight runs before missing dependency lookup");
   const unavailable = await runMultiStepSandbox({ projectDir: emptyProject, baseUrl: "https://fixture.invalid",
-    checkFile: FILE, files: Object.fromEntries(files()), env: {} });
+    checkFile: FILE, files: Object.fromEntries(files()), env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "fixture-east" } });
   assert.match(unavailable.reason ?? "", /runner dependencies are unavailable/);
   assert.ok(!JSON.stringify(unavailable).includes(emptyProject), "raw project paths never become sandbox evidence");
   const unsafe = await runMultiStepSandbox({ projectDir: emptyProject, baseUrl: "https://fixture.invalid",
     checkFile: FILE, files: { ...Object.fromEntries(files()), "../../private-source.ts": "raw path marker" }, env: {} });
-  assert.match(unsafe.reason ?? "", /candidate file path is unsafe/);
+  assert.match(unsafe.reason ?? "", /source closure exceeds its safe boundary|candidate file path is unsafe/);
   assert.equal(unsafe.environmentOrigin, null);
 });
 
@@ -258,4 +258,202 @@ test("bridge traffic and JSON requests cannot replace a missing dedicated report
   assert.match(bridgeReporterMismatch(actual401, filtered, goodAudit) ?? "", /passing result contradicts HTTP status/);
   const noAuth = bridge.map((item, i) => i === 3 ? { ...item, authorization: false } : item);
   assert.match(bridgeReporterMismatch(noAuth, filtered, goodAudit) ?? "", /authorization-site mismatch/);
+});
+
+test("required steps in an unused helper or dead branch are FAILED; an unresolved step title stays UNCERTAIN", () => {
+  const slots = "  await test.step('slots', async () => {";
+  const book = "  await test.step('book 09:30', async () => {";
+  assert.ok(SPEC.includes(slots) && SPEC.includes(book));
+  const hidden = [
+    SPEC.replace(slots, `  function unusedSlots() {\n${slots}`).replace(book, `  }\n${book}`),
+    SPEC.replace(slots, `  if (false) {\n${slots}`).replace(book, `  }\n${book}`),
+  ];
+  for (const source of hidden) {
+    const parsed = candidate(source);
+    assert.ok(parsed.script?.steps.some((step) => step.title === "slots" && !step.executed));
+    const policy = evaluateMultiStepPolicy(ORIGINAL, parsed);
+    assert.match(policy.rejected ?? "", /required test.step\(\) removed or skipped/);
+  }
+  const unknown = candidate(SPEC.replace(slots, "  await test.step(UNKNOWN_TITLE, async () => {"));
+  const undecidable = evaluateMultiStepPolicy(ORIGINAL, unknown);
+  assert.equal(undecidable.rejected, null, "a title whose value is unresolved cannot prove removal");
+  assert.match(undecidable.uncertain ?? "", /unbound executed test.step|unsupported source syntax/);
+});
+
+test("construct environment values must be the matching direct approved process.env provenance", () => {
+  const source = "value: process.env.MULTISTEP_USER_US_EAST_1 ?? \"\"";
+  assert.ok(CONSTRUCT.includes(source));
+  for (const replacement of [
+    "value: 'hardcoded-synthetic-account'",
+    "value: process.env.UNRELATED ?? \"\"",
+    "value: process.env.MULTISTEP_USER_EU_WEST_1 ?? \"\"",
+    "value: process.env.MULTISTEP_USER_US_EAST_1 ?? 'fallback-account'",
+    "value: process.env['MULTISTEP_USER_US_EAST_1'] ?? \"\"",
+  ]) {
+    const parsed = candidate(SPEC, CONSTRUCT.replace(source, replacement));
+    assert.ok(parsed.construct?.errors.some((error) => /matching approved process\.env/.test(error)), replacement);
+    const policy = evaluateMultiStepPolicy(ORIGINAL, parsed);
+    assert.ok(policy.rejected || policy.uncertain, replacement);
+  }
+});
+
+test("malformed script, construct and imported consts are UNCERTAIN before runner execution", async () => {
+  const malformedScript = SPEC + "\nlet dangling = (\n";
+  const script = candidate(malformedScript);
+  assert.ok(script.errors.some((error) => /unparseable Multistep transaction source/.test(error)), JSON.stringify(script.errors));
+  const scriptVerdict = evaluateMultiStepPolicy(ORIGINAL, script);
+  assert.equal(scriptVerdict.rejected, null);
+  assert.match(scriptVerdict.uncertain ?? "", /unsupported source syntax/);
+  const out = await runMultiStepSandbox({ projectDir: WEB, baseUrl: "https://fixture.invalid", checkFile: FILE,
+    files: Object.fromEntries(files(malformedScript)), originalFiles: Object.fromEntries(files()),
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001" } });
+  assert.equal(out.inconclusive, true);
+  assert.equal(out.environmentOrigin, null, "an invalid source never establishes a bridge or spawns the runner");
+  assert.equal(out.browserProcesses, null);
+
+  const malformedConstruct = candidate(SPEC, CONSTRUCT + "\nconst dangling = (\n");
+  assert.ok(malformedConstruct.errors.some((error) => /unparseable MultiStepCheck construct/.test(error)));
+  assert.match(evaluateMultiStepPolicy(ORIGINAL, malformedConstruct).uncertain ?? "", /unsupported source syntax/);
+
+  const imported = "import { STEP_TITLE } from './titles'\n" + SPEC.replace("await test.step('login'", "await test.step(STEP_TITLE");
+  const malformedModule = candidate(imported, CONSTRUCT, { "checks/titles.ts": "export const STEP_TITLE = 'login'\nconst dangling = (" });
+  assert.ok(malformedModule.errors.some((error) => /unparseable local import/.test(error)), JSON.stringify(malformedModule.errors));
+  assert.ok(evaluateMultiStepPolicy(ORIGINAL, malformedModule).uncertain);
+});
+
+test("unmodeled property, prototype, global and destructuring writes cannot preserve an apparently unchanged assertion tuple", async () => {
+  const additions = [
+    "Object.prototype.confirmed = true",
+    "delete Object.prototype.confirmed",
+    "process.exit = () => {}",
+    "Array.prototype.includes++",
+    "JSON = { parse: () => ({ ok: true }) }",
+    "const shadow = { value: 1 }; shadow.value = 2",
+    "let local = 1; ({ local } = { local: 2 })",
+  ];
+  for (const addition of additions) {
+    const model = candidate(SPEC + `\n${addition}\n`);
+    assert.ok(model.errors.some((error) => /unmodeled property|global assignment|unparseable/.test(error)),
+      `${addition}: ${JSON.stringify(model.errors)}`);
+    const verdict = evaluateMultiStepPolicy(ORIGINAL, model);
+    assert.equal(verdict.rejected, null, `unsupported side effects are unjudgeable, not invented definitive proof: ${addition}`);
+    assert.ok(verdict.uncertain, `property/global mutation cannot silently pass: ${addition}`);
+  }
+  const patched = SPEC + "\nObject.prototype.confirmed = true\n";
+  const out = await runMultiStepSandbox({ projectDir: WEB, baseUrl: "https://fixture.invalid", checkFile: FILE,
+    files: Object.fromEntries(files(patched)), originalFiles: Object.fromEntries(files()),
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001" } });
+  assert.equal(out.inconclusive, true);
+  assert.equal(out.environmentOrigin, null);
+  assert.equal(out.browserProcesses, null);
+});
+
+test("a MultiStepCheck hidden in dead or helper code is FAILED, not a present construct", () => {
+  const variants = [
+    CONSTRUCT.replace("new MultiStepCheck(", "if (false) new MultiStepCheck("),
+    CONSTRUCT.replace("new MultiStepCheck(", "function unusedConstruct() { new MultiStepCheck(").replace(/\);\s*$/, "); }\n"),
+  ];
+  for (const text of variants) {
+    const model = candidate(SPEC, text);
+    assert.equal(model.construct?.executed, false);
+    const verdict = evaluateMultiStepPolicy(ORIGINAL, model);
+    assert.match(verdict.rejected ?? "", /construct moved into dead or helper code/);
+    assert.equal(verdict.uncertain, null, "a definite construct removal outranks its unsupported syntax");
+  }
+});
+
+test("construct top-level side effects, substituted path imports and executable dependencies stay UNCERTAIN", async () => {
+  const variants = [
+    CONSTRUCT + "\nObject.prototype.safe = true\n",
+    CONSTRUCT + "\nimport 'node:fs'\n",
+    CONSTRUCT.replace('import * as path from "node:path";', 'const path = { join: () => "checks/multistep-booking.spec.ts" };'),
+    CONSTRUCT.replace('import * as path from "node:path";', 'import * as path from "./untrusted-path";'),
+  ];
+  for (const text of variants) {
+    const model = candidate(SPEC, text);
+    assert.ok(model.errors.some((error) => /construct contains|approved Checkly\/path import/.test(error)), JSON.stringify(model.errors));
+    const verdict = evaluateMultiStepPolicy(ORIGINAL, model);
+    assert.equal(verdict.rejected, null, "no definite modeled settings change occurred");
+    assert.ok(verdict.uncertain, "side effects/dependency origins cannot be trusted");
+  }
+  const direct = await runMultiStepSandbox({ projectDir: WEB, baseUrl: "https://fixture.invalid", checkFile: FILE,
+    files: Object.fromEntries(files(SPEC, variants[0]!)), originalFiles: Object.fromEntries(files()),
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001" } });
+  assert.equal(direct.inconclusive, true);
+  assert.equal(direct.environmentOrigin, null, "even a direct scene/runner cannot bypass construct preflight");
+});
+
+test("conditional hard assertions cannot launder their unchanged subject/matcher/target tuples", async () => {
+  for (const [before, after] of [
+    ["expect(body.ok).toBe(true)", "if (false) expect(body.ok).toBe(true)"],
+    ["expect(body.confirmed).toBe(true)", "if (false) expect(body.confirmed).toBe(true)"],
+    ["expect(response.status()).toBe(200)", "if (false) expect(response.status()).toBe(200)"],
+  ]) {
+    const altered = SPEC.replace(before!, after!);
+    assert.notEqual(altered, SPEC);
+    const parsed = candidate(altered);
+    assert.equal(parsed.script?.assertions.length, ORIGINAL.script?.assertions.length,
+      "masking leaves every byte-identical assertion tuple in the static inventory");
+    const verdict = evaluateMultiStepPolicy(ORIGINAL, parsed);
+    assert.match(verdict.rejected ?? "", /hard assertion conditionally bypassed/);
+    assert.equal(verdict.uncertain, null, "definite masking outranks an indirect-flow warning");
+  }
+  const altered = SPEC.replace("expect(body.confirmed).toBe(true)", "if (false) expect(body.confirmed).toBe(true)");
+  const out = await runMultiStepSandbox({ projectDir: WEB, baseUrl: "https://fixture.invalid", checkFile: FILE,
+    files: Object.fromEntries(files(altered)), originalFiles: Object.fromEntries(files()),
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001" } });
+  assert.equal(out.inconclusive, true);
+  assert.equal(out.environmentOrigin, null, "the runner cannot execute the conditionally masked assertion");
+});
+
+test("an indirect assertion call is UNCERTAIN, and a conditionally skipped required route is FAILED", () => {
+  const indirect = candidate(SPEC.replace("expect(body.ok).toBe(true)", "const captured = expect(body.ok).toBe(true)"));
+  const undecidable = evaluateMultiStepPolicy(ORIGINAL, indirect);
+  assert.ok(indirect.errors.some((error) => /not a directly executed expression/.test(error)));
+  assert.equal(undecidable.rejected, null);
+  assert.ok(undecidable.uncertain);
+
+  // Keep the original request call syntactically present but behind a dead
+  // branch. The static transaction must not treat that call as executed.
+  const routed = candidate(SPEC.replace("    const response = await request.post(`${origin}/api/book`, {", "    if (false) {\n    const response = await request.post(`${origin}/api/book`, {")
+    .replace("    expect(response.status()).toBe(200)\n    const body = (await response.json()) as {\n      confirmed?: unknown", "    }\n    expect(response.status()).toBe(200)\n    const body = (await response.json()) as {\n      confirmed?: unknown"));
+  assert.ok(routed.script?.banned.some((marker) => /required request conditionally bypassed/.test(marker)), JSON.stringify(routed.script?.banned));
+  assert.match(evaluateMultiStepPolicy(ORIGINAL, routed).rejected ?? "", /required request conditionally bypassed/);
+});
+
+test("direct sandbox rejects definite source-policy markers even without an originalFiles comparison", async () => {
+  const marked = SPEC + "\nconst covertRetryOption = { retries: 3 }\n";
+  const parsed = candidate(marked);
+  assert.deepEqual(parsed.errors, [], "there is no parser error to accidentally satisfy this test");
+  assert.ok(parsed.script?.banned.includes("retries in code"));
+  assert.match(evaluateMultiStepPolicy(ORIGINAL, parsed).rejected ?? "", /retries in code/);
+  const out = await runMultiStepSandbox({ projectDir: WEB, baseUrl: "https://fixture.invalid", checkFile: FILE,
+    files: { [FILE]: marked },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001" } });
+  assert.equal(out.inconclusive, true);
+  assert.equal(out.environmentOrigin, null, "a direct adapter entry must not bypass its own source-policy markers");
+  assert.equal(out.browserProcesses, null);
+});
+
+test("returns before the transaction or within a required step cannot preserve the original contract", () => {
+  for (const altered of [
+    SPEC.replace("  await test.step('login'", "  return\n  await test.step('login'"),
+    SPEC.replace("    expect(response.status()).toBe(200)", "    return\n    expect(response.status()).toBe(200)"),
+  ]) {
+    assert.notEqual(altered, SPEC);
+    const parsed = candidate(altered);
+    assert.equal(parsed.script?.assertions.length, ORIGINAL.script?.assertions.length);
+    assert.match(evaluateMultiStepPolicy(ORIGINAL, parsed).rejected ?? "", /returns before all assertions complete/);
+  }
+});
+
+test("short-circuit and ternary hard assertions cannot hide unchanged assertion tuples", () => {
+  for (const bypass of [
+    "false && expect(body.ok).toBe(true)",
+    "false ? expect(body.ok).toBe(true) : null",
+  ]) {
+    const parsed = candidate(SPEC.replace("expect(body.ok).toBe(true)", bypass));
+    assert.equal(parsed.script?.assertions.length, ORIGINAL.script?.assertions.length);
+    assert.match(evaluateMultiStepPolicy(ORIGINAL, parsed).rejected ?? "", /hard assertion conditionally bypassed/);
+  }
 });

@@ -27,6 +27,8 @@ const KNOWN_PROBLEMS = new Set([
   "MULTISTEP_ASSET_COUNT_EXCEEDED", "MULTISTEP_ASSET_MANIFEST_TRUNCATED", "MULTISTEP_ASSET_MANIFEST_UNAVAILABLE", "MULTISTEP_ASSET_MANIFEST_INVALID",
   "MULTISTEP_SOURCE_PROJECT_MISMATCH", "MULTISTEP_ENTRYPOINT_MISSING", "MULTISTEP_ENTRYPOINT_UNSAFE",
   "MULTISTEP_CONSTRUCT_UNRESOLVED", "MULTISTEP_DEPLOYED_CONFIG_MISMATCH",
+  "MULTISTEP_RESULT_STATS_INVALID", "MULTISTEP_REQUEST_BODY_INVALID", "MULTISTEP_ASSERTION_EVIDENCE_MISSING",
+  "MULTISTEP_SOURCE_PATH_UNSAFE", "MULTISTEP_SOURCE_CLOSURE_BOUND", "MULTISTEP_CAPTURE_BINDING_INVALID",
 ]);
 export function multistepProblemCategory(problem: string): string {
   if (KNOWN_PROBLEMS.has(problem)) return problem;
@@ -92,7 +94,8 @@ function safeBody(route: MultiStepRoute, side: "request" | "response", input: un
     put("account", account(body.account));
     put("version", version(body.version));
     if (body.token === tx.token?.value) out.token = TOKEN_LABEL;
-    put("store", fixedString(body.store, ["memory"]));
+    // Deployment-reported `store: memory` is not storage proof; omit it
+    // entirely rather than projecting a self-asserted trust signal.
   } else if (route === "/api/session") {
     put("valid", boolean(body.valid));
     put("account", account(body.account));

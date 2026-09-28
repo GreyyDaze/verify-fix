@@ -156,7 +156,11 @@ export interface Bundle {
   /** Sanitized request/response records for an API incident. */
   api?: { failing: ApiRecording | null; passing: ApiRecording | null } | null;
   /** Normalized Multistep evidence summary (from the sanitized recording). */
-  multistep?: { kind: string | null; steps: string[]; problems: string[] } | null;
+  multistep?: { kind: string | null; steps: string[]; problems: string[];
+    /** Only a source-line/target-bound assertion in a validated failing
+     * recording may identify the stale response field being repaired. */
+    failureAssertion?: { file: string; line: number; id: string; step: string } | null;
+  } | null;
   scenes: Scene[];
   envAssumptions: EnvAssumption[];
   determinism: DeterminismEvidence;

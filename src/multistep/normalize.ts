@@ -16,6 +16,7 @@
 // never to PASS or FAIL. No LLM. No invented trace/HAR/video.
 
 import type { ObservationValue } from "../types.ts";
+import { knownRoute, MULTISTEP_ROUTES, MULTISTEP_STEP_TITLES } from "./routes.ts";
 
 export interface MultiStepRequestEvidence {
   /** request title from checklyData, when present */
@@ -165,6 +166,7 @@ function requestEvidence(child: JsonStep, problems: string[]): MultiStepRequestE
   const records = checklyRecords(child);
   const raw = records.find((r) => "method" in r || "url" in r || "request" in r || "requestBody" in r || "requestHeaders" in r) ?? null;
   if (!raw) return null;
+  if (!Array.isArray(child.checklyData)) problems.push("request checklyData is not a genuine nested Playwright array");
   const nestedRequest = asRecord(raw.request);
   const request = nestedRequest ?? raw;
   const nestedResponse = asRecord(raw.response);
@@ -206,13 +208,14 @@ function requestEvidence(child: JsonStep, problems: string[]): MultiStepRequestE
 }
 
 /** Assertion evidence carried by checklyData (expected/actual), separate from request fields. */
-function checklyAssertionEvidence(child: JsonStep, failed: boolean): MultiStepAssertionEvidence | null {
+function checklyAssertionEvidence(child: JsonStep, failed: boolean, problems: string[]): MultiStepAssertionEvidence | null {
   const records = checklyRecords(child);
   const raw = records.find((r) => "expected" in r || "expectedData" in r || "actual" in r || "actualData" in r) ?? null;
   if (!raw) return null;
   const hasExpected = "expected" in raw || "expectedData" in raw;
   const hasActual = "actual" in raw || "actualData" in raw;
   if (!hasExpected && !hasActual) return null;
+  if (!Array.isArray(child.checklyData)) problems.push("assertion checklyData is not a genuine nested Playwright array");
   return {
     title: asString(raw.requestTitle ?? raw.title ?? child.title),
     expected: hasExpected ? ("expected" in raw ? raw.expected : raw.expectedData) : null,
@@ -288,7 +291,7 @@ function aggregateChildren(step: JsonStep, problems: string[], depth: number): C
   for (const child of children) {
     const childError = firstErrorDeep(child, depth + 1);
     const request = requestEvidence(child, problems);
-    const assertion = checklyAssertionEvidence(child, childError !== null);
+    const assertion = checklyAssertionEvidence(child, childError !== null, problems);
     if (request) out.requests.push(request);
     if (assertion) out.assertions.push(assertion);
     if (!out.error && childError) out.error = childError;
@@ -313,7 +316,7 @@ function collectStep(step: JsonStep, titleFallback: string, problems: string[], 
   const title = asString(step.title) ?? titleFallback;
   const ownError = stepError(step);
   const directEvidence = requestEvidence(step, problems);
-  const ownAssertion = checklyAssertionEvidence(step, false);
+  const ownAssertion = checklyAssertionEvidence(step, false, problems);
   const aggregated = aggregateChildren(step, problems, depth + 1);
   const error = ownError ?? aggregated.error;
   // Raw Playwright JSON steps carry only title/duration/error (no `status`,
@@ -426,6 +429,59 @@ function parseCheckRunData(text: string, problems: string[]): MultiStepCheckRunD
   };
 }
 
+function captureShapeProblems(steps: MultiStepStepEvidence[], kind: MultiStepCapture["kind"], reporterOnly: boolean): string[] {
+  const problems: string[] = [];
+  const failed = steps.findIndex((step) => step.status === "failed");
+  const size = failed < 0 ? 5 : failed + 1;
+  if (steps.length !== size || steps.length < 1 || steps.length > 5
+    || steps.some((step, index) => step.title !== MULTISTEP_STEP_TITLES[index]
+      || step.status === "skipped" || step.status === "unknown" || (index !== size - 1 && step.status !== "passed"))
+    || (kind === "passing" && failed !== -1) || (kind === "failing" && failed === -1)) {
+    problems.push("MULTISTEP_STEP_SEQUENCE_INVALID");
+  }
+  if (reporterOnly) return problems;
+  const routes = Object.entries(MULTISTEP_ROUTES);
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i]!;
+    if (step.assertions.length === 0 || !step.assertions.some((item) => item.expected !== null && item.expected !== undefined)) {
+      problems.push("MULTISTEP_ASSERTION_EVIDENCE_MISSING");
+    }
+    if (step.requests.length !== (i < 4 ? 1 : 0)) {
+      problems.push("MULTISTEP_REQUEST_SEQUENCE_INVALID");
+      continue;
+    }
+    const req = step.requests[0];
+    if (!req) {
+      if (i === 4 && (step.assertions.length === 0 || !step.assertions.some((a) => a.expected === "CONFIRMED"))) {
+        problems.push("MULTISTEP_ASSERTION_EVIDENCE_MISSING");
+      }
+      continue;
+    }
+    let url: URL | null = null;
+    try { url = req.url ? new URL(req.url) : null; } catch { /* unresolved */ }
+    const [route, method] = routes[i]!;
+    if (!url || url.protocol !== "https:" || url.username || url.password || url.search || url.hash
+      || url.pathname !== route || knownRoute(req.path) !== route || req.method !== method
+      || !Number.isInteger(req.status) || (req.status ?? 0) < 100 || (req.status ?? 0) > 599) {
+      problems.push("MULTISTEP_REQUEST_SCHEMA_INVALID");
+    }
+    const body = asRecord(req.responseBody);
+    const requestBody = asRecord(req.requestBody);
+    if (!body || (i === 0 && (!requestBody || typeof requestBody.account !== "string"
+        || typeof body.account !== "string" || typeof body.token !== "string" || !Number.isSafeInteger(body.version)))
+      || (i === 1 && (body.valid !== true || typeof body.account !== "string" || !Number.isSafeInteger(body.tokenVersion)))
+      || (i === 2 && (!Array.isArray(body.slots) || !body.slots.includes("09:30")))
+      || (i === 3 && (!requestBody || requestBody.slot !== "09:30" || !Object.hasOwn(body, "booking")))) {
+      problems.push("MULTISTEP_REQUEST_BODY_INVALID");
+    }
+    if ((i === 1 || i === 3) && typeof req.requestHeaders.authorization !== "string") {
+      problems.push("MULTISTEP_TOKEN_RELATIONSHIP_INVALID");
+    }
+    if (step.status === "failed" && !step.error) problems.push("MULTISTEP_ASSERTION_EVIDENCE_MISSING");
+  }
+  return problems;
+}
+
 export interface NormalizeMultiStepInput {
   /** raw text of test-results.json (required) */
   testResults: string | null | undefined;
@@ -435,6 +491,10 @@ export interface NormalizeMultiStepInput {
   logs?: string | null;
   /** result-level attempt count from the Checkly result (recurrence only) */
   attempts?: number | null;
+  /** Local Playwright JSON filters pw:api children; a separately audited
+   * bridge/reporter must then corroborate the request sequence. Never set
+   * this for downloaded Checkly assets. */
+  reporterOnly?: boolean;
 }
 
 export function normalizeMultiStepCapture(input: NormalizeMultiStepInput): MultiStepCapture {
@@ -469,7 +529,9 @@ export function normalizeMultiStepCapture(input: NormalizeMultiStepInput): Multi
       problems.push("test-results.json has no stats block (truncated evidence)");
     }
     const found = findResultSteps(report, problems);
-    if (!found.sawSpecs && stats === null) problems.push("test-results.json contains no specs (corrupt or truncated asset)");
+    if (!Array.isArray(report.suites) || !found.sawSpecs || found.statuses.length !== 1) {
+      problems.push("test-results.json lacks a single genuine nested Playwright suites/specs/tests/results array");
+    }
     const flattened: Array<{ step: JsonStep; resultStatus: string | null }> = [];
     for (const entry of found.entries) {
       const record = asRecord(entry.step);
@@ -479,7 +541,13 @@ export function normalizeMultiStepCapture(input: NormalizeMultiStepInput): Multi
       flattened.push(entry);
     }
     steps = [];
-    for (let i = 0; i < flattened.length; i++) steps.push(...collectStep(flattened[i]!.step, `step ${i + 1}`, problems, 0, flattened[i]!.resultStatus));
+    for (let i = 0; i < flattened.length; i++) {
+      if ((!input.reporterOnly && (flattened[i]!.step.category !== "test.step" || !Array.isArray(flattened[i]!.step.steps)))
+        || (flattened[i]!.step.steps !== undefined && !Array.isArray(flattened[i]!.step.steps))) {
+        problems.push("test-results.json top-level step is not a genuine Playwright test.step with nested children");
+      }
+      steps.push(...collectStep(flattened[i]!.step, `step ${i + 1}`, problems, 0, flattened[i]!.resultStatus));
+    }
     // ---- stats/status/steps consistency: internally contradictory evidence is corrupt ----
     const statuses = found.statuses;
     const anyFailedResult = statuses.some((s) => s === "failed" || s === "timedout");
@@ -506,7 +574,10 @@ export function normalizeMultiStepCapture(input: NormalizeMultiStepInput): Multi
 
   const failed = steps.some((s) => s.status === "failed");
   const kind: MultiStepCapture["kind"] = failed || (stats !== null && stats.unexpected > 0) ? "failing" : "passing";
-
+  if (steps.length > 0) problems.push(...captureShapeProblems(steps, kind, input.reporterOnly === true));
+  if (stats && (stats.expected + stats.unexpected !== 1 || stats.flaky !== 0)) {
+    problems.push("MULTISTEP_RESULT_STATS_INVALID");
+  }
   return { kind, stats, steps, checkRunData, logs, recurrence, problems: [...new Set(problems)] };
 }
 

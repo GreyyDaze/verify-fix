@@ -37,9 +37,11 @@ export interface ChecklyClientOptions {
   baseUrl?: string;
   fetchImpl?: typeof fetch;
   userAgent?: string;
-  /** retry budget for 429/5xx */
+  /** retry budget for 429/5xx (the existing retry sequence is unchanged) */
   retries?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** request deadline, including streamed response bodies */
+  timeoutMs?: number;
 }
 
 export interface ListResultsParams {
@@ -54,6 +56,30 @@ export interface ListResultsParams {
 
 /** Bound even non-asset API JSON before calling JSON.parse or Buffer.concat. */
 export const MAX_API_JSON_BYTES = 16 * 1024 * 1024;
+export const MAX_CHECKLY_REDIRECTS = 3;
+export const MAX_CHECKLY_RETRY_DELAY_MS = 30_000;
+export const DEFAULT_CHECKLY_REQUEST_TIMEOUT_MS = 30_000;
+
+function httpsUrl(raw: string): URL {
+  let url: URL;
+  try { url = new URL(raw); }
+  catch { throw new Error("Checkly destination is not an absolute HTTPS URL"); }
+  if (url.protocol !== "https:" || !url.hostname || url.username || url.password) {
+    throw new Error("Checkly destination must use HTTPS without URL credentials");
+  }
+  return url;
+}
+
+function operationOf(url: URL, authenticated: boolean): string {
+  if (!authenticated) return "asset";
+  if (/^\/v1\/checks\/[^/]+$/.test(url.pathname)) return "get-check";
+  if (/^\/v2\/check-results\/[^/]+$/.test(url.pathname)) return "list-results";
+  if (/^\/v1\/check-results\/[^/]+\/[^/]+\/assets$/.test(url.pathname)) return "list-assets";
+  if (/^\/v1\/check-results\/[^/]+\/[^/]+$/.test(url.pathname)) return "get-result";
+  if (/^\/v1\/error-groups\/(?:checks\/)?[^/]+$/.test(url.pathname)) return "error-group";
+  if (/^\/v1\/root-cause-analyses\/(?:error-groups\/)?[^/]+$/.test(url.pathname)) return "rca";
+  return "checkly-api";
+}
 
 async function boundedResponseText(res: Response, maxBytes: number): Promise<string> {
   const length = res.headers.get("content-length");
@@ -89,30 +115,49 @@ export class ChecklyClient {
   private readonly userAgent: string;
   private readonly retries: number;
   private readonly sleep: (ms: number) => Promise<void>;
-  /** every request made, for the bundle's provenance section (no headers, no bodies). */
+  private readonly timeoutMs: number;
+  /** Fixed operation labels only: signed URLs and remote paths never become provenance. */
   readonly calls: Array<{ method: string; url: string; status: number }> = [];
 
   constructor(creds: ChecklyCredentials, opts: ChecklyClientOptions = {}) {
     this.creds = creds;
-    this.baseUrl = (opts.baseUrl ?? process.env.CHECKLY_API_URL ?? "https://api.checklyhq.com").replace(/\/$/, "");
+    const endpoint = httpsUrl(opts.baseUrl ?? process.env.CHECKLY_API_URL ?? "https://api.checklyhq.com");
+    if (endpoint.pathname !== "/" || endpoint.search || endpoint.hash) throw new Error("Checkly API endpoint must be a bare HTTPS origin");
+    this.baseUrl = endpoint.origin;
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.userAgent = opts.userAgent ?? "verify-fix-bundle/0.1.0";
-    this.retries = opts.retries ?? 3;
+    this.retries = Number.isSafeInteger(opts.retries) && (opts.retries ?? -1) >= 0
+      ? Math.min(opts.retries!, 3) : 3;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.timeoutMs = Number.isSafeInteger(opts.timeoutMs) && (opts.timeoutMs ?? 0) > 0
+      ? Math.min(opts.timeoutMs!, 120_000) : DEFAULT_CHECKLY_REQUEST_TIMEOUT_MS;
   }
 
-  private isApiOrigin(url: string): boolean {
-    try {
-      return new URL(url, this.baseUrl).origin === new URL(this.baseUrl).origin;
-    } catch {
-      return false;
-    }
+  private async withinDeadline<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error("Checkly request time limit exceeded"));
+      }, this.timeoutMs);
+    });
+    try { return await Promise.race([run(controller.signal), expired]); }
+    finally { clearTimeout(timer); controller.abort(); }
   }
 
-  private async request(method: string, url: string, init: { body?: unknown; accept?: string } = {}): Promise<Response> {
-    const absolute = new URL(url, this.baseUrl).toString();
+  private async request(method: string, url: string, signal: AbortSignal,
+    init: { body?: unknown; accept?: string; authenticated?: boolean } = {}): Promise<Response> {
+    const apiOrigin = new URL(this.baseUrl).origin;
+    const authenticated = init.authenticated !== false;
+    let destination = httpsUrl(new URL(url, this.baseUrl).toString());
+    if (authenticated && destination.origin !== apiOrigin) throw new Error("Checkly API request left its configured origin");
+    const operation = operationOf(destination, authenticated);
+    if (authenticated && operation === "checkly-api") throw new Error("Checkly API operation is not allow-listed");
     const headers: Record<string, string> = { "user-agent": this.userAgent, accept: init.accept ?? "application/json" };
-    if (this.isApiOrigin(absolute)) {
+    // Asset requests carry NO Checkly credentials, even if an asset URL happens
+    // to be on the API host. The API origin is checked before adding them.
+    if (authenticated) {
       headers.authorization = `Bearer ${this.creds.apiKey}`;
       headers["x-checkly-account"] = this.creds.accountId;
     }
@@ -122,14 +167,30 @@ export class ChecklyClient {
       body = JSON.stringify(init.body);
     }
     let attempt = 0;
+    let redirects = 0;
     for (;;) {
-      const res = await this.fetchImpl(absolute, { method, headers, body });
-      this.calls.push({ method, url: absolute.replace(/\?.*$/, ""), status: res.status });
+      const res = await this.fetchImpl(destination.toString(), { method, headers, body, redirect: "manual", signal });
+      this.calls.push({ method, url: operationOf(destination, authenticated), status: res.status });
+      if ([301, 302, 303, 307, 308].includes(res.status)) {
+        const location = res.headers.get("location");
+        await res.body?.cancel();
+        if (!location || redirects >= MAX_CHECKLY_REDIRECTS || method !== "GET") {
+          throw new Error("Checkly redirect is missing, exceeds the bound or would replay a write");
+        }
+        const next = httpsUrl(new URL(location, destination).toString());
+        if (authenticated && (next.origin !== apiOrigin || operationOf(next, true) !== operation)) {
+          throw new Error("Checkly API redirect changed its authorized origin or operation");
+        }
+        destination = next;
+        redirects += 1;
+        continue;
+      }
       if ((res.status === 429 || res.status >= 500) && attempt < this.retries) {
         await res.body?.cancel();
         attempt += 1;
         const retryAfter = Number(res.headers.get("retry-after"));
-        await this.sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 500 * 2 ** attempt);
+        const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 500 * 2 ** attempt;
+        await this.sleep(Math.min(MAX_CHECKLY_RETRY_DELAY_MS, delay));
         continue;
       }
       return res;
@@ -137,11 +198,13 @@ export class ChecklyClient {
   }
 
   private async json<T>(method: string, url: string, init: { body?: unknown } = {}): Promise<{ status: number; data: T }> {
-    const res = await this.request(method, url, init);
-    const text = await boundedResponseText(res, MAX_API_JSON_BYTES);
-    if (!res.ok) throw new ChecklyApiError(res.status, url, text.slice(0, 300));
-    // 202 bodies matter: GET rca → {id, status: "PENDING"}; POST trigger → {id, status: "PENDING"}.
-    return { status: res.status, data: (text ? JSON.parse(text) : null) as T };
+    return this.withinDeadline(async (signal) => {
+      const res = await this.request(method, url, signal, init);
+      const text = await boundedResponseText(res, MAX_API_JSON_BYTES);
+      if (!res.ok) throw new ChecklyApiError(res.status, url, text.slice(0, 300));
+      // 202 bodies matter: GET rca → pending; POST trigger → pending id.
+      return { status: res.status, data: (text ? JSON.parse(text) : null) as T };
+    });
   }
 
   getCheck(id: string): Promise<ChecklyCheck> {
@@ -175,35 +238,38 @@ export class ChecklyClient {
   /** Stream an asset under a fixed byte budget; never allocate an unchecked body. */
   async download(url: string, maxBytes = 200 * 1024 * 1024): Promise<Buffer> {
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error("invalid asset download byte bound");
-    const res = await this.request("GET", url, { accept: "*/*" });
-    if (!res.ok) {
-      await res.body?.cancel();
-      throw new Error(`asset download failed (HTTP ${res.status})`);
-    }
-    const length = res.headers.get("content-length");
-    if (length !== null && /^\d+$/.test(length) && Number(length) > maxBytes) {
-      await res.body?.cancel();
-      throw new Error("asset download exceeds byte bound (Content-Length)");
-    }
-    if (!res.body) return Buffer.alloc(0);
-    const reader = res.body.getReader();
-    const chunks: Buffer[] = [];
-    let total = 0;
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value.byteLength > maxBytes - total) {
-          await reader.cancel();
-          throw new Error("asset download exceeds byte bound (stream)");
-        }
-        total += value.byteLength;
-        chunks.push(Buffer.from(value));
+    httpsUrl(url); // reject HTTP, credentials and relative URLs BEFORE any fetch
+    return this.withinDeadline(async (signal) => {
+      const res = await this.request("GET", url, signal, { accept: "*/*", authenticated: false });
+      if (!res.ok) {
+        await res.body?.cancel();
+        throw new Error(`asset download failed (HTTP ${res.status})`);
       }
-      return Buffer.concat(chunks, total);
-    } finally {
-      reader.releaseLock();
-    }
+      const length = res.headers.get("content-length");
+      if (length !== null && /^\d+$/.test(length) && Number(length) > maxBytes) {
+        await res.body?.cancel();
+        throw new Error("asset download exceeds byte bound (Content-Length)");
+      }
+      if (!res.body) return Buffer.alloc(0);
+      const reader = res.body.getReader();
+      const chunks: Buffer[] = [];
+      let total = 0;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value.byteLength > maxBytes - total) {
+            await reader.cancel();
+            throw new Error("asset download exceeds byte bound (stream)");
+          }
+          total += value.byteLength;
+          chunks.push(Buffer.from(value));
+        }
+        return Buffer.concat(chunks, total);
+      } finally {
+        reader.releaseLock();
+      }
+    });
   }
 
   errorGroupsForCheck(checkId: string): Promise<ErrorGroup[]> {

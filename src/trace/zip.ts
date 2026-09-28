@@ -17,13 +17,69 @@ export interface ZipEntry {
 const EOCD_SIG = 0x06054b50;
 const CDIR_SIG = 0x02014b50;
 const LOCAL_SIG = 0x04034b50;
+const DESCRIPTOR_SIG = 0x08074b50;
+
+function rejectZip64Extra(buf: Buffer, start: number, length: number): void {
+  const end = start + length;
+  if (end > buf.length || start < 0) throw new Error("zip: truncated extra fields");
+  for (let p = start; p < end;) {
+    if (p + 4 > end) throw new Error("zip: truncated extra field");
+    const kind = buf.readUInt16LE(p);
+    const size = buf.readUInt16LE(p + 2);
+    if (p + 4 + size > end) throw new Error("zip: truncated extra field");
+    if (kind === 0x0001) throw new Error("zip: ZIP64 extra field is not supported");
+    p += 4 + size;
+  }
+}
 
 function findEndOfCentralDirectory(buf: Buffer): number {
   const min = Math.max(0, buf.length - 22 - 0xffff);
+  let found: number | null = null;
   for (let i = buf.length - 22; i >= min; i--) {
-    if (buf.readUInt32LE(i) === EOCD_SIG) return i;
+    if (buf.readUInt32LE(i) !== EOCD_SIG || i + 22 + buf.readUInt16LE(i + 20) !== buf.length) continue;
+    if (found !== null) throw new Error("zip: ambiguous end of central directory inside a comment");
+    found = i;
   }
-  throw new Error("zip: end of central directory not found (not a zip file?)");
+  if (found !== null) return found;
+  throw new Error("zip: end of central directory and comment length do not match the archive");
+}
+
+/** Validate the local payload AND an optional 32-bit data descriptor before
+ * using any central-directory offsets. ZIP64 descriptors are refused above. */
+function localRange(buf: Buffer, e: ZipEntry, centralStart: number): { start: number; end: number } {
+  const h = e.localHeaderOffset;
+  if (h > centralStart - 30 || buf.readUInt32LE(h) !== LOCAL_SIG) throw new Error("zip: invalid local header");
+  if (buf.readUInt16LE(h + 4) >= 45) throw new Error("zip: ZIP64 local header is not supported");
+  const flags = buf.readUInt16LE(h + 6);
+  const method = buf.readUInt16LE(h + 8);
+  const nameLen = buf.readUInt16LE(h + 26);
+  const extraLen = buf.readUInt16LE(h + 28);
+  const start = h + 30 + nameLen + extraLen;
+  const dataEnd = start + e.compressedSize;
+  if (start > centralStart || dataEnd > centralStart || dataEnd < start) throw new Error("zip: local entry extends into the central directory");
+  rejectZip64Extra(buf, h + 30 + nameLen, extraLen);
+  if (method !== e.method || flags !== e.flags || buf.toString("utf8", h + 30, h + 30 + nameLen) !== e.name) {
+    throw new Error("zip: local and central headers disagree");
+  }
+  const localCrc = buf.readUInt32LE(h + 14);
+  const localCompressed = buf.readUInt32LE(h + 18);
+  const localUncompressed = buf.readUInt32LE(h + 22);
+  if (flags & 0x0008) {
+    if (localCrc && localCrc !== e.crc32 || localCompressed && localCompressed !== e.compressedSize
+      || localUncompressed && localUncompressed !== e.uncompressedSize) throw new Error("zip: local and central integrity fields disagree");
+    const signed = dataEnd + 4 <= centralStart && buf.readUInt32LE(dataEnd) === DESCRIPTOR_SIG;
+    const size = signed ? 16 : 12;
+    const data = dataEnd + (signed ? 4 : 0);
+    if (dataEnd + size > centralStart || buf.readUInt32LE(data) !== e.crc32
+      || buf.readUInt32LE(data + 4) !== e.compressedSize || buf.readUInt32LE(data + 8) !== e.uncompressedSize) {
+      throw new Error("zip: missing or inconsistent data descriptor");
+    }
+    return { start, end: dataEnd + size };
+  }
+  if (localCrc !== e.crc32 || localCompressed !== e.compressedSize || localUncompressed !== e.uncompressedSize) {
+    throw new Error("zip: local and central integrity fields disagree");
+  }
+  return { start, end: dataEnd };
 }
 
 export function listZip(buf: Buffer): ZipEntry[] {
@@ -34,16 +90,23 @@ export function listZip(buf: Buffer): ZipEntry[] {
 function listZipWithCountBound(buf: Buffer, maxEntries: number): ZipEntry[] {
   const eocd = findEndOfCentralDirectory(buf);
   if (eocd + 22 > buf.length) throw new Error("zip: truncated end record");
+  const disk = buf.readUInt16LE(eocd + 4);
+  const directoryDisk = buf.readUInt16LE(eocd + 6);
+  const onDisk = buf.readUInt16LE(eocd + 8);
   const total = buf.readUInt16LE(eocd + 10);
   const cdirSize = buf.readUInt32LE(eocd + 12);
   const cdirOffset = buf.readUInt32LE(eocd + 16);
-  if (cdirOffset === 0xffffffff || cdirSize === 0xffffffff || total === 0xffff) throw new Error("zip: ZIP64 archives are not supported");
+  if (cdirOffset === 0xffffffff || cdirSize === 0xffffffff || total === 0xffff || onDisk === 0xffff) {
+    throw new Error("zip: ZIP64 archives are not supported");
+  }
+  if (disk !== 0 || directoryDisk !== 0 || onDisk !== total) throw new Error("zip: multi-disk archives are not supported");
   if (total > maxEntries) throw new Error("zip: entries exceed count bound");
-  if (cdirOffset > eocd || cdirSize > eocd - cdirOffset) throw new Error("zip: truncated central directory");
+  if (cdirOffset > eocd || cdirSize !== eocd - cdirOffset) throw new Error("zip: central directory range mismatch");
   const entries: ZipEntry[] = [];
   let p = cdirOffset;
   for (let i = 0; i < total; i++) {
     if (p + 46 > eocd || buf.readUInt32LE(p) !== CDIR_SIG) throw new Error("zip: invalid central directory entry");
+    if (buf.readUInt16LE(p + 6) >= 45) throw new Error("zip: ZIP64 central entry is not supported");
     const flags = buf.readUInt16LE(p + 8);
     const method = buf.readUInt16LE(p + 10);
     const crc32 = buf.readUInt32LE(p + 16);
@@ -52,14 +115,25 @@ function listZipWithCountBound(buf: Buffer, maxEntries: number): ZipEntry[] {
     const nameLen = buf.readUInt16LE(p + 28);
     const extraLen = buf.readUInt16LE(p + 30);
     const commentLen = buf.readUInt16LE(p + 32);
+    const startDisk = buf.readUInt16LE(p + 34);
     const localHeaderOffset = buf.readUInt32LE(p + 42);
     const next = p + 46 + nameLen + extraLen + commentLen;
-    if (next > eocd || next > cdirOffset + cdirSize) throw new Error("zip: truncated central directory entry");
+    if (next > cdirOffset + cdirSize) throw new Error("zip: truncated central directory entry");
+    rejectZip64Extra(buf, p + 46 + nameLen, extraLen);
+    if (startDisk === 0xffff || compressedSize === 0xffffffff || uncompressedSize === 0xffffffff || localHeaderOffset === 0xffffffff) {
+      throw new Error("zip: ZIP64 entry is not supported");
+    }
+    if (startDisk !== 0) throw new Error("zip: multi-disk entry is not supported");
     const name = buf.toString("utf8", p + 46, p + 46 + nameLen);
     entries.push({ name, method, compressedSize, uncompressedSize, localHeaderOffset, crc32, flags });
     p = next;
   }
   if (p !== cdirOffset + cdirSize) throw new Error("zip: central directory size mismatch");
+  const ranges = entries.map((entry) => ({ from: entry.localHeaderOffset, to: localRange(buf, entry, cdirOffset).end }))
+    .sort((a, b) => a.from - b.from);
+  for (let i = 1; i < ranges.length; i++) {
+    if (ranges[i]!.from < ranges[i - 1]!.to) throw new Error("zip: local entry ranges overlap");
+  }
   return entries;
 }
 

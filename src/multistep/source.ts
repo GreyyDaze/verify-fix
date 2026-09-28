@@ -20,8 +20,12 @@ import ts from "typescript";
 import { assertionId, normalizeSubject } from "../assertion/id.ts";
 import { isKnownMatcher } from "../assertion/classify.ts";
 import { stripComments } from "../assertion/inventory.ts";
+import { multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_BYTES } from "./files.ts";
+import { knownRoute, MULTISTEP_ROUTES, MULTISTEP_STEP_TITLES, type MultiStepRoute } from "./routes.ts";
 
 export interface MultiStepConstructModel {
+  /** A direct top-level new MultiStepCheck expression, not a dead helper. */
+  executed: boolean;
   logicalId: string | null;
   name: string | null;
   /** entrypoint script path resolved against the construct file (normalized) */
@@ -45,6 +49,8 @@ export interface MultiStepStepModel {
   awaited: boolean;
   /** true when the step call sits under a conditional/loop — bypass vector */
   conditional: boolean;
+  /** direct statement in the one executed callback, not a dead/helper call */
+  executed: boolean;
 }
 
 export interface MultiStepRequestModel {
@@ -52,6 +58,8 @@ export interface MultiStepRequestModel {
   method: string;
   /** raw URL template text, e.g. `${origin}/api/login` */
   urlTemplate: string;
+  /** literal fixed route after the one proven environment origin */
+  route: MultiStepRoute | null;
   headerKeys: string[];
   bodyKeys: string[];
   usesBearer: boolean;
@@ -98,6 +106,12 @@ function norm(file: string): string {
 
 function sourceLine(sf: ts.SourceFile, node: ts.Node): number {
   return sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+}
+
+/** createSourceFile recovers from malformed syntax. Never mistake its
+ * recovered AST for proof that a script or imported module can execute. */
+function hasSyntaxErrors(sf: ts.SourceFile): boolean {
+  return (sf as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics.length > 0;
 }
 
 function literalString(node: ts.Expression | null | undefined): string | null {
@@ -184,14 +198,42 @@ export function parseMultiStepConstruct(files: Map<string, string>): { model: Mu
   const hit = findMultiStepConstruct(files);
   if (!hit) return null;
   const errors: string[] = [];
+  if (hasSyntaxErrors(hit.sf)) errors.push("unparseable MultiStepCheck construct — UNCERTAIN before execution");
   if (hit.duplicates) errors.push("multiple MultiStepCheck constructs are ambiguous — UNCERTAIN before execution");
+  const executed = ts.isExpressionStatement(hit.node.parent) && ts.isSourceFile(hit.node.parent.parent);
+  if (!executed) errors.push("MultiStepCheck construct is not directly executed at top level — unsupported before execution");
+  // The construct file is executed during deployment, although this local
+  // adapter runs only its referenced spec. No extra top-level statement or
+  // executable import may masquerade as unchanged construct configuration.
+  let checklyImports = 0;
+  let pathImports = 0;
+  for (const statement of hit.sf.statements) {
+    if (ts.isImportDeclaration(statement)) {
+      if (statement.importClause?.isTypeOnly) continue;
+      const spec = ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : null;
+      const clause = statement.importClause;
+      const named = clause?.namedBindings;
+      if (statement.attributes) errors.push("construct import attributes are unsupported — UNCERTAIN before execution");
+      if (spec === "checkly/constructs" && !clause?.name && named && ts.isNamedImports(named)
+        && named.elements.length === 2 && named.elements.every((element) => !element.propertyName && !element.isTypeOnly)
+        && named.elements.map((element) => element.name.text).sort().join(",") === "Frequency,MultiStepCheck") checklyImports++;
+      else if (spec === "node:path" && !clause?.name && named && ts.isNamespaceImport(named)
+        && named.name.text === "path") pathImports++;
+      else errors.push("construct contains an executable or unapproved import — UNCERTAIN before execution");
+    } else if (ts.isEmptyStatement(statement) || (ts.isExpressionStatement(statement) && statement.expression === hit.node)) {
+      // Semicolon or the single directly executed construct.
+    } else {
+      errors.push("construct contains an unmodeled executable statement — UNCERTAIN before execution");
+    }
+  }
+  if (checklyImports !== 1 || pathImports !== 1) errors.push("construct lacks its one approved Checkly/path import — UNCERTAIN before execution");
   const rawId = hit.node.arguments?.[0];
   const logicalId = literalString(rawId);
   if (logicalId === null) errors.push(`MultiStepCheck logical ID is not a static string in ${hit.file}`);
   const options = hit.node.arguments?.[1];
   if (!options || !ts.isObjectLiteralExpression(options)) {
     errors.push(`MultiStepCheck options are not a static object in ${hit.file}`);
-    return { model: { logicalId, name: null, entrypoint: null, frequencyMinutes: null, locations: [], runParallel: null, activated: null, muted: null, tags: [], environmentKeys: [], environmentDefinitions: [], errors }, constructFile: hit.file };
+    return { model: { executed, logicalId, name: null, entrypoint: null, frequencyMinutes: null, locations: [], runParallel: null, activated: null, muted: null, tags: [], environmentKeys: [], environmentDefinitions: [], errors }, constructFile: hit.file };
   }
   staticProperties(options, ["name", "activated", "muted", "frequency", "locations", "runParallel", "tags", "environmentVariables", "code"], errors, "MultiStepCheck options");
   const name = literalString(objectProperty(options, "name"));
@@ -212,6 +254,17 @@ export function parseMultiStepConstruct(files: Map<string, string>): { model: Mu
   if (objectProperty(options, "tags") && !stringArrayLiteral(objectProperty(options, "tags"))) errors.push("MultiStepCheck tags do not resolve statically (UNCERTAIN)");
   const environmentKeys: string[] = [];
   const environmentDefinitions: MultiStepConstructModel["environmentDefinitions"] = [];
+  const approvedKeys = new Set(["ENVIRONMENT_URL", "MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1"]);
+  const approvedEnvValue = (key: string, expression: ts.Expression): boolean => {
+    // The canonical construct uses ?? '' to leave a missing deployment value
+    // empty; no nonempty default or second environment key is admissible.
+    const value = ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+      && literalString(expression.right) === "" ? expression.left : expression;
+    return approvedKeys.has(key) && ts.isPropertyAccessExpression(value) && value.name.text === key
+      && ts.isPropertyAccessExpression(value.expression) && value.expression.name.text === "env"
+      && ts.isIdentifier(value.expression.expression) && value.expression.expression.text === "process"
+      && lexicalDeclaration("process", value) === null;
+  };
   const envExpr = objectProperty(options, "environmentVariables");
   if (envExpr && ts.isArrayLiteralExpression(envExpr)) {
     for (const element of envExpr.elements) {
@@ -224,8 +277,11 @@ export function parseMultiStepConstruct(files: Map<string, string>): { model: Mu
       const value = objectProperty(element, "value");
       const secret = objectProperty(element, "secret");
       if (key && value) {
+        if (environmentKeys.includes(key) || !approvedEnvValue(key, value)) {
+          errors.push("MultiStepCheck environment value is not a unique, matching approved process.env reference — UNCERTAIN before execution");
+        }
         environmentKeys.push(key);
-        environmentDefinitions.push({ key, value: stripComments(value.getText(hit.sf)).trim(),
+        environmentDefinitions.push({ key, value: approvedEnvValue(key, value) ? stripComments(value.getText(hit.sf)).trim() : "<unresolved>",
           secret: !secret ? null : secret.kind === ts.SyntaxKind.TrueKeyword ? true : secret.kind === ts.SyntaxKind.FalseKeyword ? false : null });
         if (secret && secret.kind !== ts.SyntaxKind.TrueKeyword && secret.kind !== ts.SyntaxKind.FalseKeyword) {
           errors.push("MultiStepCheck environment secret flag is not static — UNCERTAIN");
@@ -240,20 +296,25 @@ export function parseMultiStepConstruct(files: Map<string, string>): { model: Mu
   const entryExpr = code && ts.isObjectLiteralExpression(code) ? objectProperty(code, "entrypoint") : null;
   if (entryExpr) {
     const direct = literalString(entryExpr);
-    if (direct !== null) entrypoint = norm(path.posix.join(path.posix.dirname(hit.file), direct));
+    if (direct !== null && !direct.startsWith("/") && !direct.split("/").includes("..")) entrypoint = norm(path.posix.join(path.posix.dirname(hit.file), direct));
     else if (ts.isCallExpression(entryExpr) && ts.isPropertyAccessExpression(entryExpr.expression)
       && ts.isIdentifier(entryExpr.expression.expression) && entryExpr.expression.expression.text === "path"
       && entryExpr.expression.name.text === "join" && entryExpr.arguments.length === 2
       && ts.isIdentifier(entryExpr.arguments[0]) && entryExpr.arguments[0].text === "__dirname") {
       const file = literalString(entryExpr.arguments[1]);
-      if (file !== null) entrypoint = norm(path.posix.join(path.posix.dirname(hit.file), file));
+      if (file !== null && !file.startsWith("/") && !file.split("/").includes("..")) {
+        entrypoint = norm(path.posix.join(path.posix.dirname(hit.file), file));
+      }
     }
-    if (!entrypoint) errors.push(`MultiStepCheck code.entrypoint does not statically resolve in ${hit.file}`);
+    if (!entrypoint || !multiStepSourcePath(entrypoint)) {
+      entrypoint = null;
+      errors.push("MultiStepCheck code.entrypoint does not resolve to a safe source path — UNCERTAIN");
+    }
   } else {
     errors.push(`MultiStepCheck has no code.entrypoint in ${hit.file}`);
   }
   return {
-    model: { logicalId, name, entrypoint, frequencyMinutes: frequency, locations, runParallel, activated, muted, tags, environmentKeys, environmentDefinitions, errors },
+    model: { executed, logicalId, name, entrypoint, frequencyMinutes: frequency, locations, runParallel, activated, muted, tags, environmentKeys, environmentDefinitions, errors },
     constructFile: hit.file,
   };
 }
@@ -274,8 +335,12 @@ function isConditionalContext(node: ts.Node, stopAt: ts.Node): boolean {
       ts.isWhileStatement(current) ||
       ts.isDoStatement(current) ||
       ts.isConditionalExpression(current) ||
+      ts.isSwitchStatement(current) ||
       ts.isCaseClause(current) ||
+      ts.isDefaultClause(current) ||
       ts.isCatchClause(current) ||
+      (ts.isBinaryExpression(current) && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken,
+        ts.SyntaxKind.QuestionQuestionToken].includes(current.operatorToken.kind)) ||
       ts.isTryStatement(current)
     ) {
       return true;
@@ -542,6 +607,7 @@ function scanLocalImports(
     seenFiles.add(fileKey);
     fileCount += 1;
     const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+    if (hasSyntaxErrors(sf)) errors.push("unparseable local import — UNCERTAIN before execution");
     const consts = constMapOf(sf);
     parsedConsts.set(fileKey, consts);
     // Every transitively imported file is EXECUTED by Node, not just the
@@ -689,7 +755,17 @@ const HOST_LITERAL = /["'`]https?:\/\/[^"'`]*["'`]/g;
 export function parseMultiStepScript(file: string, source: string, projectFiles?: Map<string, string>): MultiStepScriptModel {
   const errors: string[] = [];
   const banned: string[] = [];
+  if (!multiStepSourcePath(file) || Buffer.byteLength(source, "utf8") > 1024 * 1024) errors.push("MULTISTEP_SOURCE_PATH_UNSAFE");
+  if (projectFiles) {
+    const boundary = multiStepSourceClosureProblem(projectFiles);
+    if (boundary) errors.push(boundary);
+  }
+  if (errors.length) return {
+    file, steps: [], requests: [], assertions: [], readsEnvironmentUrl: false,
+    environmentUrlFallback: false, hardcodedHosts: [], securityBindings: [], banned: [], errors,
+  };
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, /\.(?:tsx)$/.test(file) ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  if (hasSyntaxErrors(sf)) errors.push("unparseable Multistep transaction source — UNCERTAIN before execution");
   const clean = stripComments(source);
 
   // ---- imports: node:/@playwright/test resolve bare; relative imports resolve
@@ -808,13 +884,14 @@ export function parseMultiStepScript(file: string, source: string, projectFiles?
         errors.push(`test.step title in ${file} is not a static string — unsupported syntax is UNCERTAIN`);
       } else {
         const awaited = ts.isAwaitExpression(node.parent);
-        const direct = awaited && ts.isExpressionStatement(node.parent.parent) && node.parent.parent.parent === testBody;
+        const statement = awaited ? node.parent.parent : node.parent;
+        const direct = ts.isExpressionStatement(statement) && statement.parent === testBody;
         const callback = node.arguments[1];
-        if (!direct || !callback || !(ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) || !ts.isBlock(callback.body)) {
-          errors.push("test.step is not directly awaited inside the executed test callback — UNCERTAIN before execution");
-        }
+        const validCallback = Boolean(callback && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) && ts.isBlock(callback.body));
+        const executed = direct && validCallback && isPlaywrightBinding("test", node);
+        if (!direct || !validCallback) errors.push("test.step is not directly bound to the executed test callback — UNCERTAIN before execution");
         const conditional = Boolean(testBody && isConditionalContext(node, testBody));
-        const step: MultiStepStepModel = { title, index: steps.length, line: sourceLine(sf, node), awaited, conditional };
+        const step: MultiStepStepModel = { title, index: steps.length, line: sourceLine(sf, node), awaited, conditional, executed };
         steps.push(step);
         if (callback && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))) spans.push({ step, callback });
       }
@@ -822,6 +899,17 @@ export function parseMultiStepScript(file: string, source: string, projectFiles?
     ts.forEachChild(node, visit);
   };
   visit(sf);
+  const visitControlFlow = (node: ts.Node): void => {
+    if (ts.isReturnStatement(node)) {
+      let scope: ts.Node | undefined = node.parent;
+      while (scope && !ts.isFunctionLike(scope)) scope = scope.parent;
+      if (scope === testCallback || spans.some((item) => item.callback === scope)) {
+        banned.push("required Multistep transaction or step returns before all assertions complete");
+      }
+    }
+    ts.forEachChild(node, visitControlFlow);
+  };
+  visitControlFlow(sf);
   const enclosingStep = (node: ts.Node): MultiStepStepModel | null => {
     let current: ts.Node | undefined = node;
     while (current && current !== sf) {
@@ -894,10 +982,19 @@ export function parseMultiStepScript(file: string, source: string, projectFiles?
               derived = exprDerivesEnv(urlExpr.templateSpans[0]!.expression, localBindings, errors);
             }
             if (!derived) errors.push(`request URL at ${file}:${line} does not statically derive from process.env.ENVIRONMENT_URL — origin provenance without a fallback is UNCERTAIN`);
+            const span = urlExpr && ts.isTemplateExpression(urlExpr) && urlExpr.head.text === "" && urlExpr.templateSpans.length === 1
+              ? urlExpr.templateSpans[0]! : null;
+            const route = span && exprDerivesEnv(span.expression, localBindings, errors)
+              ? knownRoute(span.literal.text) : null;
+            if (!route) errors.push("request URL is not exactly an approved environment origin followed by one fixed route — UNCERTAIN before execution");
             const step = enclosingStep(node);
-            if (!step) errors.push("request occurs outside an executed test.step callback — UNCERTAIN before execution");
+            if (!step?.executed || !step.awaited) errors.push("request occurs outside a directly awaited executed test.step callback — UNCERTAIN before execution");
+            const stepSpan = spans.find((item) => item.step === step);
+            if (stepSpan && isConditionalContext(node, stepSpan.callback.body)) {
+              banned.push("required request conditionally bypassed inside test.step");
+            }
             const { headerKeys, bodyKeys, usesBearer, optionsShape } = headerAndBodyKeys(node, sf, errors);
-            requests.push({ stepTitle: step?.title ?? null, method: name.toUpperCase(), urlTemplate: url ?? "<unresolved>", headerKeys, bodyKeys, usesBearer, optionsShape, line });
+            requests.push({ stepTitle: step?.title ?? null, method: name.toUpperCase(), urlTemplate: url ?? "<unresolved>", route, headerKeys, bodyKeys, usesBearer, optionsShape, line });
           } else if (recv && requestAliases.has(recv)) {
             errors.push(`request alias "${recv}" in ${file} is unsupported — requests must call request.<method> directly (UNCERTAIN)`);
           } else {
@@ -945,7 +1042,15 @@ export function parseMultiStepScript(file: string, source: string, projectFiles?
         const lineNumber = sourceLine(sf, node);
         if (!isKnownMatcher(matcher)) errors.push(`unsupported matcher "${matcher}" at ${file}:${lineNumber} — unsupported matchers are UNCERTAIN`);
         const step = enclosingStep(node);
-        if (!step) errors.push("assertion occurs outside an executed test.step callback — UNCERTAIN before execution");
+        if (!step?.executed || !step.awaited) errors.push("assertion occurs outside a directly awaited executed test.step callback — UNCERTAIN before execution");
+        const span = spans.find((item) => item.step === step);
+        if (span && isConditionalContext(node, span.callback.body)) {
+          banned.push("hard assertion conditionally bypassed inside test.step");
+        }
+        const expression = ts.isAwaitExpression(node.parent) ? node.parent : node;
+        if (!span || !ts.isExpressionStatement(expression.parent) || expression.parent.parent !== span.callback.body) {
+          errors.push("assertion is not a directly executed expression in the awaited test.step callback — UNCERTAIN before execution");
+        }
         // Do not treat a name declared in an unrelated function or step as a
         // binding for THIS assertion. Visit every referenced identifier,
         // including non-leading ones hidden inside a larger expression.
@@ -1002,6 +1107,10 @@ export function parseMultiStepScript(file: string, source: string, projectFiles?
     return ts.isIdentifier(node) ? node.text : null;
   };
   const securityBindings: string[] = [];
+  const unboundWrite = (name: string, at: ts.Node): boolean => {
+    const binding = lexicalDeclaration(name, at);
+    return !binding || typeof binding !== "object";
+  };
   const securityVisit = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && guarded.has(node.name.text)) {
       const list = node.parent;
@@ -1015,6 +1124,14 @@ export function parseMultiStepScript(file: string, source: string, projectFiles?
       if (root && (evidenceAlias(root, node.left) || (root === "process" && left.startsWith("process.env")))) {
         errors.push("Playwright assertion, request, response, payload or runtime environment is mutated — UNCERTAIN before execution");
       }
+      // A new identifier can still mutate a builtin prototype, the runner or
+      // a value later read by an expect(). No property write is proven inert;
+      // unlike a local scalar assignment, this is unsupported data flow.
+      if (ts.isPropertyAccessExpression(node.left) || ts.isElementAccessExpression(node.left)
+        || ts.isArrayLiteralExpression(node.left) || ts.isObjectLiteralExpression(node.left)
+        || (ts.isIdentifier(node.left) && unboundWrite(node.left.text, node.left))) {
+        errors.push("unmodeled property, destructuring or global assignment in Multistep source — UNCERTAIN before execution");
+      }
       if (root && guarded.has(root) || left.startsWith("process.env.")) {
         securityBindings.push(`write:${left}:${node.operatorToken.getText(sf)}:${stripComments(node.right.getText(sf)).trim()}`);
         if (left.includes("[") || left.includes(".") || left.startsWith("process.env.")) errors.push("security-critical Multistep environment or account binding is mutated — UNCERTAIN before execution");
@@ -1026,6 +1143,13 @@ export function parseMultiStepScript(file: string, source: string, projectFiles?
       if (root && (evidenceAlias(root, node.operand) || (root === "process" && node.operand.getText(sf).startsWith("process.env")))) {
         errors.push("Playwright response, payload or runtime environment is mutated — UNCERTAIN before execution");
       }
+      if (ts.isPropertyAccessExpression(node.operand) || ts.isElementAccessExpression(node.operand)
+        || (ts.isIdentifier(node.operand) && unboundWrite(node.operand.text, node.operand))) {
+        errors.push("unmodeled property or global increment in Multistep source — UNCERTAIN before execution");
+      }
+    }
+    if (ts.isDeleteExpression(node)) {
+      errors.push("unmodeled property deletion in Multistep source — UNCERTAIN before execution");
     }
     ts.forEachChild(node, securityVisit);
   };
@@ -1057,8 +1181,26 @@ export function parseMultiStepScript(file: string, source: string, projectFiles?
   };
 }
 
+/** Canonical structural gate, independent of a patch comparison. Direct
+ * adapter callers cannot declare their own unknown transaction a baseline. */
+export function canonicalMultiStepScriptProblem(script: MultiStepScriptModel): string | null {
+  const direct = script.steps.filter((step) => step.executed && step.awaited && !step.conditional).map((step) => step.title);
+  if (JSON.stringify(direct) !== JSON.stringify(MULTISTEP_STEP_TITLES)) return "MULTISTEP_STEP_SEQUENCE_INVALID";
+  const expected = Object.entries(MULTISTEP_ROUTES).map(([route, method], index) => [MULTISTEP_STEP_TITLES[index], method, route]);
+  const observed = script.requests.map((request) => [request.stepTitle, request.method, request.route]);
+  if (JSON.stringify(observed) !== JSON.stringify(expected)) return "MULTISTEP_REQUEST_SEQUENCE_INVALID";
+  if (script.assertions.length === 0 || MULTISTEP_STEP_TITLES.some((title) => !script.assertions.some((item) => item.stepTitle === title))) {
+    return "MULTISTEP_ASSERTIONS_UNPROVEN";
+  }
+  return null;
+}
+
 /** Parse a complete Multistep project: construct identity + transaction script. */
 export function parseMultiStepProject(files: Map<string, string>, preferredFile?: string | null): MultiStepSourceModel | null {
+  const boundary = multiStepSourceClosureProblem(files);
+  if (boundary || (preferredFile && !multiStepSourcePath(preferredFile))) {
+    return { construct: null, script: null, errors: [boundary ?? "MULTISTEP_SOURCE_PATH_UNSAFE"] };
+  }
   const normalized = new Map<string, string>();
   for (const [key, value] of files) normalized.set(norm(key), value);
   const construct = parseMultiStepConstruct(normalized);
@@ -1086,6 +1228,10 @@ export function parseMultiStepProject(files: Map<string, string>, preferredFile?
   } else {
     script = parseMultiStepScript(scriptFile!, scriptSource, normalized);
     errors.push(...script.errors);
+    if (construct) {
+      const shape = canonicalMultiStepScriptProblem(script);
+      if (shape) errors.push(shape);
+    }
   }
   return { construct: construct?.model ?? null, script, errors: [...new Set(errors)] };
 }

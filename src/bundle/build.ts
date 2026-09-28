@@ -13,7 +13,7 @@
 
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { ChecklyClient } from "../checkly/client.ts";
 import type { AssetManifestEntry, ChecklyCheck, CheckResult, CheckResultSummary, ErrorGroup, RootCauseAnalysis } from "../checkly/types.ts";
@@ -28,7 +28,8 @@ import { parseApiCheckProject } from "../api/model.ts";
 import { buildMultiStepRecording, readMultiStepAssets, MAX_ASSET_FILE_BYTES, MAX_ASSET_ZIP_BYTES, type MultiStepAssetTexts } from "../multistep/capture.ts";
 import { constrainMultiStepManifest, multiStepRunMetadata } from "../multistep/bundle-evidence.ts";
 import { multistepProblemCategory } from "../multistep/sanitize.ts";
-import { parseMultiStepConstruct } from "../multistep/source.ts";
+import { parseMultiStepConstruct, parseMultiStepProject } from "../multistep/source.ts";
+import { multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_BYTES, MULTISTEP_MAX_SOURCE_FILE_BYTES, MULTISTEP_MAX_SOURCE_FILES } from "../multistep/files.ts";
 
 export interface BuildOptions {
   checkId: string;
@@ -103,9 +104,11 @@ function findApiCheckFiles(root: string, max = 100): string[] {
     for (const name of readdirSync(dir)) {
       if (["node_modules", ".git", ".next", "dist", "build", "test-results", "playwright-report"].includes(name)) continue;
       const file = join(dir, name);
-      const stat = statSync(file);
+      const stat = lstatSync(file);
+      if (stat.isSymbolicLink()) continue;
       if (stat.isDirectory()) walk(file, depth + 1);
       else if (/\.check\.[cm]?[jt]sx?$/.test(name)) out.push(file);
+      if (out.length >= max) return;
     }
   };
   walk(root, 0);
@@ -130,6 +133,52 @@ function collectModuleClosure(root: string, initial: string[], sources: Array<{ 
     sources.push({ path: rel, content });
     seen.add(rel);
     for (const match of content.matchAll(/(?:import|export)\s+(?:[^'";]+?\s+from\s+)?['"](\.[^'"]+)['"]/g)) {
+      const imported = relativeModule(root, file, match[1]);
+      if (imported) queue.push(imported);
+    }
+  }
+}
+
+function boundedMultiStepSource(root: string, file: string): { path: string; content: string } {
+  const rel = relative(root, file).replaceAll("\\", "/");
+  if (!multiStepSourcePath(rel) || !realpathSync(file).startsWith(`${realpathSync(root)}/`)) {
+    throw new Error("MULTISTEP_SOURCE_PATH_UNSAFE");
+  }
+  const stat = lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("MULTISTEP_SOURCE_PATH_UNSAFE");
+  if (stat.size > MULTISTEP_MAX_SOURCE_FILE_BYTES) throw new Error("MULTISTEP_SOURCE_CLOSURE_BOUND");
+  const fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const opened = fstatSync(fd);
+    if (!opened.isFile() || opened.size > MULTISTEP_MAX_SOURCE_FILE_BYTES) throw new Error("MULTISTEP_SOURCE_CLOSURE_BOUND");
+    const chunks: Buffer[] = [];
+    let size = 0;
+    while (size <= MULTISTEP_MAX_SOURCE_FILE_BYTES) {
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, MULTISTEP_MAX_SOURCE_FILE_BYTES + 1 - size));
+      const n = readSync(fd, buffer, 0, buffer.length, null);
+      if (!n) return { path: rel, content: Buffer.concat(chunks, size).toString("utf8") };
+      size += n;
+      if (size > MULTISTEP_MAX_SOURCE_FILE_BYTES) break;
+      chunks.push(buffer.subarray(0, n));
+    }
+    throw new Error("MULTISTEP_SOURCE_CLOSURE_BOUND");
+  } finally { closeSync(fd); }
+}
+
+function collectMultiStepClosure(root: string, initial: string[], sources: Array<{ path: string; content: string }>): void {
+  const seen = new Set(sources.map((item) => item.path));
+  const queue = [...initial];
+  let bytes = sources.reduce((n, item) => n + Buffer.byteLength(item.content, "utf8"), 0);
+  while (queue.length) {
+    const file = queue.shift()!;
+    const source = boundedMultiStepSource(root, file);
+    if (seen.has(source.path)) continue;
+    if (seen.size >= MULTISTEP_MAX_SOURCE_FILES || (bytes += Buffer.byteLength(source.content, "utf8")) > MULTISTEP_MAX_SOURCE_BYTES) {
+      throw new Error("MULTISTEP_SOURCE_CLOSURE_BOUND");
+    }
+    seen.add(source.path);
+    sources.push(source);
+    for (const match of source.content.matchAll(/(?:import|export)\s+(?:[^'";]+?\s+from\s+)?['"](\.[^'"]+)['"]/g)) {
       const imported = relativeModule(root, file, match[1]);
       if (imported) queue.push(imported);
     }
@@ -166,8 +215,13 @@ export function collectProjectSources(check: ChecklyCheck, projectDir: string | 
   if (check.checkType === "BROWSER" || check.checkType === "MULTI_STEP") {
     if (typeof check.script === "string" && check.script.length) {
       const name = check.scriptPath ? basename(check.scriptPath) : "check.spec.ts";
-      sources.push({ path: name, content: check.script });
-      mainSource = name;
+      if (check.checkType === "MULTI_STEP" && (!multiStepSourcePath(name)
+        || Buffer.byteLength(check.script, "utf8") > MULTISTEP_MAX_SOURCE_FILE_BYTES)) {
+        warnings.push("MULTISTEP_SOURCE_CLOSURE_BOUND");
+      } else {
+        sources.push({ path: name, content: check.script });
+        mainSource = name;
+      }
     } else {
       warnings.push("the API returned no script for this browser check");
     }
@@ -182,7 +236,8 @@ export function collectProjectSources(check: ChecklyCheck, projectDir: string | 
     }
     const checklyConfig = firstExisting(root, ["checkly.config.ts", "checkly.config.mts", "checkly.config.js", "checkly.config.mjs"]);
     if (checklyConfig) {
-      const content = readFileSync(checklyConfig, "utf8");
+      const content = check.checkType === "MULTI_STEP"
+        ? boundedMultiStepSource(root, checklyConfig).content : readFileSync(checklyConfig, "utf8");
       sources.push({ path: relative(root, checklyConfig), content });
       logicalId = /logicalId\s*:\s*['"`]([^'"`]+)['"`]/.exec(content)?.[1] ?? null;
       repoUrl = /repoUrl\s*:\s*['"`]([^'"`]+)['"`]/.exec(content)?.[1] ?? null;
@@ -197,10 +252,15 @@ export function collectProjectSources(check: ChecklyCheck, projectDir: string | 
       // The Checkly API returns the DEPLOYED script (as a basename), whereas
       // the construct names its actual project-relative entrypoint. Bind those
       // two identities before saving: no same-basename fallback at verify time.
-      for (const file of findApiCheckFiles(root)) {
-        const content = readFileSync(file, "utf8");
-        if (content.includes("new MultiStepCheck(")) collectModuleClosure(root, [file], sources);
-      }
+      try {
+        const candidates = findApiCheckFiles(root, MULTISTEP_MAX_SOURCE_FILES + 1);
+        if (candidates.length > MULTISTEP_MAX_SOURCE_FILES) throw new Error("MULTISTEP_SOURCE_CLOSURE_BOUND");
+        for (const file of candidates) {
+          const content = boundedMultiStepSource(root, file).content;
+          if (content.includes("new MultiStepCheck(")) collectMultiStepClosure(root, [file], sources);
+        }
+      } catch (error) { warnings.push((error as Error).message.startsWith("MULTISTEP_")
+        ? (error as Error).message : "MULTISTEP_SOURCE_PATH_UNSAFE"); }
       const construct = parseMultiStepConstruct(new Map(sources.map((item) => [item.path, item.content])));
       if (construct?.model.errors.length) warnings.push("MULTISTEP_CONSTRUCT_UNRESOLVED");
       else if (construct && (
@@ -216,7 +276,9 @@ export function collectProjectSources(check: ChecklyCheck, projectDir: string | 
         if (relative(root, onDisk).startsWith("..") || isAbsolute(relative(root, onDisk))) {
           warnings.push("MULTISTEP_ENTRYPOINT_UNSAFE");
         } else if (existsSync(onDisk)) {
-          collectModuleClosure(root, [onDisk], sources);
+          try { collectMultiStepClosure(root, [onDisk], sources); }
+          catch (error) { warnings.push((error as Error).message.startsWith("MULTISTEP_")
+            ? (error as Error).message : "MULTISTEP_SOURCE_PATH_UNSAFE"); }
           const deployed = sources.find((item) => item.path === mainSource);
           const project = sources.find((item) => item.path === entrypoint);
           if (deployed && project && deployed.content !== project.content) warnings.push("MULTISTEP_SOURCE_PROJECT_MISMATCH");
@@ -231,6 +293,10 @@ export function collectProjectSources(check: ChecklyCheck, projectDir: string | 
           warnings.push("MULTISTEP_ENTRYPOINT_MISSING");
         }
       } else warnings.push("MULTISTEP_CONSTRUCT_UNRESOLVED");
+      const sourceMap = new Map(sources.map((source) => [source.path.replaceAll("\\", "/"), source.content]));
+      const closureProblem = multiStepSourceClosureProblem(sourceMap);
+      if (closureProblem) warnings.push(closureProblem);
+      else if (mainSource && parseMultiStepProject(sourceMap, mainSource)?.errors.length) warnings.push("MULTISTEP_SOURCE_UNPROVEN");
     }
 
     if (check.checkType === "API") {
@@ -520,6 +586,75 @@ export function assertNoSecretLeak(texts: Array<{ file: string; text: string }>,
   }
 }
 
+const MULTISTEP_OUTPUT_FILES = new Set([
+  "manifest.json", "check.config.json", "README.md", ".gitignore",
+  "results/failing.json", "results/passing.json", "results/history.json",
+  "recordings/failing.multistep.json", "recordings/passing.multistep.json",
+]);
+
+/** A Multistep bundle has a small, explicit set of output paths. Reject
+ * symlinks/hardlinks in a reused output directory rather than following them
+ * when replacing an earlier synthetic capture. The caller chooses outDir, but
+ * data-derived paths can never escape it or introduce arbitrary artifacts. */
+function writeMultiStepBundleFiles(outDir: string, files: Array<{ file: string; text: string }>): Array<{ file: string; text: string }> {
+  const seen = new Set<string>();
+  let totalBytes = 0;
+  if (files.length > MULTISTEP_MAX_SOURCE_FILES + MULTISTEP_OUTPUT_FILES.size) throw new Error("MULTISTEP_OUTPUT_BOUND");
+  for (const entry of files) {
+    const name = entry.file.replaceAll("\\", "/");
+    if (entry.file !== name || seen.has(name)
+      || !(MULTISTEP_OUTPUT_FILES.has(name) || (name.startsWith("check/") && multiStepSourcePath(name.slice(6)) === name.slice(6)))) {
+      throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+    }
+    seen.add(name);
+    const bytes = Buffer.byteLength(entry.text, "utf8");
+    const limit = name.startsWith("recordings/") ? 2 * 1024 * 1024 : 4 * 1024 * 1024;
+    if (bytes > limit || (totalBytes += bytes) > 16 * 1024 * 1024) throw new Error("MULTISTEP_OUTPUT_BOUND");
+  }
+  mkdirSync(outDir, { recursive: true });
+  if (!lstatSync(outDir).isDirectory() || lstatSync(outDir).isSymbolicLink()) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+  const statOrNull = (file: string): ReturnType<typeof lstatSync> | null => {
+    try { return lstatSync(file); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  };
+  // Preflight every existing path before writing any file, including broken
+  // symlinks and hardlinks whose target is outside the output directory.
+  for (const entry of files) {
+    const parts = entry.file.split("/");
+    let parent = outDir;
+    for (const segment of parts.slice(0, -1)) {
+      parent = join(parent, segment);
+      const stat = statOrNull(parent);
+      if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+    }
+    const existing = statOrNull(join(outDir, entry.file));
+    if (existing && (!existing.isFile() || existing.isSymbolicLink() || existing.nlink !== 1)) {
+      throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+    }
+  }
+  const written: Array<{ file: string; text: string }> = [];
+  for (const entry of files) {
+    const p = join(outDir, entry.file);
+    mkdirSync(dirname(p), { recursive: true });
+    // Never truncate before verifying the opened descriptor. O_NOFOLLOW and
+    // O_EXCL protect final-component symlinks and race-created replacements.
+    const exists = statOrNull(p) !== null;
+    const fd = openSync(p, exists ? constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0)
+      : constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
+    try {
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.nlink !== 1) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+      if (exists) ftruncateSync(fd, 0);
+      writeFileSync(fd, entry.text);
+    } finally { closeSync(fd); }
+    written.push({ file: entry.file, text: readFileSync(p, "utf8") });
+  }
+  return written;
+}
+
 export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<BuildOutcome> {
   const log = opts.log ?? (() => {});
   const client = deps.client;
@@ -689,6 +824,28 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
       multistepProblems[side] = [...new Set([...(multistepProblems[side] ?? []), problem])];
     }
   }
+  if (isMultiStep) {
+    const source = proj.sources.find((item) => item.path === proj.mainSource);
+    const unsafeSource = proj.warnings.some((warning) => warning.startsWith("MULTISTEP_"));
+    for (const [side, fetched] of [["failing", failing], ["passing", passing]] as const) {
+      if (!multistepRecordings[side]) continue;
+      const asset = assets.find((item) => item.result === side && item.name === "test-results.json");
+      if (!source || unsafeSource || !fetched || !asset || !/^[0-9a-f]{64}$/.test(asset.sha256)) {
+        multistepRecordings[side] = null;
+        fetched!.multistep = null;
+        multistepProblems[side] = [...new Set([...(multistepProblems[side] ?? []), "MULTISTEP_CAPTURE_BINDING_INVALID"])];
+        continue;
+      }
+      const record = JSON.parse(multistepRecordings[side]!) as import("../multistep/capture.ts").MultiStepRecording;
+      record.binding = {
+        side, checkId: check.id, resultId: fetched.summary.id, runLocation: fetched.summary.runLocation,
+        startedAt: fetched.summary.startedAt, stoppedAt: fetched.summary.stoppedAt ?? null,
+        sourceFile: source.path, sourceSha256: sha256(Buffer.from(source.content, "utf8")),
+        testResultsSha256: asset.sha256, reporter: "playwright-json-nested", bridge: "required-at-local-execution",
+      };
+      multistepRecordings[side] = JSON.stringify(record, null, 2) + "\n";
+    }
+  }
   if (check.checkType === "API" && proj.mainSource) {
     const sourceMap = new Map(proj.sources.map((source) => [source.path.replace(/\\/g, "/"), source.content]));
     const model = parseApiCheckProject(proj.mainSource, sourceMap);
@@ -731,7 +888,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     multistepPassing: multistepRecordings.passing ? "recordings/passing.multistep.json" : null,
     bodies,
   };
-  const manifest = buildManifest({
+  let manifest = buildManifest({
     check,
     failing,
     passing,
@@ -753,8 +910,8 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     now,
     toolVersion,
   });
-  manifest.notes.push(...warnings.map((w) => `warning: ${w}`));
-  if (isMultiStep) constrainMultiStepManifest(manifest);
+  if (isMultiStep) manifest = constrainMultiStepManifest(manifest, { failing: failing?.multistep, passing: passing?.multistep });
+  else manifest.notes.push(...warnings.map((w) => `warning: ${w}`));
 
   const files: Array<{ file: string; text: string }> = [];
   files.push({ file: "manifest.json", text: JSON.stringify(manifest, null, 2) + "\n" });
@@ -798,16 +955,27 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   // Final leak check over EVERY original sensitive value: Checkly env vars
   // plus the original account/token/origin values the sanitizer labeled.
   const allSecrets = [...new Set([...secretValues, ...multistepSecrets])];
+  // The generic builder tolerates short public fixture values because they
+  // collide with ordinary words. A Multistep bundle cannot make that trade:
+  // fail closed rather than persist a value we cannot reliably screen.
+  if (isMultiStep && allSecrets.some((value) => value.length > 0 && value.length < 6)) {
+    throw new Error("MULTISTEP_SECRET_UNSCREENABLE");
+  }
   assertNoSecretLeak(files, allSecrets);
 
-  mkdirSync(outDir, { recursive: true });
-  const written: Array<{ file: string; text: string }> = [];
-  for (const f of files) {
-    const p = isAbsolute(f.file) ? f.file : join(outDir, f.file);
-    mkdirSync(dirname(p), { recursive: true });
-    writeFileSync(p, f.text);
-    written.push({ file: f.file, text: readFileSync(p, "utf8") });
-  }
+  const written: Array<{ file: string; text: string }> = isMultiStep
+    ? writeMultiStepBundleFiles(outDir, files)
+    : (() => {
+        mkdirSync(outDir, { recursive: true });
+        const output: Array<{ file: string; text: string }> = [];
+        for (const f of files) {
+          const p = isAbsolute(f.file) ? f.file : join(outDir, f.file);
+          mkdirSync(dirname(p), { recursive: true });
+          writeFileSync(p, f.text);
+          output.push({ file: f.file, text: readFileSync(p, "utf8") });
+        }
+        return output;
+      })();
   // And again over every file ACTUALLY written, straight from disk.
   assertNoSecretLeak(written, allSecrets);
   log(`[bundle] wrote ${files.length} files to ${outDir} (post-write leak check over ${allSecrets.length} original sensitive value(s): clean)`);

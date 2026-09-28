@@ -43,14 +43,17 @@ import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import ts from "typescript";
 import type { TraceStep } from "../types.ts";
 import { SEED_MODULE } from "../sandbox.ts";
 import { normalizeMultiStepCapture, type MultiStepCapture } from "./normalize.ts";
 import { startOriginBridge, type BridgeRequestEvidence, type OriginBridge } from "./origin-bridge.ts";
-import { knownRoute, knownStepTitle, routeFromUrl, UNKNOWN_ROUTE } from "./routes.ts";
+import { knownRoute, knownStepTitle, routeFromUrl, MULTISTEP_ROUTES, MULTISTEP_STEP_TITLES, UNKNOWN_ROUTE } from "./routes.ts";
+import { multiStepSourceClosureProblem, multiStepSourcePath } from "./files.ts";
+import { evaluateMultiStepPolicy } from "./policy.ts";
+import { canonicalMultiStepScriptProblem, parseMultiStepProject } from "./source.ts";
 import { MAX_REPORTER_AUDIT_BYTES, parseReporterAudit, TRUSTED_REQUEST_REPORTER, type ReporterRequestEvidence } from "./reporter.ts";
 import { parseMultiStepScript } from "./source.ts";
 
@@ -59,7 +62,7 @@ const execFileAsync = promisify(execFile);
 /** Maximum reporter stdout bytes retained as candidate evidence. */
 export const MAX_REPORTER_STDOUT_BYTES = 16 * 1024 * 1024;
 /** Maximum runner stderr bytes counted (content is never retained). */
-export const MAX_STDERR_BYTES = 64 * 1024 * 1024;
+export const MAX_STDERR_BYTES = 2 * 1024 * 1024;
 
 /** Reserved runner environment keys — candidate env must not collide. */
 const RESERVED_ENV_KEYS = new Set([
@@ -85,6 +88,8 @@ export interface MultiStepSandboxOptions {
   files: Record<string, string>;
   /** Main Multistep spec path. */
   checkFile: string;
+  /** Trusted recorded source, when invoked through the scene executor. */
+  originalFiles?: Record<string, string>;
   seed?: number;
 }
 
@@ -113,9 +118,9 @@ export interface MultiStepSandboxOutcome {
 }
 
 function safeRelativePath(path: string): string {
-  const n = normalize(path).replaceAll("\\", "/");
-  if (isAbsolute(n) || n === ".." || n.startsWith("../")) throw new Error("unsafe file path in candidate tree");
-  return n.replace(/^\.\//, "");
+  const safe = multiStepSourcePath(path);
+  if (!safe) throw new Error("unsafe file path in candidate tree");
+  return safe;
 }
 
 /** Resolve from the customer's project — no second Playwright is downloaded. */
@@ -187,22 +192,29 @@ export function staticBrowserFreeScript(file: string, source: string): { free: b
  */
 export function bridgeReporterMismatch(
   bridge: BridgeRequestEvidence[], capture: MultiStepCapture, audit: ReporterRequestEvidence[] | null = null,
+  trustedOrigin?: string,
 ): string | null {
   const jsonRequests = capture.steps.flatMap((s) => s.requests.map((r) => ({
     method: r.method ?? "OTHER",
     path: r.url ? routeFromUrl(r.url) ?? UNKNOWN_ROUTE : knownRoute(r.path) ?? UNKNOWN_ROUTE,
     status: r.status,
     step: knownStepTitle(s.title) ?? "<unknown-step>",
-    originMatches: true,
+    originMatches: Boolean(r.url && (() => { try { return !trustedOrigin || new URL(r.url).origin === trustedOrigin; } catch { return false; } })()),
     hasQuery: Boolean(r.url && (() => { try { return new URL(r.url).search !== ""; } catch { return true; } })()),
   })));
   if (bridge.length === 0) return "the HTTPS origin bridge recorded zero requests — no execution traffic can PASS";
+  const required = Object.entries(MULTISTEP_ROUTES).map(([path, method], index) => ({ path, method, step: MULTISTEP_STEP_TITLES[index] }));
+  const failedIndex = capture.steps.findIndex((step) => step.status === "failed");
+  const requiredCount = failedIndex >= 0 ? Math.min(4, failedIndex + 1) : 4;
+  if (bridge.length !== requiredCount || capture.steps.length !== (failedIndex >= 0 ? failedIndex + 1 : 5)) {
+    return "bridge/reporter transaction is not the exact executed four-request sequence (or its failing prefix)";
+  }
   // The JSON reporter is advisory: Playwright normally filters pw:api steps
   // from it, and an untrusted CLI can print a forged JSON result. The trusted
   // fd-3 reporter is MANDATORY even when the JSON document lists requests.
   if (!audit || audit.length === 0) return "bridge/reporter dedicated request audit missing — no trustworthy execution evidence";
   if (jsonRequests.length > 0 && (audit.length !== jsonRequests.length
-    || audit.some((r, i) => r.method !== jsonRequests[i]?.method || r.path !== jsonRequests[i]?.path || r.step !== jsonRequests[i]?.step))) {
+    || audit.some((r, i) => r.method !== jsonRequests[i]?.method || r.path !== jsonRequests[i]?.path || r.step !== jsonRequests[i]?.step || !jsonRequests[i]?.originMatches))) {
     return "bridge/reporter JSON and request-audit evidence disagree — no trustworthy execution evidence";
   }
   const reporter = audit;
@@ -210,11 +222,14 @@ export function bridgeReporterMismatch(
   for (let i = 0; i < bridge.length; i++) {
     const b = bridge[i]!;
     const r = reporter[i]!;
-    if (!knownRoute(b.path) || !knownRoute(r.path) || b.hasQuery || r.hasQuery || r.originMatches === false || r.step === "<unknown-step>") {
+    if (b.index !== i + 1 || !knownRoute(b.path) || !knownRoute(r.path) || b.hasQuery || r.hasQuery || r.originMatches !== true || r.step === "<unknown-step>") {
       return `bridge/reporter unrecognized route, origin, query or step at request ${i + 1} — no trustworthy execution evidence`;
     }
     if (b.method !== r.method) return `bridge/reporter method mismatch at request ${i + 1} — no trustworthy execution evidence`;
     if (b.path !== r.path) return `bridge/reporter path mismatch at request ${i + 1} — no trustworthy execution evidence`;
+    if (b.method !== required[i]!.method || b.path !== required[i]!.path || r.step !== required[i]!.step) {
+      return `bridge/reporter transaction sequence mismatch at request ${i + 1} — no trustworthy execution evidence`;
+    }
     const expectedStep: Record<string, string> = { "/api/login": "login", "/api/session": "session", "/api/slots": "slots", "/api/book": "book 09:30" };
     if (r.step !== expectedStep[r.path] || !capture.steps.some((s) => s.title === r.step)) {
       return `bridge/reporter request-step mismatch at request ${i + 1} — no trustworthy execution evidence`;
@@ -298,10 +313,12 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
 
   // Reserved runner keys must be under this adapter's control — a candidate
   // that tries to set one is UNCERTAIN before anything executes.
-  for (const key of Object.keys(ctx.env ?? {})) {
-    if (RESERVED_ENV_KEYS.has(key.toUpperCase())) {
-      return inconclusive("candidate environment collides with a reserved runner key — no trustworthy execution environment");
-    }
+  const candidateFiles = new Map(Object.entries(ctx.files));
+  if (multiStepSourceClosureProblem(candidateFiles)) {
+    return inconclusive("Multistep source closure exceeds its safe boundary — no runner was started");
+  }
+  if (ctx.originalFiles && multiStepSourceClosureProblem(new Map(Object.entries(ctx.originalFiles)))) {
+    return inconclusive("Multistep recorded source closure exceeds its safe boundary — no runner was started");
   }
 
   // The candidate spec must be provably API-only: this adapter launches no
@@ -319,9 +336,38 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
   if (!browserFree.free) {
     return inconclusive("Multistep script uses browser APIs the adapter never launches — no trustworthy execution evidence");
   }
-  const sourceModel = parseMultiStepScript(checkFile, checkSource, new Map(Object.entries(ctx.files)));
-  if (sourceModel.errors.length > 0) return inconclusive("Multistep source is unsupported before execution — no runner was started");
+  const projectModel = parseMultiStepProject(candidateFiles, checkFile);
+  const sourceModel = projectModel?.script ?? parseMultiStepScript(checkFile, checkSource, candidateFiles);
+  const canonicalProblem = canonicalMultiStepScriptProblem(sourceModel);
+  // A direct adapter invocation may supply just the script. It still must
+  // meet the independent canonical gate; the scene/verify entry points also
+  // supply the construct and original tree for the full immutable policy.
+  const projectErrors = projectModel?.errors.filter((error) => ctx.originalFiles
+    || !error.startsWith("no MultiStepCheck construct found")) ?? [];
+  if (projectErrors.length || sourceModel.errors.length || sourceModel.banned.length || canonicalProblem) {
+    return inconclusive("Multistep source is unsupported before execution (transaction policy unresolved) — no runner was started");
+  }
+  if (ctx.originalFiles) {
+    const original = parseMultiStepProject(new Map(Object.entries(ctx.originalFiles)), checkFile);
+    const policy = evaluateMultiStepPolicy(original, projectModel);
+    if (policy.rejected || policy.uncertain) return inconclusive("Multistep recorded source policy rejects or cannot prove this candidate — no runner was started");
+  }
 
+  const permitted = new Set(["REGION", "MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1"]);
+  for (const [key, value] of Object.entries(ctx.env ?? {})) {
+    if (RESERVED_ENV_KEYS.has(key.toUpperCase()) || !permitted.has(key)
+      || typeof value !== "string" || value.length > 512 || value.includes("\0")) {
+      return inconclusive("candidate environment is not a minimal approved Multistep environment — no runner was started");
+    }
+  }
+  if (ctx.env?.REGION !== "us-east-1" && ctx.env?.REGION !== "eu-west-1") {
+    return inconclusive("Multistep REGION is not a trusted location — no runner was started");
+  }
+  const selectedAccount = ctx.env.REGION === "us-east-1" ? ctx.env.MULTISTEP_USER_US_EAST_1 : ctx.env.MULTISTEP_USER_EU_WEST_1;
+  if (!selectedAccount || !selectedAccount.trim() || (ctx.env.MULTISTEP_USER_US_EAST_1 && ctx.env.MULTISTEP_USER_EU_WEST_1
+    && ctx.env.MULTISTEP_USER_US_EAST_1 === ctx.env.MULTISTEP_USER_EU_WEST_1)) {
+    return inconclusive("Multistep regional account values are missing or not distinct — no runner was started");
+  }
   // Dependency lookup is also an evidence gate, not a thrown filesystem path
   // in a report. Crucially it runs AFTER source preflight: unsupported source
   // is rejected before attempting to resolve or execute any CLI.
@@ -368,12 +414,13 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
     const args = [cli, "test", "--config", join(dir, configPath), checkFile, "--workers=1", "--retries=0", `--reporter=json,${auditReporter}`];
 
     let browserProcesses: number | null = null;
-    const childResult = await new Promise<{ code: number | null; stdout: string; audit: string; stderrBytes: number; timedOut: boolean; spawnError: boolean }>((done) => {
+    const childResult = await new Promise<{ code: number | null; stdout: string; audit: string; stderrBytes: number; timedOut: boolean; spawnError: boolean; outputExceeded: boolean }>((done) => {
       const child = spawn(process.execPath, args, {
         cwd: dir,
         env: {
-          // candidate-supplied env first; reserved runner keys below always win
-          ...(ctx.env ?? {}),
+          // Only the selected regional identity crosses into this child.
+          REGION: ctx.env!.REGION,
+          [ctx.env!.REGION === "us-east-1" ? "MULTISTEP_USER_US_EAST_1" : "MULTISTEP_USER_EU_WEST_1"]: selectedAccount,
           PATH: process.env.PATH ?? "",
           HOME: freshHome,
           // fully replaced: the parent's NODE_OPTIONS is never inherited
@@ -399,6 +446,13 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
       let auditTruncated = false;
       let stderrBytes = 0;
       let timedOut = false;
+      let outputExceeded = false;
+      const terminate = (): void => {
+        try {
+          if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
+          else child.kill("SIGKILL");
+        } catch { child.kill("SIGKILL"); }
+      };
       let sampling = true;
       const sample = async (): Promise<void> => {
         if (!child.pid) return;
@@ -412,20 +466,15 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
         }
         await sample(); // final sample at process exit
       })();
-      const timer = setTimeout(() => {
-        timedOut = true;
-        try {
-          if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
-          else child.kill("SIGKILL");
-        } catch {
-          child.kill("SIGKILL");
-        }
-      }, ctx.timeoutMs ?? 90_000);
+      const timer = setTimeout(() => { timedOut = true; terminate(); },
+        Math.max(1_000, Math.min(150_000, ctx.timeoutMs ?? 90_000)));
       child.stdout!.on("data", (d: Buffer) => {
         if (stdoutTruncated) return;
         if (stdoutBytes + d.length > MAX_REPORTER_STDOUT_BYTES) {
           stdoutTruncated = true;
-          stdout = ""; // over the bound: partial output is not admissible
+          outputExceeded = true;
+          stdout = ""; // partial output is not admissible
+          terminate();
           return;
         }
         stdoutBytes += d.length;
@@ -435,7 +484,9 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
         if (auditTruncated) return;
         if (auditBytes + d.length > MAX_REPORTER_AUDIT_BYTES) {
           auditTruncated = true;
+          outputExceeded = true;
           audit = "";
+          terminate();
           return;
         }
         auditBytes += d.length;
@@ -443,6 +494,7 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
       });
       child.stderr!.on("data", (d: Buffer) => {
         stderrBytes = Math.min(MAX_STDERR_BYTES, stderrBytes + d.length); // counted only — content discarded
+        if (stderrBytes === MAX_STDERR_BYTES) { outputExceeded = true; terminate(); }
       });
       let settled = false;
       const finish = (code: number | null, spawnError: boolean): void => {
@@ -450,7 +502,7 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
         settled = true;
         clearTimeout(timer);
         sampling = false;
-        void sampleLoop.then(() => done({ code, stdout: stdoutTruncated ? "" : stdout, audit: auditTruncated ? "" : audit, stderrBytes, timedOut, spawnError }));
+        void sampleLoop.then(() => done({ code, stdout: stdoutTruncated ? "" : stdout, audit: auditTruncated ? "" : audit, stderrBytes, timedOut, spawnError, outputExceeded }));
       };
       child.on("error", () => finish(null, true));
       child.on("close", (code) => finish(code, false));
@@ -458,6 +510,11 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
 
     if (childResult.spawnError) {
       return inconclusive("Multistep runner failed to start — no trustworthy execution evidence", { browserProcesses });
+    }
+    if (childResult.outputExceeded) {
+      return inconclusive("Multistep runner output exceeded a safe bound — partial evidence discarded", {
+        browserProcesses, diagnostics: { stderrBytes: childResult.stderrBytes, timedOut: false },
+      });
     }
 
     if (childResult.timedOut) {
@@ -469,7 +526,7 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
       });
     }
 
-    const capture = normalizeMultiStepCapture({ testResults: childResult.stdout });
+    const capture = normalizeMultiStepCapture({ testResults: childResult.stdout, reporterOnly: true });
     const audit = parseReporterAudit(childResult.audit);
     const reporterEvidence = audit ?? [];
     const proxyEvidence: BridgeRequestEvidence[] = bridge ? [...bridge.evidence] : [];
@@ -492,7 +549,7 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
     }
     // Bridged execution: bridge evidence must corroborate the reporter.
     // Zero bridge requests with reporter traffic is UNCERTAIN by construction.
-    const mismatch = bridgeReporterMismatch(bridge.evidence, capture, audit);
+    const mismatch = bridgeReporterMismatch(bridge.evidence, capture, audit, bridge.origin);
     if (mismatch) {
       return inconclusive(mismatch, { trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses, environmentOrigin: bridge.origin, proxyEvidence, reporterEvidence, diagnostics });
     }
@@ -520,8 +577,10 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
       diagnostics,
     };
   } finally {
-    // Both cleanup operations run even if one fails; teardown never masks
-    // the outcome that was already determined.
-    await Promise.allSettled([rm(dir, { recursive: true, force: true }), bridge ? bridge.close() : Promise.resolve()]);
+    // Both operations are attempted. A failed cleanup cannot silently
+    // accompany a conclusive result; the scene executor maps this fixed
+    // category to UNCERTAIN rather than accepting a leaked process/material.
+    const cleanup = await Promise.allSettled([rm(dir, { recursive: true, force: true }), bridge ? bridge.close() : Promise.resolve()]);
+    if (cleanup.some((item) => item.status === "rejected")) throw new Error("MULTISTEP_CLEANUP_FAILED");
   }
 }

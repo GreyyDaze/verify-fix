@@ -51,7 +51,7 @@ function makeFakeProject(): string {
     "  console.log(JSON.stringify({ stats: { expected: 0, unexpected: 1, flaky: 0 }, suites: [{ specs: [{ tests: [{ results: [{ status: 'failed', steps: [], error: { message: 'browser project filter requested' } }] }] }] }], errors: [] }))",
     "  process.exit(1)",
     "}",
-    "process.stdout.write(fs.readFileSync(process.env.FAKE_REPORT_FILE, 'utf8'))",
+    "process.stdout.write(fs.readFileSync(require('node:path').join(__dirname, '../../../fake-report.json'), 'utf8'))",
     "process.exit(0)",
   ].join("\n"));
   return project;
@@ -81,7 +81,7 @@ test("executor adapter rejects a forged JSON report without independent bridge/r
     projectDir: project,
     files: { "multistep-booking.spec.ts": SPEC_SOURCE },
     checkFile: "multistep-booking.spec.ts",
-    env: { FAKE_REPORT_FILE: reportFile },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-account-east" },
   });
   assert.equal(outcome.inconclusive, true, outcome.reason ?? "");
   assert.equal(outcome.passed, false);
@@ -107,7 +107,7 @@ test("executor adapter: a bridged run where the bridge sees ZERO requests can ne
     projectDir: project,
     files: { "multistep-booking.spec.ts": SPEC_SOURCE },
     checkFile: "multistep-booking.spec.ts",
-    env: { FAKE_REPORT_FILE: reportFile },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-account-east" },
   });
   assert.equal(outcome.passed, false);
   assert.equal(outcome.inconclusive, true);
@@ -117,14 +117,14 @@ test("executor adapter: a bridged run where the bridge sees ZERO requests can ne
 
 test("executor adapter treats missing/corrupt reporter output as inconclusive", async () => {
   const project = makeFakeProject();
-  const reportFile = join(project, "empty-report.json");
+  const reportFile = join(project, "fake-report.json");
   writeFileSync(reportFile, "not json at all");
   const outcome = await runMultiStepSandbox({
     baseUrl: "http://127.0.0.1:9/",
     projectDir: project,
     files: { "multistep-booking.spec.ts": SPEC_SOURCE },
     checkFile: "multistep-booking.spec.ts",
-    env: { FAKE_REPORT_FILE: reportFile },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-account-east" },
   });
   assert.equal(outcome.passed, false);
   assert.equal(outcome.inconclusive, true);

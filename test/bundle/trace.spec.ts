@@ -133,3 +133,91 @@ test("sanitize: env vars keep names and flags only", () => {
   ]);
   assert.deepEqual(envVarNamesOnly(null), []);
 });
+
+test("zip boundary: exact EOCD comment, spoofed end record, multi-disk and ZIP64 are rejected", () => {
+  const base = writeZip({ "safe.txt": "safe evidence" }, { store: true });
+  const end = base.length - 22;
+  const commented = Buffer.concat([base, Buffer.from("ok")]);
+  commented.writeUInt16LE(2, end + 20);
+  assert.equal(openZip(commented).get("safe.txt")!().toString(), "safe evidence");
+  assert.throws(() => openZip(Buffer.concat([base, Buffer.from("trailing bytes")])), /comment length/);
+  const spoof = Buffer.concat([base, Buffer.alloc(22)]);
+  spoof.writeUInt16LE(22, end + 20); // the actual EOCD covers a comment
+  spoof.writeUInt32LE(0x06054b50, base.length); // forged EOCD inside that comment
+  assert.throws(() => openZip(spoof), /ambiguous end of central directory/);
+  for (const [offset, length, value] of [[4, 2, 1], [6, 2, 1], [8, 2, 0], [10, 2, 0xffff], [12, 4, 0xffffffff], [16, 4, 0xffffffff]] as const) {
+    const attack = Buffer.from(base);
+    if (length === 2) attack.writeUInt16LE(value, end + offset);
+    else attack.writeUInt32LE(value, end + offset);
+    assert.throws(() => openZip(attack), /multi-disk|ZIP64|central directory|entries/);
+  }
+  const version = Buffer.from(base);
+  version.writeUInt16LE(45, version.readUInt32LE(end + 16) + 6);
+  assert.throws(() => openZip(version), /ZIP64/);
+  const localVersion = Buffer.from(base);
+  localVersion.writeUInt16LE(45, 4);
+  assert.throws(() => openZip(localVersion), /ZIP64/);
+});
+
+test("zip boundary: descriptors, local/central disagreement and overlapping local ranges", () => {
+  const base = writeZip({ "safe.txt": "body" }, { store: true });
+  const eocd = base.length - 22;
+  const cd = base.readUInt32LE(eocd + 16);
+  const localName = base.readUInt16LE(26);
+  const dataEnd = 30 + localName + 4;
+  const descriptor = Buffer.alloc(16);
+  descriptor.writeUInt32LE(0x08074b50, 0);
+  descriptor.writeUInt32LE(base.readUInt32LE(14), 4);
+  descriptor.writeUInt32LE(4, 8);
+  descriptor.writeUInt32LE(4, 12);
+  const described = Buffer.concat([base.subarray(0, cd), descriptor, base.subarray(cd)]);
+  const newCd = cd + descriptor.length;
+  described.writeUInt16LE(8, 6); // local: descriptor follows payload
+  described.writeUInt32LE(0, 14);
+  described.writeUInt32LE(0, 18);
+  described.writeUInt32LE(0, 22);
+  described.writeUInt16LE(8, newCd + 8); // central agrees on descriptor flag
+  described.writeUInt32LE(newCd, described.length - 22 + 16);
+  assert.equal(dataEnd, cd);
+  assert.equal(openZip(described).get("safe.txt")!().toString(), "body");
+  const badDescriptor = Buffer.from(described);
+  badDescriptor.writeUInt32LE(0, dataEnd + 4);
+  assert.throws(() => openZip(badDescriptor), /descriptor/);
+  const missingDescriptor = Buffer.from(described);
+  missingDescriptor.writeUInt32LE(cd, missingDescriptor.length - 22 + 16);
+  assert.throws(() => openZip(missingDescriptor), /range|directory/);
+  const inconsistent = Buffer.from(base);
+  inconsistent.writeUInt16LE(8, 8);
+  assert.throws(() => openZip(inconsistent), /local and central headers disagree/);
+  const wrongCrc = Buffer.from(base);
+  wrongCrc.writeUInt32LE(123, 14);
+  assert.throws(() => openZip(wrongCrc), /integrity fields disagree/);
+  const second = writeZip({ aaa: "same", bbb: "same" }, { store: true });
+  const e2 = second.length - 22;
+  const c2 = second.readUInt32LE(e2 + 16);
+  const firstLength = 46 + second.readUInt16LE(c2 + 28);
+  const secondEntry = c2 + firstLength;
+  second.write("aaa", secondEntry + 46);
+  second.writeUInt32LE(0, secondEntry + 42);
+  assert.throws(() => openZip(second), /local entry ranges overlap/);
+});
+
+test("zip boundary: ZIP64 extra fields in either header and malformed extra lengths do not pass", () => {
+  const base = writeZip({ "safe.txt": "body" }, { store: true });
+  const localEnd = 30 + base.readUInt16LE(26);
+  const eocd = base.length - 22;
+  const central = base.readUInt32LE(eocd + 16);
+  const zip64 = Buffer.from([1, 0, 0, 0]); // ZIP64 extra ID with zero-byte payload
+  const local = Buffer.concat([base.subarray(0, localEnd), zip64, base.subarray(localEnd)]);
+  local.writeUInt16LE(4, 28);
+  local.writeUInt32LE(central + 4, local.length - 22 + 16);
+  assert.throws(() => openZip(local), /ZIP64 extra/);
+  const centralEnd = central + 46 + base.readUInt16LE(central + 28);
+  const directory = Buffer.concat([base.subarray(0, centralEnd), zip64, base.subarray(centralEnd)]);
+  directory.writeUInt16LE(4, central + 30);
+  directory.writeUInt32LE(base.readUInt32LE(eocd + 12) + 4, directory.length - 22 + 12);
+  assert.throws(() => openZip(directory), /ZIP64 extra/);
+  const malformed = Buffer.from(directory);
+  malformed.writeUInt16LE(10, centralEnd + 2);
+  assert.throws(() => openZip(malformed), /truncated extra field/);
+});

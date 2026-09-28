@@ -56,6 +56,9 @@ import { evaluateMultiStepPolicy } from "./policy.ts";
 import { canonicalMultiStepScriptProblem, parseMultiStepProject } from "./source.ts";
 import { MAX_REPORTER_AUDIT_BYTES, parseReporterAudit, TRUSTED_REQUEST_REPORTER, type ReporterRequestEvidence } from "./reporter.ts";
 import { parseMultiStepScript } from "./source.ts";
+import { trustedRegionalAccounts } from "./accounts.ts";
+import { multiStepShapeProblems } from "./shape.ts";
+import { boundFailureAssertion } from "./binding.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -204,10 +207,12 @@ export function bridgeReporterMismatch(
   })));
   if (bridge.length === 0) return "the HTTPS origin bridge recorded zero requests — no execution traffic can PASS";
   const required = Object.entries(MULTISTEP_ROUTES).map(([path, method], index) => ({ path, method, step: MULTISTEP_STEP_TITLES[index] }));
-  const failedIndex = capture.steps.findIndex((step) => step.status === "failed");
-  const requiredCount = failedIndex >= 0 ? Math.min(4, failedIndex + 1) : 4;
-  if (bridge.length !== requiredCount || capture.steps.length !== (failedIndex >= 0 ? failedIndex + 1 : 5)) {
-    return "bridge/reporter transaction is not the exact executed four-request sequence (or its failing prefix)";
+  if (multiStepShapeProblems(capture, true).length) return "bridge/reporter step sequence is not the canonical execution";
+  if (bridge.length !== 4 || capture.steps.length !== (capture.kind === "failing" ? 4 : 5)) {
+    return "bridge/reporter transaction is not the exact executed four-request sequence";
+  }
+  if (jsonRequests.length !== 0 && (jsonRequests.length !== 4 || multiStepShapeProblems(capture).length)) {
+    return "bridge/reporter JSON response evidence is not the canonical transaction";
   }
   // The JSON reporter is advisory: Playwright normally filters pw:api steps
   // from it, and an untrusted CLI can print a forged JSON result. The trusted
@@ -244,8 +249,8 @@ export function bridgeReporterMismatch(
     // The baseline has hard status-200 assertions for all four requests. On
     // real Playwright JSON output pw:api steps may be filtered out, so a
     // fabricated passing assertion must not overrule a bridge-observed 401.
-    if (capture.kind === "passing" && b.status !== 200) {
-      return `bridge/reporter passing result contradicts HTTP status at request ${i + 1} — no trustworthy execution evidence`;
+    if (b.status !== 200) {
+      return `bridge/reporter HTTP status contradicts the required 200 at request ${i + 1} — no trustworthy execution evidence`;
     }
     const needsAuthorization = b.path === "/api/session" || b.path === "/api/book";
     if (b.authorization !== needsAuthorization) {
@@ -363,11 +368,11 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
   if (ctx.env?.REGION !== "us-east-1" && ctx.env?.REGION !== "eu-west-1") {
     return inconclusive("Multistep REGION is not a trusted location — no runner was started");
   }
-  const selectedAccount = ctx.env.REGION === "us-east-1" ? ctx.env.MULTISTEP_USER_US_EAST_1 : ctx.env.MULTISTEP_USER_EU_WEST_1;
-  if (!selectedAccount || !selectedAccount.trim() || (ctx.env.MULTISTEP_USER_US_EAST_1 && ctx.env.MULTISTEP_USER_EU_WEST_1
-    && ctx.env.MULTISTEP_USER_US_EAST_1 === ctx.env.MULTISTEP_USER_EU_WEST_1)) {
-    return inconclusive("Multistep regional account values are missing or not distinct — no runner was started");
+  const accounts = trustedRegionalAccounts(ctx.env, ctx.env.REGION);
+  if (!accounts) {
+    return inconclusive("Multistep regional account values must both be present, trimmed and distinct — no runner was started");
   }
+  const selectedAccount = accounts.selected!;
   // Dependency lookup is also an evidence gate, not a thrown filesystem path
   // in a report. Crucially it runs AFTER source preflight: unsupported source
   // is rejected before attempting to resolve or execute any CLI.
@@ -552,6 +557,26 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
     const mismatch = bridgeReporterMismatch(bridge.evidence, capture, audit, bridge.origin);
     if (mismatch) {
       return inconclusive(mismatch, { trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses, environmentOrigin: bridge.origin, proxyEvidence, reporterEvidence, diagnostics });
+    }
+    if (capture.kind === "failing") {
+      // The reporter's last failed line must be the one uniquely protected
+      // unnegated stale assertion in the validated source, after four 200s.
+      // JSON request bodies, when available, were checked against the bridge.
+      const bound = boundFailureAssertion(capture.steps.map((step) => ({ ...step,
+        error: step.error && /expect\s*\(/i.test(step.error) ? "ASSERTION_FAILED" : step.error,
+      })), projectModel?.script && projectModel.errors.length === 0 ? projectModel
+        : { script: sourceModel, errors: sourceModel.errors }, checkFile, true);
+      if (!bound || childResult.code === 0) {
+        return inconclusive("Multistep failing assertion is not uniquely source-bound to the protected book contract", {
+          trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses, environmentOrigin,
+          proxyEvidence, reporterEvidence, diagnostics,
+        });
+      }
+    } else if (childResult.code !== 0) {
+      return inconclusive("Multistep passing reporter disagrees with runner exit status", {
+        trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses, environmentOrigin,
+        proxyEvidence, reporterEvidence, diagnostics,
+      });
     }
     if (browserProcesses === null || browserProcesses > 0) {
       return inconclusive(browserProcesses === null

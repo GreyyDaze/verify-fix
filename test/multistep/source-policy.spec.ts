@@ -63,7 +63,7 @@ test("real request methods, ENVIRONMENT_URL origin, headers, and JSON bodies par
 });
 
 test("assertion identity stays byte-stable and step context is carried separately", () => {
-  const inventory = parseProjectInventory("checks/multistep-booking.spec.ts", new Map(files));
+  const inventory = parseProjectInventory("checks/multistep-booking.spec.ts", new Map(files), null, "MULTI_STEP");
   const modelIds = new Set(model!.script!.assertions.map((a) => a.id));
   assert.equal(inventory.assertions.length, model!.script!.assertions.length);
   assert.ok(inventory.assertions.every((a) => modelIds.has(a.id)));

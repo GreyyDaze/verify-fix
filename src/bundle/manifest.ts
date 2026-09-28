@@ -241,10 +241,12 @@ export function dependencyOf(
     (stepLine !== null ? passing.actions.find((a) => a.location?.line === stepLine && a.startTime !== null) : undefined) ??
     (stepTitle ? passing.actions.find((a) => a.title === stepTitle && a.startTime !== null) : undefined) ??
     null;
-  if (!step || step.startTime === null) return null;
+  if (!step || step.startTime === null || !Number.isFinite(step.startTime)) return null;
   const before = passing.har.log.entries
-    .filter((e) => e._monotonicTime !== undefined && e._monotonicTime <= step.startTime! && isApiLike(e) && (!origin || originOf(e.request.url) === origin || originOf(e.request.url) === originOf(passing.baseURL)))
-    .sort((a, b) => (b._monotonicTime ?? 0) - (a._monotonicTime ?? 0));
+    .filter((e) => typeof e._monotonicTime === "number" && Number.isFinite(e._monotonicTime)
+      && e._monotonicTime <= step.startTime! && isApiLike(e)
+      && (!origin || originOf(e.request.url) === origin || originOf(e.request.url) === originOf(passing.baseURL)))
+    .sort((a, b) => b._monotonicTime! - a._monotonicTime!);
   const last = before[0];
   if (!last) return null;
   // the failing run must have made the same call and got an OK answer — otherwise this is not drift
@@ -256,7 +258,7 @@ export function dependencyOf(
     url: last.request.url,
     path: pathOf(last.request.url),
     passingStatus: last.response.status,
-    msBeforeStep: Math.round((step.startTime - (last._monotonicTime ?? step.startTime)) * 10) / 10,
+    msBeforeStep: Math.round((step.startTime - last._monotonicTime!) * 10) / 10,
     stepLine: step.location?.line ?? null,
     stepTitle: step.title,
   };
@@ -462,8 +464,8 @@ export function detectMultiStepFailurePoint(
         method: request.method ?? "GET",
         url: request.url ?? "",
         path: request.path ?? "",
-        passingStatus: request.status ?? 200,
-        msBeforeStep: 0,
+        passingStatus: null,
+        msBeforeStep: null,
         stepLine: assertion?.line ?? null,
         stepTitle: failedStep.title,
       }
@@ -479,10 +481,9 @@ export function detectTargetResolution(check: ChecklyCheck, sources: Array<{ pat
   return "unknown";
 }
 
-function buildInventory(sources: Array<{ path: string; content: string }>, mainSource: string | null): AssertionInventory | null {
-  const hasMultistep = sources.some((s) => s.content.includes("new MultiStepCheck("));
-  if (hasMultistep && mainSource) {
-    return parseProjectInventory(mainSource, new Map(sources.map((source) => [source.path, source.content])));
+function buildInventory(sources: Array<{ path: string; content: string }>, mainSource: string | null, checkType: string): AssertionInventory | null {
+  if (checkType === "MULTI_STEP") {
+    return mainSource ? parseProjectInventory(mainSource, new Map(sources.map((source) => [source.path, source.content])), null, checkType) : null;
   }
   if (mainSource && /\.check\.[cm]?[jt]sx?$/.test(mainSource)) {
     return parseProjectInventory(mainSource, new Map(sources.map((source) => [source.path, source.content])));
@@ -549,7 +550,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   const envVars = envVarNamesOnly(check.environmentVariables);
   const locations = check.locations ?? [];
   const runParallel = Boolean(check.runParallel);
-  const inventory = buildInventory(input.sources, input.mainSource);
+  const inventory = buildInventory(input.sources, input.mainSource, check.checkType);
   const apiSourceModel = check.checkType === "API" && input.mainSource
     ? parseApiCheckProject(input.mainSource, new Map(input.sources.map((source) => [source.path, source.content])))
     : null;
@@ -802,7 +803,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
         : req
           ? `the failing response (${req.method} ${req.path.replace(/\?.*$/, "")} → ${req.status}) is injected on top of a live run; the fixed check MUST still fail (it may not hide the incident)`
           : dep
-            ? `no request failed in the incident (the check went stale); the step that failed (${dep.stepTitle}${dep.stepLine ? `, line ${dep.stepLine}` : ""}) depends on ${dep.method} ${dep.path.replace(/\?.*$/, "")} (answered ${dep.passingStatus} ${dep.msBeforeStep} ms before it in the passing run) — that call is answered ${DEPENDENCY_FAILURE_STATUS} on top of a live run; the fixed check MUST still fail`
+            ? `no request failed in the incident (the check went stale); the step that failed (${dep.stepTitle}${dep.stepLine ? `, line ${dep.stepLine}` : ""}) depends on ${dep.method} ${dep.path.replace(/\?.*$/, "")} (observed without a failed HTTP response in the incident run${dep.passingStatus === null ? "" : `; passing-run status ${dep.passingStatus}`}${dep.msBeforeStep === null ? "" : `; interval ${dep.msBeforeStep} ms`}) — that call is answered ${DEPENDENCY_FAILURE_STATUS} on top of a live run; the fixed check MUST still fail`
             : "the recorded failure is injected on top of a live run; the fixed check must still fail",
       verdict: {
         mustFail: true,

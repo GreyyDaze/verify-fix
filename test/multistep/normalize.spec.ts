@@ -36,6 +36,13 @@ test("passing real-shape normalization: five ordered steps, no problems", () => 
   assert.equal(capture.checkRunData?.scriptPath, "checks/multistep-booking.spec.ts");
 });
 
+test("missing or invalid log timestamps stay unknown rather than becoming zero", () => {
+  const capture = normalizeMultiStepCapture({ testResults: passingTestResults(),
+    logs: JSON.stringify([{ level: "info", msg: "no clock" }, { level: "info", msg: "invalid clock", time: "late" }]) });
+  assert.equal(capture.problems.length, 0);
+  assert.deepEqual(capture.logs?.map((entry) => entry.time), [null, null]);
+});
+
 test("failing real-shape normalization: error inside book 09:30, confirm absent", () => {
   const capture = normalizeMultiStepCapture({ testResults: failingTestResults(), logs: failingLogs(), attempts: 2 });
   assert.equal(capture.problems.length, 0);

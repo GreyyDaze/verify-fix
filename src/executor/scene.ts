@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExecutor, type ObservationValue, type RunContext, type Scene, type SceneObservation, type TraceStep } from "../types.ts";
 import { runSandbox } from "../sandbox.ts";
 import { runPlaywrightSandbox } from "../playwright-sandbox.ts";
+import { trustedRegionalAccounts } from "../multistep/accounts.ts";
 import { runMultiStepSandbox } from "../multistep/executor.ts";
 import { knownRoute } from "../multistep/routes.ts";
 import { sceneExpected } from "../contract/contract.ts";
@@ -278,8 +279,7 @@ export class SceneExecutor implements ExperimentExecutor {
     ].includes(key)))) {
       return this.uncertain(scene, "Multistep env-file overrides a trusted runner key — no runner was started", 0, [], environment);
     }
-    if (isMultiStep && (!baseEnv.MULTISTEP_USER_US_EAST_1?.trim() || !baseEnv.MULTISTEP_USER_EU_WEST_1?.trim()
-      || baseEnv.MULTISTEP_USER_US_EAST_1 === baseEnv.MULTISTEP_USER_EU_WEST_1)) {
+    if (isMultiStep && (!trustedRegionalAccounts(baseEnv))) {
       return this.uncertain(scene, "Multistep regional account values must both be present and distinct — no runner was started", 0, [], environment);
     }
 

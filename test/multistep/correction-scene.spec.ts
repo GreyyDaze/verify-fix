@@ -141,6 +141,8 @@ test("unknown or conflicting region is UNCERTAIN before a runner starts; CI is r
     env: { MULTISTEP_USER_US_EAST_1: EAST, MULTISTEP_USER_EU_WEST_1: WEST } });
   const conflict = new SceneExecutor({ target: app.origin, projectDir: WEB,
     env: { MULTISTEP_USER_US_EAST_1: EAST, MULTISTEP_USER_EU_WEST_1: WEST, REGION: "us-east-1" } });
+  const dirty = new SceneExecutor({ target: app.origin, projectDir: WEB,
+    env: { MULTISTEP_USER_US_EAST_1: `${EAST} `, MULTISTEP_USER_EU_WEST_1: EAST } });
   try {
     assert.equal(multistepRegionForLocation("ap-south-1"), null);
     const a = await unknown.runScene(bundle(["ap-south-1", "eu-west-1"]), SPEC, scene());
@@ -151,9 +153,13 @@ test("unknown or conflicting region is UNCERTAIN before a runner starts; CI is r
     assert.equal(c.observed, "uncertain");
     assert.match(c.reason ?? "", /overrides a trusted runner key/);
     assert.equal(conflict.costReport().localRuns, 0);
+    const d = await dirty.runScene(bundle(), SPEC, scene());
+    assert.equal(d.observed, "uncertain");
+    assert.match(d.reason ?? "", /both be present and distinct/);
+    assert.equal(dirty.costReport().localRuns, 0);
     assert.equal(app.paths.length, 0);
     const out = await runMultiStepSandbox({ projectDir: WEB, baseUrl: app.origin,
-      files: { [FILE]: SPEC }, checkFile: FILE, env: { CI: "0", REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: EAST } });
+      files: { [FILE]: SPEC }, checkFile: FILE, env: { CI: "0", REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: EAST, MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" } });
     assert.equal(out.inconclusive, true);
     assert.equal(out.browserProcesses, null);
     assert.equal(out.environmentOrigin, null);
@@ -161,6 +167,7 @@ test("unknown or conflicting region is UNCERTAIN before a runner starts; CI is r
   } finally {
     await unknown.close();
     await conflict.close();
+    await dirty.close();
     await app.stop();
   }
 });
@@ -205,7 +212,7 @@ test("successful ordered bridge+reporter traffic without browser sampling remain
   try {
     process.env.PATH = `${fakeBin}:${saved ?? ""}`;
     const out = await runMultiStepSandbox({ projectDir: WEB, baseUrl: app.origin,
-      files: { [FILE]: SPEC }, checkFile: FILE, env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: EAST } });
+      files: { [FILE]: SPEC }, checkFile: FILE, env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: EAST, MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" } });
     assert.equal(app.paths.length, 4, "the transaction actually ran");
     assert.equal(out.proxyEvidence.length, 4);
     assert.equal(out.reporterEvidence.length, 4);

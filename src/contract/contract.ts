@@ -33,7 +33,7 @@ function multistepTupleDiff(bundle: Bundle, before: Map<string, string>, after: 
   const oldModel = parseMultiStepProject(before, bundle.check.file)?.script;
   const newModel = parseMultiStepProject(after, candidateFile)?.script;
   if (!oldModel || !newModel) return base;
-  const key = (a: typeof oldModel.assertions[number]): string => JSON.stringify([a.stepTitle, a.id, a.subject, a.matcher, a.target]);
+  const key = (a: typeof oldModel.assertions[number]): string => JSON.stringify([a.stepTitle, a.id, a.subject, a.matcher, a.target, a.negated]);
   const oldCounts = new Map<string, number>();
   const newCounts = new Map<string, number>();
   for (const item of oldModel.assertions) oldCounts.set(key(item), (oldCounts.get(key(item)) ?? 0) + 1);
@@ -46,9 +46,10 @@ function multistepTupleDiff(bundle: Bundle, before: Map<string, string>, after: 
   const repairedStaleField = (old: typeof oldModel.assertions[number]): boolean => {
     if (!failure || oldModel.errors.length || newModel.errors.length
       || failure.file !== bundle.check.file || failure.line !== old.sourceLine || failure.id !== old.id
-      || failure.step !== "book 09:30" || old.stepTitle !== failure.step || old.subject !== "body.confirmed") return false;
+      || failure.step !== "book 09:30" || old.stepTitle !== failure.step || old.subject !== "body.confirmed"
+      || old.matcher !== "toBe" || old.target !== "true" || old.negated) return false;
     return newModel.assertions.some((next) => next.stepTitle === failure.step && next.id === old.id
-      && next.matcher === old.matcher && next.target === old.target && next.subject === "body.booking.confirmed");
+      && !next.negated && next.matcher === old.matcher && next.target === old.target && next.subject === "body.booking.confirmed");
   };
   for (let i = 0; i < oldModel.assertions.length; i++) {
     const tuple = oldModel.assertions[i]!;
@@ -98,8 +99,8 @@ export function buildContract(bundle: Bundle, patchedSource: string, patchedFile
   const candidateFiles = patchedFiles ? new Map(patchedFiles) : new Map(originalFiles);
   const candidateCheckFile = patchedCheckFile ?? bundle.check.file;
   candidateFiles.set(candidateCheckFile, patchedSource);
-  const original = parseProjectInventory(bundle.check.file, originalFiles, bundle.check.logicalId);
-  const patched = parseProjectInventory(candidateCheckFile, candidateFiles, bundle.check.logicalId);
+  const original = parseProjectInventory(bundle.check.file, originalFiles, bundle.check.logicalId, bundle.check.checkType);
+  const patched = parseProjectInventory(candidateCheckFile, candidateFiles, bundle.check.logicalId, bundle.check.checkType);
   const genericDiff = inventoryDiff(original, patched);
   const diff = bundle.check.checkType === "MULTI_STEP"
     ? multistepTupleDiff(bundle, originalFiles, candidateFiles, original, patched, genericDiff, candidateCheckFile)

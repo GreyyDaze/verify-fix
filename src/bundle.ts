@@ -5,7 +5,6 @@
 // scene's `mode` and shapes traffic at the proxy (src/scene/proxy.ts).
 
 import { closeSync, constants, fstatSync, openSync, readFileSync, readSync, existsSync, lstatSync, readdirSync, statSync } from "node:fs";
-import { createHash } from "node:crypto";
 import { join, relative, resolve } from "node:path";
 import type { ApiRecording, Bundle, BundleConfig, Scene } from "./types.ts";
 import type { ManifestV3 } from "./bundle/types.ts";
@@ -15,7 +14,7 @@ import { validMultiStepStoredRecording } from "./multistep/recording-schema.ts";
 import { multistepProblemCategory } from "./multistep/sanitize.ts";
 import { multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_FILE_BYTES, MULTISTEP_MAX_SOURCE_FILES } from "./multistep/files.ts";
 import { parseMultiStepProject } from "./multistep/source.ts";
-import { knownRoute, MULTISTEP_ROUTES } from "./multistep/routes.ts";
+import { failurePointFromRecording, matchesRemoteMultiStepBinding } from "./multistep/binding.ts";
 import type { MultiStepRecording } from "./multistep/capture.ts";
 
 export interface LoadedBundle {
@@ -251,6 +250,17 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
     }
     const recordings: Partial<Record<"failing" | "passing", { kind: string; steps: string[] }>> = {};
     const recorded: Partial<Record<"failing" | "passing", MultiStepRecording>> = {};
+    const sourceModel = parseMultiStepProject(new Map(Object.entries(files)), file);
+    if (!sourceModel?.script || sourceModel.errors.length || sourceModel.script.file !== file) {
+      problems.push("MULTISTEP_SOURCE_CLOSURE_BOUND");
+    }
+    if (m.provenance.assets.some((asset) => !["test-results.json", "logs.txt", "check-run-data.json"].includes(asset.name)
+      || (asset.type !== "remote-asset" && asset.type !== "local-asset"
+        || asset.type === "remote-asset" && (asset.assetType !== "report" && asset.assetType !== "file"
+          && !(asset.name === "logs.txt" && asset.assetType === "log")
+          || !/^[a-f0-9]{64}$/.test(asset.manifestEntrySha256 ?? ""))))) {
+      problems.push("MULTISTEP_ASSET_TYPE_INVALID");
+    }
     let failureAssertion: NonNullable<NonNullable<Bundle["multistep"]>["failureAssertion"]> | null = null;
     for (const side of ["failing", "passing"] as const) {
       const result = m.results[side];
@@ -268,73 +278,58 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
         if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) throw new Error("not a bounded regular recording");
         const value: unknown = JSON.parse(readFileSync(full, "utf8"));
         if (!validMultiStepStoredRecording(value, side)) throw new Error("invalid values-free recording schema");
-        const asset = m.provenance.assets.filter((entry) => entry.result === side && entry.name === "test-results.json");
-        const binding = value.binding!;
-        if (binding.checkId !== m.check.id || binding.resultId !== result.id || binding.runLocation !== result.runLocation
-          || binding.startedAt !== result.startedAt || binding.stoppedAt !== result.stoppedAt
-          || binding.sourceFile !== file || !files[file]
-          || binding.sourceSha256 !== createHash("sha256").update(files[file], "utf8").digest("hex")
-          || asset.length !== 1 || binding.testResultsSha256 !== asset[0]!.sha256) {
-          throw new Error("recording result/source/reporter binding mismatch");
-        }
+        const assets = m.provenance.assets.filter((entry) => entry.result === side && entry.name === "test-results.json");
+        if (assets.length !== 1 || !files[file] || !matchesRemoteMultiStepBinding(value, {
+          side, checkId: m.check.id, result, sourceFile: file, sourceText: files[file], sourceModel,
+          asset: assets[0]!,
+        })) throw new Error("remote result/source/asset/reporter binding mismatch");
+        // Offline result metadata is part of the binding, too. A manifest
+        // edit cannot silently borrow a different result's id or timestamps.
+        const metadata = join(dir, `results/${side}.json`);
+        const resultStat = lstatSync(metadata);
+        if (!resultStat.isFile() || resultStat.isSymbolicLink() || resultStat.size > 1024 * 1024) throw new Error("result metadata unsafe");
+        const stored: unknown = JSON.parse(readFileSync(metadata, "utf8"));
+        if (!stored || typeof stored !== "object" || Array.isArray(stored)
+          || JSON.stringify(Object.keys(stored).sort()) !== JSON.stringify([
+            "attempts", "errorCategory", "hasErrors", "hasFailures", "id", "resultType", "runLocation", "startedAt", "stoppedAt",
+          ])
+          || (stored as Record<string, unknown>).id !== result.id
+          || (stored as Record<string, unknown>).runLocation !== result.runLocation
+          || (stored as Record<string, unknown>).startedAt !== result.startedAt
+          || (stored as Record<string, unknown>).stoppedAt !== result.stoppedAt
+          || (stored as Record<string, unknown>).attempts !== result.attempts
+          || value.recurrence.attempts !== result.attempts
+          || result.resultType !== "FINAL" || (stored as Record<string, unknown>).resultType !== "FINAL"
+          || (stored as Record<string, unknown>).hasFailures !== (side === "failing")
+          || (stored as Record<string, unknown>).hasErrors !== false
+          || (stored as Record<string, unknown>).errorCategory !== (side === "failing"
+            ? "MULTISTEP_RUN_FAILED" : "MULTISTEP_RUN_PASSED")) throw new Error("result metadata mismatch");
         recordings[side] = { kind: side, steps: value.steps.map((step) => step.title) };
         recorded[side] = value;
-        if (side === "failing" && m.failurePoint?.assertion) {
-          const failed = value.steps.find((step) => step.status === "failed");
-          const point = m.failurePoint.assertion;
-          const source = parseMultiStepProject(new Map(Object.entries(files)), file);
-          const expected = failed?.requests[0]?.expected;
-          const targets = expected === null || expected === undefined || expected === "<redacted>" ? []
-            : typeof expected === "string" ? [JSON.stringify(expected), `'${expected}'`, expected] : [String(expected)];
-          const match = source?.errors.length === 0 ? source.script?.assertions.filter((item) =>
-            item.stepTitle === failed?.title && item.sourceLine === point.line
-            && item.id === point.assertionId && targets.includes(item.target)) : null;
-          if (failed && failed.failureLine === point.line && point.file === file
-            && m.failurePoint.action?.title === failed.title && match?.length === 1) {
-            failureAssertion = { file, line: point.line, id: match[0]!.id, step: failed.title };
-          } else problems.push("MULTISTEP_FAILURE_STEP_UNBOUND");
-        }
       } catch {
         problems.push(`MULTISTEP_${side.toUpperCase()}_RECORDING_INVALID`);
       }
     }
-    // The manifest's failurePoint and detection route are claims, not proof.
-    // Rebind both to the same failed step in the validated recording; a route
-    // borrowed from another step, or an unrelated injected error, cannot
-    // downgrade a removed assertion's criticality or prove detection.
-    const failed = recorded.failing?.steps.find((step) => step.status === "failed");
-    if (failed) {
-      const point = m.failurePoint;
-      const request = failed.requests.at(-1) ?? null;
-      const route = knownRoute(request?.path);
-      const method = route ? MULTISTEP_ROUTES[route] : null;
-      if (!point || point.action?.apiName !== "test.step" || point.action.title !== failed.title
-        || point.action.error !== failed.error) problems.push("MULTISTEP_FAILURE_STEP_UNBOUND");
-      const direct = point?.request;
-      const boundDirect = Boolean(direct && request && route && method && request.method === method
-        && typeof request.status === "number" && request.status >= 400 && direct.path === route
-        && direct.method === method && direct.status === request.status
-        && direct.url === `https://recorded.invalid${route}` && direct.failureText === "REQUEST_FAILURE");
-      const dependency = point?.dependency;
-      const passingStep = recorded.passing?.steps.find((step) => step.title === failed.title);
-      const passedRequest = passingStep?.requests[0];
-      const boundDependency = Boolean(dependency && request && route && method && request.method === method
-        && request.status === 200 && passedRequest?.method === method && passedRequest.path === route
-        && passedRequest.status === 200 && failureAssertion?.line === dependency.stepLine
-        && dependency.stepTitle === failed.title && dependency.path === route && dependency.method === method
-        && dependency.url === `https://recorded.invalid${route}`
-        && dependency.passingStatus === 200 && dependency.msBeforeStep === 0);
-      if (direct && !boundDirect || dependency && !boundDependency || direct && dependency
-        || !direct && !dependency && !failureAssertion) problems.push("MULTISTEP_FAILURE_STEP_UNBOUND");
-      const detection = m.scenes.filter((scene) => scene.type === "DETECTION");
-      const expectedMode = boundDirect && route && method ? `inject:${method} ${route} -> ${direct!.status}`
-        : boundDependency && route && method ? `inject:${method} ${route} -> 500` : null;
-      if (!expectedMode || detection.length !== 1 || detection[0]!.mode !== expectedMode
-        || detection[0]!.verdict.provenance.kind !== "recorded") problems.push("MULTISTEP_FAILURE_STEP_UNBOUND");
+    // No generic manifest failure point, code provenance, borrowed passing
+    // step, HTTP-error request, or manufactured timing can prove detection.
+    const expectedPoint = recorded.failing ? failurePointFromRecording(recorded.failing, file) : null;
+    if (JSON.stringify(m.failurePoint) !== JSON.stringify(expectedPoint)) problems.push("MULTISTEP_FAILURE_STEP_UNBOUND");
+    const bound = recorded.failing?.binding.failureAssertion;
+    if (bound && expectedPoint) failureAssertion = { file, line: bound.line, id: bound.id, step: bound.step };
+    const detection = m.scenes.filter((scene) => scene.type === "DETECTION");
+    if (recorded.failing && (detection.length !== 1 || detection[0]!.mode !== "inject:POST /api/book -> 500"
+      || detection[0]!.verdict.provenance.kind !== "recorded"
+      || detection[0]!.verdict.provenance.runId !== recorded.failing.binding.resultId
+      || detection[0]!.verdict.provenance.artifactId !== "recordings/failing.multistep.json"
+      || detection[0]!.verdict.mustFail !== true
+      || !detection[0]!.assertionsInvolved.includes(bound?.id ?? "<unknown>"))) {
+      problems.push("MULTISTEP_FAILURE_STEP_UNBOUND");
     }
+    if (!recorded.failing && detection.length) problems.push("MULTISTEP_SCENE_PROVENANCE_INVALID");
     // Never substitute a passing run for the missing failing run.
     const selected = m.results.failing ? recordings.failing : recordings.passing;
-    bundle.multistep = { kind: selected?.kind ?? null, steps: selected?.steps ?? [], problems: [...new Set(problems)], failureAssertion };
+    bundle.multistep = { kind: selected?.kind ?? null, steps: selected?.steps ?? [],
+      problems: [...new Set(problems)], failureAssertion: problems.length ? null : failureAssertion };
   }
   return bundle;
 }

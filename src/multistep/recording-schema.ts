@@ -1,12 +1,14 @@
 // Validate a stored recording BEFORE the bundle loader can use it. v1
 // recordings allowed free-form paths/errors; they require re-capture. This
-// v2 schema contains only fixed routes/steps/enums, bounded numbers and the
+// v3 schema contains only fixed routes/steps/enums, bounded numbers and the
 // opaque account/token labels. Missing/tampered evidence becomes UNCERTAIN.
 import { MULTISTEP_RECORDING_SCHEMA, MECHANICS_ONLY_NOTE, type MultiStepRecording } from "./capture.ts";
 import { extractTransaction } from "./transaction.ts";
 import { MULTISTEP_ROUTES, MULTISTEP_STEP_TITLES, type MultiStepRoute } from "./routes.ts";
 import type { MultiStepCapture } from "./normalize.ts";
 import { multiStepSourcePath } from "./files.ts";
+import { multiStepShapeProblems } from "./shape.ts";
+import { assertionId } from "../assertion/id.ts";
 
 function obj(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -78,18 +80,30 @@ function requiredBody(value: unknown, route: MultiStepRoute, side: "request" | "
 }
 
 export function validMultiStepStoredRecording(value: unknown, side: "failing" | "passing"): value is MultiStepRecording {
-  if (!keys(value, ["schemaVersion", "kind", "stats", "steps", "checkRunData", "logs", "recurrence", "transaction", "problems", "evidenceNote", "binding"])) return false;
+  if (!keys(value, ["schemaVersion", "kind", "stats", "reporterStatus", "reporterErrors", "steps", "checkRunData", "logs", "recurrence", "transaction", "problems", "evidenceNote", "binding"])) return false;
   const root = value as unknown as MultiStepRecording;
   const binding = root.binding;
-  if (!keys(binding, ["side", "checkId", "resultId", "runLocation", "startedAt", "stoppedAt", "sourceFile", "sourceSha256", "testResultsSha256", "reporter", "bridge"])
-    || !binding || Object.keys(binding).length !== 11 || binding.side !== side
+  if (!keys(binding, ["side", "checkId", "resultId", "runLocation", "startedAt", "stoppedAt", "sourceFile", "sourceSha256",
+    "testResultsSha256", "testResultsBytes", "assetManifestSha256", "assetType", "reporter", "bridge", "failureAssertion"])
+    || !binding || Object.keys(binding).length !== 15 || binding.side !== side
     || !/^[a-zA-Z0-9_-]{1,128}$/.test(binding.checkId) || !/^[a-zA-Z0-9_-]{1,128}$/.test(binding.resultId)
     || !["us-east-1", "eu-west-1"].includes(binding.runLocation)
-    || !Number.isFinite(Date.parse(binding.startedAt))
-    || (binding.stoppedAt !== null && !Number.isFinite(Date.parse(binding.stoppedAt)))
+    || typeof binding.startedAt !== "string" || !Number.isFinite(Date.parse(binding.startedAt))
+    || typeof binding.stoppedAt !== "string" || !Number.isFinite(Date.parse(binding.stoppedAt))
+    || Date.parse(binding.stoppedAt) < Date.parse(binding.startedAt)
     || typeof binding.sourceFile !== "string" || multiStepSourcePath(binding.sourceFile) !== binding.sourceFile
     || !/^[a-f0-9]{64}$/.test(binding.sourceSha256) || !/^[a-f0-9]{64}$/.test(binding.testResultsSha256)
+    || !/^[a-f0-9]{64}$/.test(binding.assetManifestSha256) || !num(binding.testResultsBytes)
+    || binding.testResultsBytes === 0 || !["report", "file"].includes(binding.assetType)
     || binding.reporter !== "playwright-json-nested" || binding.bridge !== "required-at-local-execution") return false;
+  if (side === "failing") {
+    const a = binding.failureAssertion;
+    if (!keys(a, ["step", "line", "id", "subject", "repairedSubject", "matcher", "target", "negated"])
+      || !a || Object.keys(a).length !== 8 || a.step !== "book 09:30" || !num(a.line) || a.line < 1
+      || a.id !== assertionId("body.confirmed", "toBe", "true") || a.subject !== "body.confirmed"
+      || a.repairedSubject !== "body.booking.confirmed" || a.matcher !== "toBe" || a.target !== "true"
+      || a.negated !== false) return false;
+  } else if (binding.failureAssertion !== null) return false;
   if (root.schemaVersion !== MULTISTEP_RECORDING_SCHEMA || root.kind !== side || root.evidenceNote !== MECHANICS_ONLY_NOTE
     || root.checkRunData !== null || root.logs !== null || !Array.isArray(root.problems) || root.problems.length > 0
     || !keys(root.stats, ["expected", "unexpected", "flaky"]) || !root.stats
@@ -133,11 +147,13 @@ export function validMultiStepStoredRecording(value: unknown, side: "failing" | 
   }
   if (side === "passing" ? failed !== 0 || root.steps.length !== 5 || root.stats.unexpected !== 0 || root.stats.expected < 1
     : failed !== 1 || root.stats.unexpected < 1) return false;
+  if (multiStepShapeProblems({ kind: root.kind, stats: root.stats, reporterStatus: root.reporterStatus, reporterErrors: root.reporterErrors, steps: root.steps }).length) return false;
+  if (side === "failing" && root.steps[3]?.failureLine !== binding.failureAssertion?.line) return false;
 
   // Prove transaction sites/steps are derived exclusively from these checked
   // request objects, not an extra free-form copy from the raw asset.
   const capture: MultiStepCapture = {
-    kind: root.kind, stats: root.stats, steps: root.steps, checkRunData: null, logs: null,
+    kind: root.kind, stats: root.stats, reporterStatus: root.reporterStatus, reporterErrors: root.reporterErrors, steps: root.steps, checkRunData: null, logs: null,
     recurrence: root.recurrence, problems: [],
   };
   const tx = extractTransaction(capture);

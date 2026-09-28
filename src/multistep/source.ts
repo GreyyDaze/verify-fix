@@ -75,6 +75,8 @@ export interface MultiStepAssertionModel {
   subject: string;
   matcher: string;
   target: string;
+  /** Polarity is part of the counted contract tuple, never of assertionId. */
+  negated: boolean;
   sourceLine: number;
 }
 
@@ -1025,7 +1027,9 @@ export function parseMultiStepScript(file: string, source: string, projectFiles?
   const visitAsserts = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
       let chain: ts.Expression = node.expression.expression;
-      if (ts.isPropertyAccessExpression(chain) && chain.name.text === "not") chain = chain.expression;
+      const negation = ts.isPropertyAccessExpression(chain) && chain.name.text === "not" ? chain : null;
+      const negated = negation !== null;
+      if (negation) chain = negation.expression;
       if (ts.isCallExpression(chain) && ts.isIdentifier(chain.expression) && chain.expression.text === "expect") {
         if (!isPlaywrightBinding("expect", chain)) errors.push("assertion uses a shadowed expect, not Playwright's hard assertion primitive — UNCERTAIN before execution");
         const matcher = node.expression.name.text;
@@ -1073,7 +1077,7 @@ export function parseMultiStepScript(file: string, source: string, projectFiles?
         if (subjectExpr) checkReferences(subjectExpr);
         if (targetExpr) checkReferences(targetExpr);
         if (/\?\?|\|\|/.test(target) || /\?\?|\|\|/.test(subject)) banned.push(`compatibility repair in assertion target at ${file}:${lineNumber}`);
-        assertions.push({ stepTitle: step?.title ?? null, id: assertionId(subject, matcher, target), subject, matcher, target, sourceLine: lineNumber });
+        assertions.push({ stepTitle: step?.title ?? null, id: assertionId(subject, matcher, target), subject, matcher, target, negated, sourceLine: lineNumber });
       }
     }
     ts.forEachChild(node, visitAsserts);
@@ -1140,6 +1144,10 @@ export function parseMultiStepScript(file: string, source: string, projectFiles?
     if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node))
       && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)) {
       const root = propertyRoot(node.operand);
+      if (root && guarded.has(root)) {
+        securityBindings.push(`update:${node.operand.getText(sf)}:${node.operator}`);
+        errors.push("security-critical Multistep regional, account, slot or version scalar is mutated — UNCERTAIN before execution");
+      }
       if (root && (evidenceAlias(root, node.operand) || (root === "process" && node.operand.getText(sf).startsWith("process.env")))) {
         errors.push("Playwright response, payload or runtime environment is mutated — UNCERTAIN before execution");
       }

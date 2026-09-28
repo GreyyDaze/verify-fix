@@ -242,7 +242,8 @@ test("rev3/bridge: request bodies over the bound are refused once with 413; over
 // 3. Executor: fresh HOME, env collision, bounds, no raw stderr, bridge comparison, browser proof
 // ---------------------------------------------------------------------------
 
-interface FakeEnv { HOME?: string; NODE_OPTIONS?: string; LD_LIBRARY_PATH?: string; NODE_EXTRA_CA_CERTS?: string; PATH?: string; ENVIRONMENT_URL?: string }
+interface FakeEnv { HOME?: string; NODE_OPTIONS?: string; LD_LIBRARY_PATH?: string; NODE_EXTRA_CA_CERTS?: string;
+  PATH?: string; ENVIRONMENT_URL?: string; REGION?: string; east?: string | null; west?: string | null }
 
 function makeFakeProject(): string {
   const project = mkdtempSync(join(tmpdir(), "verify-fix-rev3-project-"));
@@ -261,6 +262,7 @@ function makeFakeProject(): string {
     "  LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH ?? null,",
     "  NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS ?? null,",
     "  PATH: process.env.PATH, ENVIRONMENT_URL: process.env.ENVIRONMENT_URL,",
+    "  REGION: process.env.REGION, east: process.env.MULTISTEP_USER_US_EAST_1 ?? null, west: process.env.MULTISTEP_USER_EU_WEST_1 ?? null,",
     "  injected: Object.keys(process.env).filter(k => k.startsWith('FAKE_'))",
     "}))",
     "if (options.stderr) process.stderr.write(options.stderr)",
@@ -295,7 +297,7 @@ test("rev3/executor: the child runs with a FRESH HOME (removed afterwards), a re
     projectDir: p,
     files,
     checkFile: "multistep-booking.spec.ts",
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", LD_LIBRARY_PATH: "/must/not/leak" },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", LD_LIBRARY_PATH: "/must/not/leak", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" },
   });
   // NOTE: LD_LIBRARY_PATH in ctx.env is a RESERVED key → rejected before running
   assert.equal(outcome.inconclusive, true, outcome.reason ?? "");
@@ -312,7 +314,7 @@ test("rev3/executor: the child runs with a FRESH HOME (removed afterwards), a re
     projectDir: p2,
     files: files2,
     checkFile: "multistep-booking.spec.ts",
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east" },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" },
   });
   assert.equal(outcome2.inconclusive, true, "a fake JSON report without bridge/reporter traffic cannot PASS");
   assert.equal(outcome2.passed, false);
@@ -323,6 +325,9 @@ test("rev3/executor: the child runs with a FRESH HOME (removed afterwards), a re
   assert.ok(env.HOME !== process.env.HOME, "HOME must not be the parent's home");
   assert.match(env.NODE_OPTIONS ?? "", /^--import=.*verify-fix-seed\.mjs$/, "NODE_OPTIONS is fully replaced with the seed import");
   assert.equal(env.LD_LIBRARY_PATH, null, "LD_LIBRARY_PATH is never inherited");
+  assert.equal(env.REGION, "us-east-1");
+  assert.equal(env.east, "synthetic-east", "the selected account is passed through without leaking its peer");
+  assert.equal(env.west, null, "unrelated regional account is never inherited by the child");
   assert.deepEqual((env as FakeEnv & { injected: string[] }).injected, [], "fake controls never enter the child environment");
   assert.ok(env.NODE_EXTRA_CA_CERTS?.includes("ca.pem"), "HTTPS targets also get a per-run bridge CA");
   assert.match(env.ENVIRONMENT_URL ?? "", /^https:\/\/127\.0\.0\.1:\d+$/, "every ENVIRONMENT_URL is a trusted bridge origin");
@@ -337,7 +342,7 @@ test("rev3/executor: reporter stdout over the bound yields no admissible evidenc
   const outcome = await runMultiStepSandbox({
     baseUrl: "https://fixture.invalid", projectDir: p, files,
     checkFile: "multistep-booking.spec.ts",
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east" },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" },
   });
   assert.equal(outcome.passed, false);
   assert.equal(outcome.inconclusive, true);
@@ -354,7 +359,7 @@ test("rev3/executor: raw stderr content is never retained or used as evidence", 
     projectDir: p,
     files,
     checkFile: "multistep-booking.spec.ts",
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east" },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" },
   });
   assert.equal(outcome.inconclusive, true, "stderr cannot supply missing bridge/reporter observations");
   assert.equal(outcome.passed, false);
@@ -377,7 +382,7 @@ test("rev3/executor: bridge/reporter mismatch — bridge traffic that does not m
       projectDir: p,
       files,
       checkFile: "multistep-booking.spec.ts",
-      env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east" },
+      env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" },
     });
     assert.equal(outcome.passed, false);
     assert.equal(outcome.inconclusive, true);
@@ -434,7 +439,7 @@ test("rev3/executor: the canonical API-only spec is statically browser-free; a b
     projectDir: project,
     files: { "bad.spec.ts": bad },
     checkFile: "bad.spec.ts",
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east" },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" },
   });
   assert.equal(outcome.passed, false);
   assert.equal(outcome.inconclusive, true);

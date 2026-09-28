@@ -139,7 +139,7 @@ export function evaluateMultiStepPolicy(
         // launder a check or move an assertion to a different step.
         const originalAssertions = original.script.assertions;
         const candidateAssertions = candidate.script.assertions;
-        const tuple = (a: typeof candidateAssertions[number]) => JSON.stringify([a.stepTitle, a.id, a.subject, a.matcher, a.target]);
+        const tuple = (a: typeof candidateAssertions[number]) => JSON.stringify([a.stepTitle, a.id, a.subject, a.matcher, a.target, a.negated]);
         const retainedOld = originalAssertions.map(tuple).filter((key) => candidateAssertions.some((a) => tuple(a) === key));
         const retainedNew = candidateAssertions.map(tuple).filter((key) => originalAssertions.some((a) => tuple(a) === key));
         if (JSON.stringify(retainedOld) !== JSON.stringify(retainedNew)) {
@@ -153,7 +153,7 @@ export function evaluateMultiStepPolicy(
         const addedTuples = candidateAssertions.filter((a) => (oldCounts.get(tuple(a)) ?? 0) < (newCounts.get(tuple(a)) ?? 0));
         const nestedRepair = (old: typeof originalAssertions[number], next: typeof candidateAssertions[number]): boolean =>
           old.stepTitle === "book 09:30" && next.stepTitle === old.stepTitle && next.id === old.id
-          && next.matcher === old.matcher && next.target === old.target && old.subject.startsWith("body.")
+          && !old.negated && !next.negated && next.matcher === old.matcher && next.target === old.target && old.subject.startsWith("body.")
           && next.subject === `body.booking.${old.subject.slice("body.".length)}`;
         for (const old of missingTuples) {
           const colliding = addedTuples.filter((next) => next.id === old.id);

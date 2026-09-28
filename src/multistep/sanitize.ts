@@ -5,6 +5,7 @@
 // never silently become evidence in a bundle.
 import type { MultiStepCapture, MultiStepRequestEvidence } from "./normalize.ts";
 import type { MultiStepTransaction } from "./transaction.ts";
+import { multiStepShapeProblems } from "./shape.ts";
 import { knownRoute, knownStepTitle, MULTISTEP_ROUTES, MULTISTEP_STEP_TITLES, routeFromUrl, type MultiStepRoute } from "./routes.ts";
 
 export const ACCOUNT_LABEL = "<account>";
@@ -29,6 +30,7 @@ const KNOWN_PROBLEMS = new Set([
   "MULTISTEP_CONSTRUCT_UNRESOLVED", "MULTISTEP_DEPLOYED_CONFIG_MISMATCH",
   "MULTISTEP_RESULT_STATS_INVALID", "MULTISTEP_REQUEST_BODY_INVALID", "MULTISTEP_ASSERTION_EVIDENCE_MISSING",
   "MULTISTEP_SOURCE_PATH_UNSAFE", "MULTISTEP_SOURCE_CLOSURE_BOUND", "MULTISTEP_CAPTURE_BINDING_INVALID",
+  "MULTISTEP_MECHANICS_ONLY", "MULTISTEP_ASSET_TYPE_INVALID",
 ]);
 export function multistepProblemCategory(problem: string): string {
   if (KNOWN_PROBLEMS.has(problem)) return problem;
@@ -160,6 +162,8 @@ function safeRequest(request: MultiStepRequestEvidence, tx: MultiStepTransaction
 }
 
 export function sanitizeMultiStepCapture(capture: MultiStepCapture, transaction: MultiStepTransaction): SanitizeResult {
+  const shape = multiStepShapeProblems(capture);
+  if (shape.length) return { ok: false, reason: shape[0]! };
   if (capture.problems.length) return { ok: false, reason: multistepProblemCategory(capture.problems[0]!) };
   if (transaction.problems.length) return { ok: false, reason: multistepProblemCategory(transaction.problems[0]!) };
   if (!transaction.account?.value || !transaction.token?.value || transaction.token.occurrences !== 3) {
@@ -207,10 +211,14 @@ export function sanitizeMultiStepCapture(capture: MultiStepCapture, transaction:
   // messages. Runtime numeric statistics and fixed transaction shape remain.
   const sanitized: MultiStepCapture = {
     kind: capture.kind,
+    reporterStatus: capture.reporterStatus,
+    reporterErrors: capture.reporterErrors,
     stats: capture.stats ? { expected: capture.stats.expected, unexpected: capture.stats.unexpected, flaky: capture.stats.flaky } : null,
     steps, checkRunData: null, logs: null,
     recurrence: { attempts: capture.recurrence.attempts }, problems: [],
   };
+  const sanitizedShape = multiStepShapeProblems(sanitized);
+  if (sanitizedShape.length) return { ok: false, reason: sanitizedShape[0]! };
   const serialized = JSON.stringify(sanitized);
   for (const secret of secrets) {
     if (secret.length > 0 && serialized.includes(secret)) return { ok: false, reason: "MULTISTEP_SANITIZATION_INCOMPLETE" };

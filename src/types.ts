@@ -177,6 +177,8 @@ export interface Assertion {
   subject: string;
   matcher: string;
   target: string;
+  /** Multistep polarity; absent for legacy/API/browser inventories. Not hashed into the ID. */
+  negated?: boolean;
   kind: AssertionKind;
   onCriticalPath: boolean;
   sourceLine: number;

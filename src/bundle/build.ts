@@ -25,7 +25,10 @@ import { measureDeterminism, type MeasureResult, type Runner } from "./measure.t
 import type { ManifestV3 } from "./types.ts";
 import { apiRecordingFromResult, setupProvenance } from "../api/recording.ts";
 import { parseApiCheckProject } from "../api/model.ts";
-import { buildMultiStepRecording, readMultiStepAssets, MAX_ASSET_FILE_BYTES, MAX_ASSET_ZIP_BYTES, type MultiStepAssetTexts } from "../multistep/capture.ts";
+import { buildMultiStepRecording, readMultiStepAssets, MAX_ASSET_FILE_BYTES, MAX_ASSET_ZIP_BYTES, type MultiStepAssetTexts, type MultiStepRecordingDraft } from "../multistep/capture.ts";
+import { finalizeRemoteMultiStepRecording } from "../multistep/binding.ts";
+import type { MultiStepCapture } from "../multistep/normalize.ts";
+import type { MultiStepRecording } from "../multistep/capture.ts";
 import { constrainMultiStepManifest, multiStepRunMetadata } from "../multistep/bundle-evidence.ts";
 import { multistepProblemCategory } from "../multistep/sanitize.ts";
 import { parseMultiStepConstruct, parseMultiStepProject } from "../multistep/source.ts";
@@ -425,6 +428,25 @@ async function fetchResultWithTrace(
         const name = MULTISTEP_ASSET_NAMES.includes(archived) ? archived : asset.name;
         if (!MULTISTEP_ASSET_NAMES.includes(name)) continue;
         if (byName.has(name)) { invalid = "MULTISTEP_DUPLICATE_ASSET"; break; }
+        // Only result-scoped report/file descriptors can authorize evidence.
+        // The hash includes the exact signed manifest URL, but no URL or
+        // descriptor is ever written to the bundle.
+        let remoteUrl: URL;
+        try { remoteUrl = new URL(asset.url); }
+        catch { invalid = "MULTISTEP_ASSET_MANIFEST_INVALID"; break; }
+        if ((asset.type !== "report" && asset.type !== "file" && !(name === "logs.txt" && asset.type === "log"))
+          || typeof asset.source !== "string" || !asset.source || asset.source.length > 4096
+          || (asset.contentType !== undefined && (typeof asset.contentType !== "string" || asset.contentType.length > 512))
+          || (asset.archive && (Object.keys(asset.archive).length !== 1 || asset.archive.entryName.length > 256))
+          || remoteUrl.protocol !== "https:" || remoteUrl.username || remoteUrl.password
+          || asset.url.length > 4096 || Object.keys(asset).some((key) => !["name", "type", "url", "contentType", "source", "archive"].includes(key))) {
+          invalid = "MULTISTEP_ASSET_TYPE_INVALID";
+          break;
+        }
+        const manifestEntrySha256 = sha256(Buffer.from(JSON.stringify({
+          type: asset.type, name: asset.name, source: asset.source, url: asset.url,
+          contentType: asset.contentType ?? null, archive: asset.archive?.entryName ?? null,
+        }), "utf8"));
         try {
           let buf: Buffer;
           if (asset.archive) {
@@ -448,7 +470,8 @@ async function fetchResultWithTrace(
             throw new Error("asset exceeds decoded byte bound");
           }
           totalDecoded += buf.length;
-          assetsOut.push({ result: label, name, type: "remote-asset", bytes: buf.length, sha256: sha256(buf) });
+          assetsOut.push({ result: label, name, type: "remote-asset", resultId: summary.id, assetType: asset.type,
+            manifestEntrySha256, bytes: buf.length, sha256: sha256(buf) });
           byName.set(name, buf.toString("utf8"));
         } catch (err) {
           invalid = multistepProblemCategory(err instanceof Error ? err.message : "asset invalid");
@@ -596,7 +619,7 @@ const MULTISTEP_OUTPUT_FILES = new Set([
  * symlinks/hardlinks in a reused output directory rather than following them
  * when replacing an earlier synthetic capture. The caller chooses outDir, but
  * data-derived paths can never escape it or introduce arbitrary artifacts. */
-function writeMultiStepBundleFiles(outDir: string, files: Array<{ file: string; text: string }>): Array<{ file: string; text: string }> {
+function writeMultiStepBundleFiles(outDir: string, files: Array<{ file: string; text: string }>, secrets: string[]): Array<{ file: string; text: string }> {
   const seen = new Set<string>();
   let totalBytes = 0;
   if (files.length > MULTISTEP_MAX_SOURCE_FILES + MULTISTEP_OUTPUT_FILES.size) throw new Error("MULTISTEP_OUTPUT_BOUND");
@@ -611,8 +634,6 @@ function writeMultiStepBundleFiles(outDir: string, files: Array<{ file: string; 
     const limit = name.startsWith("recordings/") ? 2 * 1024 * 1024 : 4 * 1024 * 1024;
     if (bytes > limit || (totalBytes += bytes) > 16 * 1024 * 1024) throw new Error("MULTISTEP_OUTPUT_BOUND");
   }
-  mkdirSync(outDir, { recursive: true });
-  if (!lstatSync(outDir).isDirectory() || lstatSync(outDir).isSymbolicLink()) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
   const statOrNull = (file: string): ReturnType<typeof lstatSync> | null => {
     try { return lstatSync(file); }
     catch (error) {
@@ -620,6 +641,49 @@ function writeMultiStepBundleFiles(outDir: string, files: Array<{ file: string; 
       throw error;
     }
   };
+  const dirs = new Set<string>();
+  for (const file of seen) {
+    const parts = file.split("/");
+    for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join("/"));
+  }
+  // Inspect the ENTIRE existing tree (including stale files) before writing.
+  // Neither a valid old bundle nor a planted secret may leave an unexamined
+  // path. Directory walks and reads are bounded before allocation.
+  const inspect = (dir: string, rel = "", collected: Array<{ file: string; text: string }> = []): Array<{ file: string; text: string }> => {
+    for (const name of readdirSync(dir)) {
+      if (collected.length > MULTISTEP_MAX_SOURCE_FILES + MULTISTEP_OUTPUT_FILES.size
+        || name === "." || name === "..") throw new Error("MULTISTEP_OUTPUT_BOUND");
+      const path = rel ? `${rel}/${name}` : name;
+      const stat = lstatSync(join(dir, name));
+      if (stat.isSymbolicLink()) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+      if (stat.isDirectory()) {
+        if (!dirs.has(path)) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+        inspect(join(dir, name), path, collected);
+      } else {
+        if (!seen.has(path) || !stat.isFile() || stat.nlink !== 1
+          || stat.size > (path.startsWith("recordings/") ? 2 : 4) * 1024 * 1024) {
+          throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+        }
+        collected.push({ file: path, text: readFileSync(join(dir, name), "utf8") });
+      }
+    }
+    if (collected.length > files.length || collected.reduce((n, f) => n + Buffer.byteLength(f.text), 0) > 16 * 1024 * 1024) {
+      throw new Error("MULTISTEP_OUTPUT_BOUND");
+    }
+    return collected;
+  };
+  let ancestor = dirname(outDir);
+  while (true) {
+    const stat = statOrNull(ancestor);
+    if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+    if (ancestor === dirname(ancestor)) break;
+    ancestor = dirname(ancestor);
+  }
+  const root = statOrNull(outDir);
+  if (root && (!root.isDirectory() || root.isSymbolicLink())) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+  if (root) assertNoSecretLeak(inspect(outDir), secrets);
+  mkdirSync(outDir, { recursive: true });
+  if (!lstatSync(outDir).isDirectory() || lstatSync(outDir).isSymbolicLink()) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
   // Preflight every existing path before writing any file, including broken
   // symlinks and hardlinks whose target is outside the output directory.
   for (const entry of files) {
@@ -652,6 +716,9 @@ function writeMultiStepBundleFiles(outDir: string, files: Array<{ file: string; 
     } finally { closeSync(fd); }
     written.push({ file: entry.file, text: readFileSync(p, "utf8") });
   }
+  const tree = inspect(outDir);
+  if (tree.length !== files.length || tree.some((entry) => !seen.has(entry.file))) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+  assertNoSecretLeak(tree, secrets); // full postflight, not just our writes
   return written;
 }
 
@@ -727,6 +794,8 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   // Only sanitized structured evidence is ever written; problems become
   // manifest.multistep so `verify` maps them to UNCERTAIN.
   const multistepRecordings: { failing: string | null; passing: string | null } = { failing: null, passing: null };
+  const multistepDrafts: Partial<Record<"failing" | "passing", { recording: MultiStepRecordingDraft; capture: MultiStepCapture }>> = {};
+  const boundRecordings: Partial<Record<"failing" | "passing", MultiStepRecording>> = {};
   const multistepProblems: { failing: string[] | null; passing: string[] | null } = { failing: null, passing: null };
   const multistepSecrets: string[] = [];
   for (const [side, fetched] of [["failing", failing], ["passing", passing]] as const) {
@@ -741,9 +810,10 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     }
     const capture = buildMultiStepRecording({ texts: fetched.multistepTexts, attempts: fetched.summary.attempts ?? null });
     if (capture.ok && capture.recording.kind === side) {
-      fetched.multistep = capture.capture;
+      multistepDrafts[side] = { recording: capture.recording, capture: capture.capture };
+      // No draft can become a manifest failure point or recording pointer.
+      fetched.multistep = null;
       fetched.multistepProblems = [];
-      multistepRecordings[side] = JSON.stringify(capture.recording, null, 2) + "\n";
       multistepProblems[side] = null;
       multistepSecrets.push(...capture.secrets);
       log(`[bundle] ${side}: multistep capture normalized (${capture.capture.kind}, ${capture.capture.steps.length} step entries)`);
@@ -826,23 +896,29 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   }
   if (isMultiStep) {
     const source = proj.sources.find((item) => item.path === proj.mainSource);
+    const model = proj.mainSource ? parseMultiStepProject(
+      new Map(proj.sources.map((item) => [item.path, item.content])), proj.mainSource) : null;
     const unsafeSource = proj.warnings.some((warning) => warning.startsWith("MULTISTEP_"));
     for (const [side, fetched] of [["failing", failing], ["passing", passing]] as const) {
-      if (!multistepRecordings[side]) continue;
-      const asset = assets.find((item) => item.result === side && item.name === "test-results.json");
-      if (!source || unsafeSource || !fetched || !asset || !/^[0-9a-f]{64}$/.test(asset.sha256)) {
-        multistepRecordings[side] = null;
-        fetched!.multistep = null;
-        multistepProblems[side] = [...new Set([...(multistepProblems[side] ?? []), "MULTISTEP_CAPTURE_BINDING_INVALID"])];
+      const draft = multistepDrafts[side];
+      if (!draft || !fetched) continue;
+      // --assets supplies useful normalization/sanitization mechanics, but
+      // never an authenticated result-scoped manifest or a bound v3 record.
+      const remote = assets.filter((item) => item.result === side && item.name === "test-results.json" && item.type === "remote-asset");
+      const problem = multistepAssets?.[side] ? "MULTISTEP_MECHANICS_ONLY" : "MULTISTEP_CAPTURE_BINDING_INVALID";
+      const record = !source || unsafeSource || remote.length !== 1 ? null : finalizeRemoteMultiStepRecording(draft.recording, {
+        side, checkId: check.id, result: fetched.summary, detail: fetched.detail,
+        sourceFile: source.path, sourceText: source.content, sourceModel: model, asset: remote[0]!,
+      });
+      if (!record) {
+        fetched.multistep = null;
+        fetched.multistepProblems = [...new Set([...(multistepProblems[side] ?? []), problem])];
+        multistepProblems[side] = fetched.multistepProblems;
         continue;
       }
-      const record = JSON.parse(multistepRecordings[side]!) as import("../multistep/capture.ts").MultiStepRecording;
-      record.binding = {
-        side, checkId: check.id, resultId: fetched.summary.id, runLocation: fetched.summary.runLocation,
-        startedAt: fetched.summary.startedAt, stoppedAt: fetched.summary.stoppedAt ?? null,
-        sourceFile: source.path, sourceSha256: sha256(Buffer.from(source.content, "utf8")),
-        testResultsSha256: asset.sha256, reporter: "playwright-json-nested", bridge: "required-at-local-execution",
-      };
+      fetched.multistep = draft.capture;
+      fetched.multistepProblems = [];
+      boundRecordings[side] = record;
       multistepRecordings[side] = JSON.stringify(record, null, 2) + "\n";
     }
   }
@@ -910,7 +986,8 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     now,
     toolVersion,
   });
-  if (isMultiStep) manifest = constrainMultiStepManifest(manifest, { failing: failing?.multistep, passing: passing?.multistep });
+  if (isMultiStep) manifest = constrainMultiStepManifest(manifest, boundRecordings,
+    new Map(proj.sources.map((item) => [item.path, item.content])));
   else manifest.notes.push(...warnings.map((w) => `warning: ${w}`));
 
   const files: Array<{ file: string; text: string }> = [];
@@ -964,7 +1041,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   assertNoSecretLeak(files, allSecrets);
 
   const written: Array<{ file: string; text: string }> = isMultiStep
-    ? writeMultiStepBundleFiles(outDir, files)
+    ? writeMultiStepBundleFiles(outDir, files, allSecrets)
     : (() => {
         mkdirSync(outDir, { recursive: true });
         const output: Array<{ file: string; text: string }> = [];
@@ -1001,7 +1078,7 @@ export function bundleReadme(m: ManifestV3): string {
     m.failurePoint?.request
       ? `- Failure point: ${m.failurePoint.request.method} ${m.failurePoint.request.path} → ${m.failurePoint.request.status}${m.failurePoint.request.passingStatus !== null ? ` (passing run: ${m.failurePoint.request.passingStatus})` : ""}`
       : m.failurePoint?.dependency
-        ? `- Step dependency: ${m.failurePoint.dependency.method} ${m.failurePoint.dependency.path} → ${m.failurePoint.dependency.passingStatus} in the passing run (detection injects 500)`
+        ? `- Step dependency: ${m.failurePoint.dependency.method} ${m.failurePoint.dependency.path} (observed in the failing run${m.failurePoint.dependency.passingStatus === null ? "" : `; passing-run status ${m.failurePoint.dependency.passingStatus}`}; detection injects 500)`
         : "- Failure point: not identified",
     m.failurePoint?.action ? `- Failing step: \`${m.failurePoint.action.title}\` — ${m.failurePoint.action.error.split("\n")[0]}` : "",
     m.failurePoint?.assertion

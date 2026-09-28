@@ -7,6 +7,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseMultiStepProject, parseMultiStepScript } from "../../src/multistep/source.ts";
+import { buildContract } from "../../src/contract/contract.ts";
 import { evaluateMultiStepPolicy } from "../../src/multistep/policy.ts";
 import { runMultiStepSandbox, bridgeReporterMismatch } from "../../src/multistep/executor.ts";
 import { MAX_REPORTER_AUDIT_BYTES, parseReporterAudit } from "../../src/multistep/reporter.ts";
@@ -113,7 +114,7 @@ test("lexical const-only resolution, cycle errors, no executable local modules a
   const outcome = await runMultiStepSandbox({
     projectDir: WEB, baseUrl: "https://fixture.invalid", checkFile: FILE,
     files: Object.fromEntries(files(imported, CONSTRUCT, { "checks/untrusted.ts": malicious })),
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001" },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" },
   });
   assert.equal(outcome.inconclusive, true);
   assert.equal(outcome.browserProcesses, null, "no child process was sampled because none started");
@@ -162,7 +163,7 @@ test("shadowed Playwright test/expect/request and mutated response payloads cann
     assert.ok(policy.uncertain || policy.rejected, "a definite hardcoded-host rejection can outrank an unsupported-source finding");
   }
   const out = await runMultiStepSandbox({ projectDir: WEB, baseUrl: "https://fixture.invalid", checkFile: FILE,
-    files: Object.fromEntries(files(attacks[1]!)), env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic" } });
+    files: Object.fromEntries(files(attacks[1]!)), env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" } });
   assert.equal(out.inconclusive, true);
   assert.equal(out.environmentOrigin, null, "the shadowed expect was rejected before any runner or bridge was started");
   const relationshipRewrite = candidate(SPEC.replace("loginAccount = body.account as string", "loginAccount = account"));
@@ -190,7 +191,7 @@ test("unsupported Multistep syntax is UNCERTAIN before any scene/runner executes
   assert.match(invalid.reason ?? "", /source is unsupported before execution/);
   assert.equal(invalid.environmentOrigin, null, "source preflight runs before missing dependency lookup");
   const unavailable = await runMultiStepSandbox({ projectDir: emptyProject, baseUrl: "https://fixture.invalid",
-    checkFile: FILE, files: Object.fromEntries(files()), env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "fixture-east" } });
+    checkFile: FILE, files: Object.fromEntries(files()), env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "fixture-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" } });
   assert.match(unavailable.reason ?? "", /runner dependencies are unavailable/);
   assert.ok(!JSON.stringify(unavailable).includes(emptyProject), "raw project paths never become sandbox evidence");
   const unsafe = await runMultiStepSandbox({ projectDir: emptyProject, baseUrl: "https://fixture.invalid",
@@ -255,7 +256,7 @@ test("bridge traffic and JSON requests cannot replace a missing dedicated report
     step: ["login", "session", "slots", "book 09:30"][i]!, originMatches: true, hasQuery: false,
   }));
   const actual401 = bridge.map((item, i) => i === 3 ? { ...item, status: 401 } : item);
-  assert.match(bridgeReporterMismatch(actual401, filtered, goodAudit) ?? "", /passing result contradicts HTTP status/);
+  assert.match(bridgeReporterMismatch(actual401, filtered, goodAudit) ?? "", /HTTP status contradicts the required 200/);
   const noAuth = bridge.map((item, i) => i === 3 ? { ...item, authorization: false } : item);
   assert.match(bridgeReporterMismatch(noAuth, filtered, goodAudit) ?? "", /authorization-site mismatch/);
 });
@@ -306,7 +307,7 @@ test("malformed script, construct and imported consts are UNCERTAIN before runne
   assert.match(scriptVerdict.uncertain ?? "", /unsupported source syntax/);
   const out = await runMultiStepSandbox({ projectDir: WEB, baseUrl: "https://fixture.invalid", checkFile: FILE,
     files: Object.fromEntries(files(malformedScript)), originalFiles: Object.fromEntries(files()),
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001" } });
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" } });
   assert.equal(out.inconclusive, true);
   assert.equal(out.environmentOrigin, null, "an invalid source never establishes a bridge or spawns the runner");
   assert.equal(out.browserProcesses, null);
@@ -342,7 +343,7 @@ test("unmodeled property, prototype, global and destructuring writes cannot pres
   const patched = SPEC + "\nObject.prototype.confirmed = true\n";
   const out = await runMultiStepSandbox({ projectDir: WEB, baseUrl: "https://fixture.invalid", checkFile: FILE,
     files: Object.fromEntries(files(patched)), originalFiles: Object.fromEntries(files()),
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001" } });
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" } });
   assert.equal(out.inconclusive, true);
   assert.equal(out.environmentOrigin, null);
   assert.equal(out.browserProcesses, null);
@@ -378,7 +379,7 @@ test("construct top-level side effects, substituted path imports and executable 
   }
   const direct = await runMultiStepSandbox({ projectDir: WEB, baseUrl: "https://fixture.invalid", checkFile: FILE,
     files: Object.fromEntries(files(SPEC, variants[0]!)), originalFiles: Object.fromEntries(files()),
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001" } });
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" } });
   assert.equal(direct.inconclusive, true);
   assert.equal(direct.environmentOrigin, null, "even a direct scene/runner cannot bypass construct preflight");
 });
@@ -401,7 +402,7 @@ test("conditional hard assertions cannot launder their unchanged subject/matcher
   const altered = SPEC.replace("expect(body.confirmed).toBe(true)", "if (false) expect(body.confirmed).toBe(true)");
   const out = await runMultiStepSandbox({ projectDir: WEB, baseUrl: "https://fixture.invalid", checkFile: FILE,
     files: Object.fromEntries(files(altered)), originalFiles: Object.fromEntries(files()),
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001" } });
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" } });
   assert.equal(out.inconclusive, true);
   assert.equal(out.environmentOrigin, null, "the runner cannot execute the conditionally masked assertion");
 });
@@ -429,7 +430,7 @@ test("direct sandbox rejects definite source-policy markers even without an orig
   assert.match(evaluateMultiStepPolicy(ORIGINAL, parsed).rejected ?? "", /retries in code/);
   const out = await runMultiStepSandbox({ projectDir: WEB, baseUrl: "https://fixture.invalid", checkFile: FILE,
     files: { [FILE]: marked },
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001" } });
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" } });
   assert.equal(out.inconclusive, true);
   assert.equal(out.environmentOrigin, null, "a direct adapter entry must not bypass its own source-policy markers");
   assert.equal(out.browserProcesses, null);
@@ -455,5 +456,62 @@ test("short-circuit and ternary hard assertions cannot hide unchanged assertion 
     const parsed = candidate(SPEC.replace("expect(body.ok).toBe(true)", bypass));
     assert.equal(parsed.script?.assertions.length, ORIGINAL.script?.assertions.length);
     assert.match(evaluateMultiStepPolicy(ORIGINAL, parsed).rejected ?? "", /hard assertion conditionally bypassed/);
+  }
+});
+
+test("same-ID negation is a DIFFERENT counted Multistep assertion, never the protected stale-field repair", () => {
+  const stale = ORIGINAL.script!.assertions.find((a) => a.stepTitle === "book 09:30" && a.subject === "body.confirmed")!;
+  assert.equal(stale.negated, false);
+  const negated = SPEC.replace("expect(body.confirmed).toBe(true)", "expect(body.confirmed).not.toBe(true)");
+  const negatedModel = candidate(negated);
+  const altered = negatedModel.script!.assertions.find((a) => a.sourceLine === stale.sourceLine)!;
+  assert.equal(altered.id, stale.id, "the immutable ID algorithm remains byte-identical");
+  assert.equal(altered.negated, true);
+  assert.match(evaluateMultiStepPolicy(ORIGINAL, negatedModel).rejected ?? "", /step-scoped assertion tuples/);
+
+  const bound = bundle();
+  bound.multistep!.failureAssertion = { file: FILE, line: stale.sourceLine, id: stale.id, step: "book 09:30" };
+  const good = SPEC.replace("expect(body.confirmed).toBe(true)", "expect(body.booking.confirmed).toBe(true)");
+  const goodDiff = (buildContract(bound, good)).diff;
+  assert.equal(goodDiff.removed.find((a) => a.subject === "body.confirmed")?.onCriticalPath, false);
+  const negatedRepair = good.replace("expect(body.booking.confirmed).toBe(true)", "expect(body.booking.confirmed).not.toBe(true)");
+  const diff = (buildContract(bound, negatedRepair)).diff;
+  assert.equal(diff.removed.find((a) => a.subject === "body.confirmed")?.onCriticalPath, true);
+  assert.ok(diff.added.some((a) => a.subject === "body.booking.confirmed" && a.negated));
+});
+
+test("critical scalar ++ and -- (regional selection, slot, versions) cannot preserve a source-bound contract", async () => {
+  for (const mutation of ["loginVersion++", "++sessionCurrentVersion", "bookingVersion--", "++region", "SELECTED_SLOT--"]) {
+    const altered = SPEC.replace("  await test.step('confirm transaction'", `  ${mutation}\n  await test.step('confirm transaction'`);
+    assert.notEqual(altered, SPEC);
+    const model = candidate(altered);
+    assert.ok(model.errors.some((error) => /security-critical Multistep.*scalar/.test(error)), mutation);
+    const policy = evaluateMultiStepPolicy(ORIGINAL, model);
+    assert.ok(policy.uncertain || policy.rejected, mutation);
+    const out = await runMultiStepSandbox({ projectDir: WEB, baseUrl: "https://fixture.invalid", checkFile: FILE,
+      files: Object.fromEntries(files(altered)), originalFiles: Object.fromEntries(files()),
+      env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001", MULTISTEP_USER_EU_WEST_1: "user-fixture-002" } });
+    assert.equal(out.inconclusive, true, mutation);
+    assert.equal(out.environmentOrigin, null, `${mutation}: no bridge or runner started`);
+  }
+});
+
+test("direct executor requires BOTH distinct trimmed regional accounts and an approved REGION before spawning", async () => {
+  const base = { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001", MULTISTEP_USER_EU_WEST_1: "user-fixture-002" };
+  const envs: Array<Record<string, string>> = [
+    { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001" },
+    { REGION: "eu-west-1", MULTISTEP_USER_EU_WEST_1: "user-fixture-002" },
+    { ...base, MULTISTEP_USER_EU_WEST_1: base.MULTISTEP_USER_US_EAST_1 },
+    { ...base, MULTISTEP_USER_EU_WEST_1: ` ${base.MULTISTEP_USER_US_EAST_1} ` },
+    { ...base, MULTISTEP_USER_US_EAST_1: " " },
+    { ...base, REGION: "unknown-location" },
+  ];
+  for (const env of envs) {
+    const out = await runMultiStepSandbox({ projectDir: WEB, baseUrl: "https://fixture.invalid", checkFile: FILE,
+      files: Object.fromEntries(files()), originalFiles: Object.fromEntries(files()), env });
+    assert.equal(out.inconclusive, true);
+    assert.equal(out.environmentOrigin, null);
+    assert.equal(out.browserProcesses, null);
+    assert.equal(out.proxyEvidence.length, 0);
   }
 });

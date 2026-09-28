@@ -232,6 +232,7 @@ export function multiStepInventory(model: MultiStepSourceModel): AssertionInvent
       subject: a.subject,
       matcher: a.matcher,
       target: a.target,
+      negated: a.negated,
       kind: cls.kind,
       onCriticalPath: true,
       sourceLine: a.sourceLine,
@@ -254,14 +255,17 @@ export function multiStepInventory(model: MultiStepSourceModel): AssertionInvent
  * awaited steps + step-scoped assertions). Browser checks keep the existing
  * single-file parser and assertion identity.
  */
-export function parseProjectInventory(checkFile: string, files: Map<string, string>, logicalId?: string | null): AssertionInventory {
+export function parseProjectInventory(checkFile: string, files: Map<string, string>,
+  logicalId?: string | null, checkType?: string | null): AssertionInventory {
+  if (checkType === "MULTI_STEP") {
+    const model = parseMultiStepProject(files, checkFile);
+    // An unparseable Multistep source never falls through to the generic
+    // expect() scanner. The source/policy gate reports the unsupported reason.
+    return model?.script && model.errors.length === 0 ? multiStepInventory(model)
+      : { checkFile, assertions: [], steps: [], totalAssertions: 0 };
+  }
   const api = parseApiCheckProject(checkFile, files, logicalId);
   if (api) return apiInventory(api);
-  const looksMultistep = [...files.values()].some((source) => source.includes("new MultiStepCheck("));
-  if (looksMultistep) {
-    const model = parseMultiStepProject(files, checkFile);
-    if (model?.script) return multiStepInventory(model);
-  }
   return parseInventory(checkFile, files.get(checkFile) ?? files.get(checkFile.replace(/^\.\//, "")) ?? "");
 }
 

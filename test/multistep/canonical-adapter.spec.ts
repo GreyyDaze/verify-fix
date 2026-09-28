@@ -39,7 +39,7 @@ interface SyntheticApp {
 
 /** Minimal local app: 'flat' answers the old contract (check passes),
  *  'nested' answers the incident contract (check fails inside 'book 09:30'). */
-function startSyntheticApp(mode: "flat" | "nested"): Promise<SyntheticApp> {
+function startSyntheticApp(mode: "flat" | "nested", errorAt?: { position: number; status: 401 | 500 }): Promise<SyntheticApp> {
   const received: ReceivedRequest[] = [];
   const handler = (req: IncomingMessage, res: ServerResponse): void => {
     const chunks: Buffer[] = [];
@@ -79,6 +79,7 @@ function startSyntheticApp(mode: "flat" | "nested"): Promise<SyntheticApp> {
         status = 404;
         payload = { error: "not found" };
       }
+      if (errorAt && received.length === errorAt.position) status = errorAt.status;
       received.push({ method: req.method ?? "", url, authorization, body, statusSent: status });
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(payload));
@@ -128,7 +129,7 @@ function runCanonical(appUrl: string, timeoutMs = 150_000) {
     projectDir: WEB,
     files: { "multistep-booking.spec.ts": CANONICAL_SPEC },
     checkFile: "multistep-booking.spec.ts",
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: ACCOUNT },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: ACCOUNT, MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" },
     timeoutMs,
   });
 }
@@ -222,5 +223,24 @@ test("canonical spec through the adapter (failing nested app): four requests com
   } finally {
     watcher.stop();
     await app.close();
+  }
+});
+
+// A failed status assertion, even on the fourth booking request, is NOT the
+// source-bound stale-body assertion. A prefix or transport error cannot be
+// promoted into a conclusive negative observation.
+test("live mocked bridge rejects HTTP 401 and 500 at EACH canonical request position as UNCERTAIN", { timeout: 180_000 }, async () => {
+  for (const status of [401, 500] as const) {
+    for (let position = 0; position < 4; position++) {
+      const app = await startSyntheticApp("nested", { position, status });
+      try {
+        const out = await runCanonical(app.url);
+        assert.equal(out.inconclusive, true, `request ${position + 1}, HTTP ${status}: ${out.reason}`);
+        assert.equal(out.passed, false);
+        assert.equal(out.proxyEvidence.length, position + 1, "never claim later steps executed");
+        assert.equal(out.proxyEvidence.at(-1)?.status, status);
+        assert.ok(out.reason && !out.reason.includes(ACCOUNT) && !out.reason.includes(TOKEN));
+      } finally { await app.close(); }
+    }
   }
 });

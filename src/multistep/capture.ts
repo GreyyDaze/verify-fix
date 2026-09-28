@@ -40,7 +40,8 @@ export interface MultiStepAssetTexts extends MultiStepTexts {
   hashes?: Record<string, { bytes: number; sha256: string }>;
 }
 
-export const MULTISTEP_RECORDING_SCHEMA = "multistep-recording-v2";
+export const MULTISTEP_RECORDING_SCHEMA = "multistep-recording-v3";
+export const MULTISTEP_DRAFT_SCHEMA = "multistep-mechanics-only-v3";
 
 /** Maximum bytes for any single directly-read asset file. */
 export const MAX_ASSET_FILE_BYTES = 32 * 1024 * 1024;
@@ -221,25 +222,44 @@ export interface MultiStepCaptureInput {
   attempts?: number | null;
 }
 
+export interface MultiStepFailureAssertion {
+  step: "book 09:30";
+  line: number;
+  id: string;
+  subject: "body.confirmed";
+  repairedSubject: "body.booking.confirmed";
+  matcher: "toBe";
+  target: "true";
+  negated: false;
+}
+
+export interface MultiStepRecordingBinding {
+  side: "failing" | "passing";
+  checkId: string;
+  resultId: string;
+  runLocation: string;
+  startedAt: string;
+  stoppedAt: string;
+  sourceFile: string;
+  sourceSha256: string;
+  testResultsSha256: string;
+  testResultsBytes: number;
+  /** Hash of the exact authenticated result-scoped asset manifest entry,
+   * including its signed URL, without storing that URL or any raw bytes. */
+  assetManifestSha256: string;
+  assetType: "report" | "file";
+  reporter: "playwright-json-nested";
+  bridge: "required-at-local-execution";
+  failureAssertion: MultiStepFailureAssertion | null;
+}
+
 export interface MultiStepRecording {
   schemaVersion: typeof MULTISTEP_RECORDING_SCHEMA;
-  /** Set only by bundle creation after the trusted source/result is selected.
-   * Standalone mechanics fixtures are deliberately unbound and cannot load. */
-  binding?: {
-    side: "failing" | "passing";
-    checkId: string;
-    resultId: string;
-    runLocation: string;
-    startedAt: string;
-    stoppedAt: string | null;
-    sourceFile: string;
-    sourceSha256: string;
-    testResultsSha256: string;
-    reporter: "playwright-json-nested";
-    bridge: "required-at-local-execution";
-  };
+  binding: MultiStepRecordingBinding;
   kind: MultiStepCapture["kind"];
   stats: MultiStepCapture["stats"];
+  reporterStatus: MultiStepCapture["reporterStatus"];
+  reporterErrors: MultiStepCapture["reporterErrors"];
   steps: MultiStepCapture["steps"];
   checkRunData: MultiStepCapture["checkRunData"];
   logs: MultiStepCapture["logs"];
@@ -255,11 +275,17 @@ export interface MultiStepRecording {
   evidenceNote: string;
 }
 
+/** An unbound local normalization is NEVER a loadable recording. Only the
+ * authenticated remote-finalization function constructs the v3 type. */
+export type MultiStepRecordingDraft = Omit<MultiStepRecording, "schemaVersion" | "binding"> & {
+  schemaVersion: typeof MULTISTEP_DRAFT_SCHEMA;
+};
+
 export const MECHANICS_ONLY_NOTE =
   "Recorded captures are evidence of that recorded run; locally constructed fixtures prove mechanics only — they are never real Checkly, browser, deployment, or cloud proof.";
 
 export type CaptureRecordingResult =
-  | { ok: true; recording: MultiStepRecording; capture: MultiStepCapture; secrets: string[] }
+  | { ok: true; recording: MultiStepRecordingDraft; capture: MultiStepCapture; secrets: string[] }
   | { ok: false; reason: string; problems: string[] };
 
 /** Normalize → extract relationships → sanitize. Storage gets sanitized output only. */
@@ -290,10 +316,12 @@ export function buildMultiStepRecording(input: MultiStepCaptureInput): CaptureRe
     const reason = multistepProblemCategory(safeTransaction.problems[0]!);
     return { ok: false, reason, problems: [reason] };
   }
-  const recording: MultiStepRecording = {
-    schemaVersion: MULTISTEP_RECORDING_SCHEMA,
+  const recording: MultiStepRecordingDraft = {
+    schemaVersion: MULTISTEP_DRAFT_SCHEMA,
     kind: sanitized.capture.kind,
     stats: sanitized.capture.stats,
+    reporterStatus: sanitized.capture.reporterStatus,
+    reporterErrors: sanitized.capture.reporterErrors,
     steps: sanitized.capture.steps,
     checkRunData: sanitized.capture.checkRunData,
     logs: sanitized.capture.logs,

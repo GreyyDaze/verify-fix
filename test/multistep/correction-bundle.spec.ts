@@ -59,6 +59,7 @@ interface FakeOpts {
   pass?: CheckResultSummary | null;
   remote?: (id: string) => { assets: AssetManifestEntry[]; truncated?: boolean };
   download?: (url: string, maxBytes: number) => Promise<Buffer>;
+  detail?: (result: CheckResultSummary) => CheckResultSummary;
   canary?: boolean;
   shortSecret?: boolean;
 }
@@ -85,7 +86,7 @@ function fakeClient(opts: FakeOpts = {}): ChecklyClient {
     async listResults() { return { entries: history, nextId: null }; },
     async getResult(_checkId: string, id: string) {
       const original = history.find((r) => r.id === id)!;
-      return { ...original,
+      return { ...(opts.detail?.(original) ?? original),
         errors: opts.canary ? [{ error: { message: `expect() failed at /users/${CANARY}/secret.spec.ts:999:99`, stack: CANARY }, testFile: `/${CANARY}/secret.spec.ts`, testTitle: CANARY }] : [],
         multiStepCheckResult: { pages: [{ url: `https://${CANARY}.invalid`, error: CANARY }], errors: [] },
         logs: [{ level: CANARY, msg: CANARY }], trace: { path: `/${CANARY}/trace` },
@@ -101,6 +102,30 @@ async function capture(opts: FakeOpts, localAssets: string | null, dir = project
     { client: fakeClient(opts), accountId: "synthetic", now: () => new Date("2026-09-27T00:00:00.000Z") });
   return { ...outcome, outDir };
 }
+/** Mock the authenticated, result-scoped asset manifest and bounded ZIP
+ * download. This is synthetic remote-path proof, NEVER Checkly/cloud proof. */
+async function captureRemote(opts: FakeOpts = {}, fixtureDir: string | null = null, dir = project()) {
+  const zips = new Map<string, Buffer>();
+  for (const [side, id] of [["failing", opts.fail?.id ?? "synthetic-fail"],
+    ["passing", opts.pass?.id ?? "synthetic-pass"]] as const) {
+    const files = fixtureDir ? Object.fromEntries(["test-results.json", "logs.txt", "check-run-data.json"].map((name) =>
+      [name, readFileSync(join(fixtureDir, side, name))]))
+      : { "test-results.json": side === "failing" ? failingTestResults() : passingTestResults(),
+        "logs.txt": side === "failing" ? failingLogs() : passingLogs(),
+        "check-run-data.json": JSON.stringify({ script: CANARY, scriptPath: CANARY }) };
+    zips.set(id, writeZip(files));
+  }
+  const remote = (id: string) => ({ assets: ["test-results.json", "logs.txt", "check-run-data.json"].map((name) => ({
+    name, type: name === "logs.txt" ? "log" as const : name === "check-run-data.json" ? "file" as const : "report" as const,
+    source: "synthetic-result", url: `https://signed.invalid/${id}.zip?sig=${CANARY}`,
+    archive: { entryName: name },
+  })) });
+  return capture({ ...opts, remote: opts.remote ?? remote, download: opts.download ?? (async (url) => {
+    const id = /\/(synthetic-(?:fail|pass))\.zip/.exec(url)?.[1];
+    return zips.get(id ?? "") ?? Buffer.alloc(0);
+  }) }, null, dir);
+}
+
 function allFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
     const path = join(dir, e.name);
@@ -108,7 +133,7 @@ function allFiles(dir: string): string[] {
   });
 }
 
-test("local capture stores ONLY fixed schemas/categories; results, logs, pages, trace, paths and arbitrary API details cannot leak", async () => {
+test("mocked remote capture stores ONLY fixed schemas/categories; results, logs, pages, trace, paths and arbitrary API details cannot leak", async () => {
   const assets = assetDir(failingTestResults(), passingTestResults(), true);
   // Inject arbitrary fields everywhere without changing the four canonical
   // requests or the relationship sites the capture must preserve.
@@ -119,7 +144,7 @@ test("local capture stores ONLY fixed schemas/categories; results, logs, pages, 
     const text = JSON.stringify(raw).replace('"statusText":"OK"', `"statusText":"${CANARY}"`);
     writeFileSync(file, text);
   }
-  const out = await capture({ canary: true }, assets);
+  const out = await captureRemote({ canary: true }, assets);
   assert.equal(out.manifest.recordings.multistepFailing, "recordings/failing.multistep.json");
   assert.equal(out.manifest.recordings.multistepPassing, "recordings/passing.multistep.json");
   assert.equal(out.manifest.provenance.apiCalls[0]?.url, "<checkly-request>");
@@ -143,6 +168,33 @@ test("local capture stores ONLY fixed schemas/categories; results, logs, pages, 
   assert.equal(rec.steps[0].requests[0].timings, null);
   assert.equal(rec.steps[0].requests[0].statusText, null);
   assert.equal(rec.transaction.token.occurrences, 3);
+  assert.equal(rec.schemaVersion, "multistep-recording-v3");
+  assert.equal(rec.reporterStatus, "failed");
+  assert.equal(rec.reporterErrors, 0);
+  assert.deepEqual(rec.steps.map((step: { status: string }) => step.status), ["passed", "passed", "passed", "failed"]);
+  assert.deepEqual(rec.steps.map((step: { requests: Array<{ status: number }> }) => step.requests[0]?.status), [200, 200, 200, 200]);
+  assert.equal(rec.steps[3].requests[0].responseBody.confirmed, undefined);
+  assert.equal(rec.steps[3].requests[0].responseBody.booking.confirmed, true);
+  const provenance = out.manifest.provenance.assets.find((item) => item.result === "failing" && item.name === "test-results.json")!;
+  assert.equal(provenance.type, "remote-asset");
+  assert.equal(provenance.resultId, rec.binding.resultId);
+  assert.equal(rec.binding.testResultsSha256, provenance.sha256);
+  assert.equal(rec.binding.testResultsBytes, provenance.bytes);
+  assert.equal(rec.binding.assetManifestSha256, provenance.manifestEntrySha256);
+  assert.equal(out.manifest.provenance.assets.find((item) => item.name === "logs.txt")?.assetType, "log",
+    "a recognized log descriptor remains optional remote evidence, not the test-results proof");
+  assert.equal(rec.binding.failureAssertion.subject, "body.confirmed");
+  assert.equal(rec.binding.failureAssertion.repairedSubject, "body.booking.confirmed");
+  assert.equal(rec.binding.failureAssertion.negated, false);
+  assert.equal(out.manifest.failurePoint?.dependency?.msBeforeStep, null, "no measured interval may be invented");
+  assert.equal(out.manifest.failurePoint?.dependency?.passingStatus, null, "no passing-run status may be invented");
+  assert.deepEqual(out.manifest.scenes.find((scene) => scene.type === "DETECTION")?.verdict.provenance,
+    { kind: "recorded", runId: rec.binding.resultId, artifactId: "recordings/failing.multistep.json" });
+  const passed = JSON.parse(readFileSync(join(out.outDir, "recordings", "passing.multistep.json"), "utf8"));
+  assert.ok(validMultiStepStoredRecording(passed, "passing"));
+  assert.equal(passed.binding.failureAssertion, null);
+  assert.deepEqual(passed.steps.map((step: { status: string }) => step.status), ["passed", "passed", "passed", "passed", "passed"]);
+  assert.deepEqual(passed.steps.slice(0, 4).map((step) => step.requests[0]?.status), [200, 200, 200, 200]);
   const loaded = loadBundle(out.outDir).bundle;
   assert.deepEqual(loaded.multistep?.problems, []);
   assert.equal(loaded.check.file, FILE, "the deployed API script is bound to the construct's actual entrypoint");
@@ -155,7 +207,7 @@ test("passing/failing asset swapping, summary-side contradictions and missing po
   assert.ok(swapped.manifest.multistep?.passing?.problems.includes("MULTISTEP_CAPTURE_SIDE_MISMATCH"));
   assert.ok(loadBundle(swapped.outDir).bundle.multistep!.problems.length >= 2);
 
-  const valid = await capture({}, assetDir());
+  const valid = await captureRemote();
   const m = JSON.parse(readFileSync(join(valid.outDir, "manifest.json"), "utf8"));
   m.recordings.multistepFailing = "../../out-of-bundle.secret";
   writeFileSync(join(valid.outDir, "manifest.json"), JSON.stringify(m));
@@ -178,21 +230,23 @@ test("deployed Checkly scheduling that differs from the construct gates both evi
   assert.ok(loadBundle(drift.outDir).bundle.multistep?.problems.includes("MULTISTEP_DEPLOYED_CONFIG_MISMATCH"));
 });
 
-test("tampered, legacy, extra-field and symlinked v2 recordings are invalid rather than free-form evidence", async () => {
+test("tampered, legacy, extra-field and symlinked v3 recordings are invalid rather than free-form evidence", async () => {
   for (const mutation of [
     (r: Record<string, unknown>) => { r.schemaVersion = "multistep-recording-v1"; },
     (r: Record<string, unknown>) => { (r.steps as Array<Record<string, unknown>>)[0]!.error = CANARY; },
     (r: Record<string, unknown>) => { (r.transaction as Record<string, unknown>).rawToken = CANARY; },
     (r: Record<string, unknown>) => { r.pages = [{ url: CANARY }]; },
   ]) {
-    const out = await capture({}, assetDir());
+    const out = await captureRemote();
     const path = join(out.outDir, "recordings", "failing.multistep.json");
     const r = JSON.parse(readFileSync(path, "utf8"));
     mutation(r);
     writeFileSync(path, JSON.stringify(r));
-    assert.deepEqual(loadBundle(out.outDir).bundle.multistep?.problems, ["MULTISTEP_FAILING_RECORDING_INVALID"]);
+    const invalid = loadBundle(out.outDir).bundle.multistep;
+    assert.ok(invalid?.problems.includes("MULTISTEP_FAILING_RECORDING_INVALID"));
+    assert.equal(invalid?.failureAssertion, null);
   }
-  const out = await capture({}, assetDir());
+  const out = await captureRemote();
   const path = join(out.outDir, "recordings", "failing.multistep.json");
   const other = join(out.outDir, "outside.recording.json");
   writeFileSync(other, readFileSync(path));
@@ -298,7 +352,7 @@ test("a direct file and assets.zip together are ambiguous evidence, and local sy
 });
 
 test("only a result/source/reporter-bound failed assertion may narrow the stale-field contract removal", async () => {
-  const out = await capture({}, assetDir());
+  const out = await captureRemote();
   const manifestPath = join(out.outDir, "manifest.json");
   const recordingPath = join(out.outDir, "recordings", "failing.multistep.json");
   const initialManifest = readFileSync(manifestPath, "utf8");
@@ -375,9 +429,14 @@ test("Multistep bundle output is bounded: reused directories cannot redirect fil
   mkdirSync(outside);
   const leaked = join(outside, "private.txt");
   writeFileSync(leaked, "leave intact");
-  const assets = assetDir();
-  const buildAt = (outDir: string) => buildBundle({ checkId: "synthetic-check", outDir, projectDir: project(), assetsDir: assets, log: () => {} },
-    { client: fakeClient(), accountId: "synthetic", now: () => new Date("2026-09-27T00:00:00.000Z") });
+  const zip = writeZip({ "test-results.json": failingTestResults(), "logs.txt": failingLogs() });
+  const remote = (id: string) => ({ assets: ["test-results.json", "logs.txt"].map((name) => ({
+    name, type: "report" as const, source: "synthetic", url: `https://signed.invalid/${id}.zip`, archive: { entryName: name },
+  })) });
+  const buildAt = (outDir: string) => buildBundle({ checkId: "synthetic-check", outDir, projectDir: project(), log: () => {} },
+    { client: fakeClient({ remote, download: async (url) => /synthetic-pass/.test(url)
+      ? writeZip({ "test-results.json": passingTestResults(), "logs.txt": passingLogs() }) : zip }),
+      accountId: "synthetic", now: () => new Date("2026-09-27T00:00:00.000Z") });
   const folder = join(root, "symlinked-child");
   mkdirSync(folder);
   symlinkSync(outside, join(folder, "check"));
@@ -418,14 +477,14 @@ test("nested Playwright report, step assertions, required bodies and real token 
 });
 
 test("a symlinked check/ ROOT is not a bounded source closure at bundle load", async () => {
-  const out = await capture({}, assetDir());
+  const out = await captureRemote();
   renameSync(join(out.outDir, "check"), join(out.outDir, "original-source"));
   symlinkSync(join(out.outDir, "original-source"), join(out.outDir, "check"));
   assert.throws(() => loadBundle(out.outDir), /MULTISTEP_SOURCE_PATH_UNSAFE/);
 });
 
 test("a manifest cannot refer to an inherited property or escaping source file", async () => {
-  const out = await capture({}, assetDir());
+  const out = await captureRemote();
   const path = join(out.outDir, "manifest.json");
   const original = JSON.parse(readFileSync(path, "utf8"));
   for (const file of ["__proto__", "../../private.spec.ts", "checks/unrecorded.spec.ts"]) {
@@ -468,4 +527,149 @@ test("legacy v2 Multistep bundles cannot read a symlinked or escaping source tre
   assert.deepEqual(loadBundle(claimed).bundle.multistep,
     { kind: null, steps: [], problems: ["MULTISTEP_LEGACY_BUNDLE_UNBOUND"] },
     "a v2 self-declared passing result is not result/asset/source-bound Multistep evidence");
+});
+
+function resultSteps(report: Record<string, any>): Array<Record<string, any>> {
+  return report.suites[0].suites[0].specs[0].tests[0].results[0].steps;
+}
+
+/** Only mocked authenticated result manifests are used. Invalid selected
+ * evidence must not leave a half-written v3 recording or fallback scene. */
+test("remote admission rejects prefixes, failed confirmation, malformed booking and a wrong protected source line", async () => {
+  const wrongLine = JSON.parse(failingTestResults());
+  resultSteps(wrongLine)[3]!.steps[1].error.message =
+    "expect(received).toBe(expected) at book 09:30 (multistep-booking.spec.ts:144:24)";
+  const wrongStep = JSON.parse(failingTestResults());
+  resultSteps(wrongStep)[3]!.title = "session";
+  const missingBody = JSON.parse(failingTestResults());
+  resultSteps(missingBody)[3]!.steps[0].checklyData[0].body = null;
+  const status401 = JSON.parse(failingTestResults());
+  resultSteps(status401)[3]!.steps[0].checklyData[0].status = 401;
+  const fifth = JSON.parse(passingTestResults());
+  fifth.stats.expected = 0; fifth.stats.unexpected = 1;
+  fifth.suites[0].suites[0].specs[0].tests[0].results[0].status = "failed";
+  resultSteps(fifth)[4]!.error = { message: "expect(received).toBe(expected)",
+    stack: "at confirm transaction (multistep-booking.spec.ts:151:12)" };
+  const variants: Array<[string, string, boolean]> = [
+    ["failing two-request prefix", (() => { const r = JSON.parse(failingTestResults()); resultSteps(r).length = 2; return JSON.stringify(r); })(), true],
+    ["HTTP 401 on fourth request", JSON.stringify(status401), true],
+    ["missing book response", JSON.stringify(missingBody), true],
+    ["mismatched failed step", JSON.stringify(wrongStep), true],
+    ["wrong source assertion line", JSON.stringify(wrongLine), true],
+    ["failed fifth confirmation", JSON.stringify(fifth), false],
+  ];
+  for (const [label, report, failing] of variants) {
+    const failZip = writeZip({ "test-results.json": failing ? report : failingTestResults(),
+      "logs.txt": failingLogs(), "check-run-data.json": "{}" });
+    const passZip = writeZip({ "test-results.json": failing ? passingTestResults() : report,
+      "logs.txt": passingLogs(), "check-run-data.json": "{}" });
+    const out = await captureRemote({ download: async (url) => url.includes("synthetic-fail.zip") ? failZip : passZip });
+    const side = failing ? "failing" : "passing";
+    const pointer = side === "failing" ? out.manifest.recordings.multistepFailing : out.manifest.recordings.multistepPassing;
+    assert.equal(pointer, null, `${label}: never write an invalid side's recording`);
+    assert.ok(!out.files.includes(`recordings/${side}.multistep.json`), `${label}: no partial recording file`);
+    const loaded = loadBundle(out.outDir).bundle;
+    assert.ok(loaded.multistep?.problems.length, `${label}: not admissible for a verdict`);
+    assert.equal(loaded.multistep?.failureAssertion, null, `${label}: cannot narrow the repair`);
+    if (failing) {
+      assert.equal(out.manifest.failurePoint, null, `${label}: never derive a generic failure point`);
+      assert.deepEqual(out.manifest.scenes, [], `${label}: no passing-side scene fallback for a failing incident`);
+    }
+  }
+});
+
+test("v3 binding is mandatory and remote-only: v2 plus a binding, local hashes, unknown asset types and ID swaps cannot prove detection", async () => {
+  const local = await capture({}, assetDir());
+  assert.equal(local.manifest.recordings.multistepFailing, null);
+  assert.equal(local.manifest.failurePoint, null);
+  assert.ok(local.manifest.multistep?.failing?.problems.includes("MULTISTEP_MECHANICS_ONLY"));
+  const bound = await captureRemote();
+  const file = join(bound.outDir, "recordings", "failing.multistep.json");
+  const initial = JSON.parse(readFileSync(file, "utf8"));
+  const legacy = { ...initial, schemaVersion: "multistep-recording-v2" }; // even a real-shaped binding cannot upgrade v2
+  assert.equal(validMultiStepStoredRecording(legacy, "failing"), false);
+  writeFileSync(file, JSON.stringify(legacy));
+  assert.ok(loadBundle(bound.outDir).bundle.multistep?.problems.includes("MULTISTEP_FAILING_RECORDING_INVALID"));
+  writeFileSync(file, JSON.stringify(initial));
+  const manifestPath = join(bound.outDir, "manifest.json");
+  const original = readFileSync(manifestPath, "utf8");
+  const attacks: Array<[string, (m: Record<string, any>) => void]> = [
+    ["unknown asset type", (m) => { m.provenance.assets[0].type = "unrecognized-asset"; }],
+    ["local test-results hash in place of remote", (m) => { m.provenance.assets.find((a: any) => a.result === "failing" && a.name === "test-results.json").type = "local-asset"; }],
+    ["result-scoped asset ID swapped", (m) => { m.provenance.assets.find((a: any) => a.result === "failing" && a.name === "test-results.json").resultId = m.results.passing.id; }],
+    ["manifest entry digest swapped", (m) => { m.provenance.assets.find((a: any) => a.result === "failing" && a.name === "test-results.json").manifestEntrySha256 = "0".repeat(64); }],
+    ["failing and passing result IDs swapped", (m) => { const id = m.results.failing.id; m.results.failing.id = m.results.passing.id; m.results.passing.id = id; }],
+    ["unknown unrelated provenance asset", (m) => { m.provenance.assets.push({ result: "failing", name: "arbitrary.bin", type: "mystery", bytes: 1, sha256: "0".repeat(64) }); }],
+  ];
+  for (const [label, mutate] of attacks) {
+    const m = JSON.parse(original);
+    mutate(m);
+    writeFileSync(manifestPath, JSON.stringify(m));
+    const loaded = loadBundle(bound.outDir).bundle;
+    assert.ok(loaded.multistep?.problems.length, label);
+    assert.equal(loaded.multistep?.failureAssertion, null, `${label}: no proven exception`);
+  }
+  writeFileSync(manifestPath, original);
+  const metadata = join(bound.outDir, "results", "failing.json");
+  const stored = readFileSync(metadata, "utf8");
+  const contradictory = { ...JSON.parse(stored), hasFailures: false };
+  writeFileSync(metadata, JSON.stringify(contradictory));
+  assert.ok(loadBundle(bound.outDir).bundle.multistep?.problems.includes("MULTISTEP_FAILING_RECORDING_INVALID"),
+    "a matching ID alone cannot hide a contradictory result-detail outcome");
+  writeFileSync(metadata, stored);
+  const v3 = JSON.parse(readFileSync(file, "utf8"));
+  v3.binding.resultId = bound.manifest.results.passing!.id;
+  writeFileSync(file, JSON.stringify(v3));
+  assert.ok(loadBundle(bound.outDir).bundle.multistep?.problems.includes("MULTISTEP_FAILING_RECORDING_INVALID"));
+});
+
+test("unknown remote manifest asset types and deployed-source drift fail before v3 finalization", async () => {
+  const remote = (id: string) => ({ assets: [{ name: "test-results.json", type: "unknown" as "report",
+    source: "synthetic", url: `https://signed.invalid/${id}/report` }] });
+  const unknown = await captureRemote({ remote, download: async () => { throw new Error("invalid types must not be downloaded"); } });
+  assert.equal(unknown.manifest.recordings.multistepFailing, null);
+  assert.ok(unknown.manifest.multistep?.failing?.problems.includes("MULTISTEP_ASSET_TYPE_INVALID"));
+  assert.equal(unknown.manifest.failurePoint, null);
+  assert.deepEqual(unknown.manifest.scenes, []);
+  const contradictory = await captureRemote({ detail: (result) => result.hasFailures
+    ? { ...result, resultType: "ATTEMPT" } : result });
+  assert.equal(contradictory.manifest.recordings.multistepFailing, null,
+    "the authenticated result detail must describe the selected FINAL run");
+  assert.equal(contradictory.manifest.failurePoint, null);
+  assert.deepEqual(contradictory.manifest.scenes, []);
+  const drift = project();
+  writeFileSync(join(drift, FILE), SPEC.replace("expect(body.confirmed).toBe(true)", "expect(body.booking.confirmed).toBe(true)"));
+  const mismatch = await captureRemote({}, null, drift);
+  assert.equal(mismatch.manifest.recordings.multistepFailing, null);
+  assert.ok(mismatch.manifest.multistep?.failing?.problems.includes("MULTISTEP_SOURCE_PROJECT_MISMATCH"));
+  assert.equal(loadBundle(mismatch.outDir).bundle.multistep?.failureAssertion, null);
+});
+
+test("exact output tree and full preflight secret scan reject stale files before any recapture write", async () => {
+  const zipFail = writeZip({ "test-results.json": failingTestResults(), "logs.txt": failingLogs() });
+  const zipPass = writeZip({ "test-results.json": passingTestResults(), "logs.txt": passingLogs() });
+  const remote = (id: string) => ({ assets: ["test-results.json", "logs.txt"].map((name) => ({
+    name, type: "report" as const, source: "synthetic", url: `https://signed.invalid/${id}.zip`, archive: { entryName: name },
+  })) });
+  const buildAt = (outDir: string) => buildBundle({ checkId: "synthetic-check", outDir, projectDir: project(), log: () => {} },
+    { client: fakeClient({ remote, download: async (url) => url.includes("synthetic-fail") ? zipFail : zipPass }), accountId: "synthetic" });
+  const dir = mkdtempSync(join(tmpdir(), "verify-fix-output-tree-exact-"));
+  const outcome = await buildAt(dir);
+  assert.deepEqual(allFiles(dir).map((path) => path.slice(dir.length + 1)).sort(), [...outcome.files].sort(),
+    "postflight output contains exactly the allowed files");
+  const stale = join(dir, "results", "stale.json");
+  writeFileSync(stale, "test-only stale file");
+  const before = readFileSync(join(dir, "manifest.json"), "utf8");
+  await assert.rejects(buildAt(dir), /MULTISTEP_OUTPUT_PATH_UNSAFE/);
+  assert.equal(readFileSync(join(dir, "manifest.json"), "utf8"), before, "no file truncated before preflight");
+  const { unlinkSync } = await import("node:fs");
+  unlinkSync(stale);
+  const planted = join(dir, "README.md");
+  writeFileSync(planted, `stale ${FAKE_TOKEN}`);
+  await assert.rejects(buildAt(dir), /it contains the value of a Checkly environment variable/);
+  assert.equal(readFileSync(join(dir, "manifest.json"), "utf8"), before);
+  unlinkSync(planted);
+  await buildAt(dir);
+  assert.deepEqual(loadBundle(dir).bundle.multistep?.problems, [], "bounded recapture restores a missing allowed file");
+  assert.deepEqual(allFiles(dir).map((path) => path.slice(dir.length + 1)).sort(), [...outcome.files].sort());
 });

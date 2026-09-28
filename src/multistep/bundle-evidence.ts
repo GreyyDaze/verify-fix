@@ -4,7 +4,9 @@
 // the bundle writer validates/bounds that closure before writing it.
 import type { ManifestV3, SceneV3, ResultRef, FailurePoint, OverlappingRun } from "../bundle/types.ts";
 import type { CheckResultSummary } from "../checkly/types.ts";
-import type { MultiStepCapture } from "./normalize.ts";
+import type { MultiStepRecording } from "./capture.ts";
+import { failurePointFromRecording, matchesRemoteMultiStepBinding } from "./binding.ts";
+import { parseMultiStepProject } from "./source.ts";
 import { knownRoute, knownStepTitle, MULTISTEP_ROUTES } from "./routes.ts";
 import { multiStepSourcePath } from "./files.ts";
 
@@ -52,42 +54,11 @@ function ref(input: ResultRef | null): ResultRef | null {
   };
 }
 
-function failurePoint(manifest: ManifestV3, capture: MultiStepCapture | null, passing: MultiStepCapture | null): FailurePoint | null {
-  if (!capture || !manifest.check.file || !multiStepSourcePath(manifest.check.file)) return null;
-  const step = capture.steps.find((item) => item.status === "failed");
-  if (!step || !knownStepTitle(step.title)) return null;
-  const attributed = manifest.failurePoint?.assertion;
-  const line = step.failureLine;
-  const assertion = attributed && line !== null && line !== undefined && line === attributed.line
-    && attributed.file === manifest.check.file && /^assert:[0-9a-f]{8}$/.test(attributed.assertionId ?? "")
-    ? { file: manifest.check.file, line, column: null, assertionId: attributed.assertionId } : null;
-  const own = step.requests.at(-1) ?? null;
-  const route = knownRoute(own?.path);
-  const method = route ? MULTISTEP_ROUTES[route] : null;
-  const request = own && route && own.method === method && typeof own.status === "number" && own.status >= 400
-    ? {
-        method: method!, url: `https://recorded.invalid${route}`, path: route,
-        status: count(own.status, 599), passingStatus: null, failureText: "REQUEST_FAILURE",
-      } : null;
-  const opposite = passing?.steps.find((item) => item.title === step.title)?.requests[0] ?? null;
-  // A dependency is a cross-side, same-step/same-route relation, never a
-  // guessed final request from an unrelated step. The fixed zero means only
-  // "same step"; it is not a measured inter-request interval.
-  const dependency = !request && assertion && own && route && opposite?.path === route
-    && opposite.method === method && opposite.status === 200 && own.method === method
-    ? { method: method!, url: `https://recorded.invalid${route}`, path: route,
-        passingStatus: 200, msBeforeStep: 0, stepLine: assertion.line, stepTitle: step.title }
-    : null;
-  return {
-    action: { apiName: "test.step", title: step.title, error: step.error === "ASSERTION_FAILED" ? "ASSERTION_FAILED" : "STEP_ERROR" },
-    request, assertion, dependency,
-  };
-}
-
 function sceneProjection(scene: SceneV3, manifest: ManifestV3,
   available: { failing: boolean; passing: boolean }, point: FailurePoint | null): SceneV3 | null {
   if (!["HEALTHY", "REPRODUCTION", "DETECTION"].includes(scene.type)
-    || !["healthy-live", "reproduction", "detection"].includes(scene.sceneId)) return null;
+    || scene.sceneId !== (scene.type === "HEALTHY" ? "healthy-live"
+      : scene.type === "REPRODUCTION" ? "reproduction" : "detection")) return null;
   const provenance = scene.verdict.provenance;
   let proof: SceneV3["verdict"]["provenance"];
   if (provenance.kind === "recorded") {
@@ -96,9 +67,7 @@ function sceneProjection(scene: SceneV3, manifest: ManifestV3,
     if (!side || !available[side] || !manifest.results[side] || provenance.runId !== manifest.results[side]!.id
       || (scene.type === "HEALTHY" ? side !== "passing" : side !== "failing")) return null;
     proof = { kind: "recorded", runId: provenance.runId, artifactId: provenance.artifactId };
-  } else if (provenance.kind === "code" && /^assert:[0-9a-f]{8}$/.test(provenance.assertionId)) {
-    proof = { kind: "code", assertionId: provenance.assertionId };
-  } else return null;
+  } else return null; // no code or generic-manifest fallback for a remote run
 
   let mode: SceneV3["mode"];
   if (scene.type === "HEALTHY") mode = "live";
@@ -108,8 +77,9 @@ function sceneProjection(scene: SceneV3, manifest: ManifestV3,
   } else {
     const req = point?.request ?? point?.dependency;
     const route = knownRoute(req?.path);
-    if (!route || !req || req.method !== MULTISTEP_ROUTES[route] || proof.kind !== "recorded") return null;
-    mode = `inject:${req.method} ${route} -> ${point?.request ? count(point.request.status, 599) : 500}`;
+    if (!route || route !== "/api/book" || !req || req.method !== "POST" || proof.kind !== "recorded"
+      || point?.request !== null || !point.assertion) return null;
+    mode = "inject:POST /api/book -> 500";
   }
   const isDetection = scene.type === "DETECTION";
   return {
@@ -127,33 +97,60 @@ function sceneProjection(scene: SceneV3, manifest: ManifestV3,
  * optional captures are already sanitized, typed, and selected by result side.
  * An absent side never receives a pointer or scene from the opposite side. */
 export function constrainMultiStepManifest(m: ManifestV3,
-  captures: { failing?: MultiStepCapture | null; passing?: MultiStepCapture | null } = {}): ManifestV3 {
+  recordings: Partial<Record<"failing" | "passing", MultiStepRecording>> = {},
+  sources: Map<string, string> = new Map()): ManifestV3 {
   if (m.check.checkType !== "MULTI_STEP") return m;
   const failing = ref(m.results.failing);
   const passing = ref(m.results.passing);
   const paths = m.check.files.filter((file) => multiStepSourcePath(file) === file).slice(0, 32);
   const primary = m.check.file && paths.includes(m.check.file) ? m.check.file : null;
+  const sourceText = primary ? sources.get(primary) : null;
+  const sourceModel = primary && sourceText ? parseMultiStepProject(sources, primary) : null;
+  const invalidAsset = m.provenance.assets.some((asset) => !ASSET_NAMES.has(asset.name)
+    || (asset.type !== "local-asset" && asset.type !== "remote-asset"
+      || asset.type === "remote-asset" && (asset.assetType !== "report" && asset.assetType !== "file"
+        && !(asset.name === "logs.txt" && asset.assetType === "log")
+        || !/^[a-f0-9]{64}$/.test(asset.manifestEntrySha256 ?? ""))));
   const available = {
-    failing: Boolean(failing && m.recordings.multistepFailing === "recordings/failing.multistep.json" && captures.failing?.kind === "failing"),
-    passing: Boolean(passing && m.recordings.multistepPassing === "recordings/passing.multistep.json" && captures.passing?.kind === "passing"),
+    failing: false, passing: false,
   };
-  const point = failurePoint(m, available.failing ? captures.failing ?? null : null,
-    available.passing ? captures.passing ?? null : null);
-  const scenes = m.scenes.flatMap((scene) => sceneProjection(scene, m, available, point) ?? []);
+  for (const side of ["failing", "passing"] as const) {
+    const result = side === "failing" ? failing : passing;
+    const pointer = side === "failing" ? m.recordings.multistepFailing : m.recordings.multistepPassing;
+    const asset = m.provenance.assets.filter((item) => item.result === side && item.name === "test-results.json");
+    available[side] = !invalidAsset && Boolean(recordings[side] && result && primary && sourceText
+      && pointer === `recordings/${side}.multistep.json` && asset.length === 1
+      && matchesRemoteMultiStepBinding(recordings[side]!, {
+        side, checkId: m.check.id, result: result!, sourceFile: primary!, sourceText: sourceText!,
+        sourceModel, asset: asset[0]!,
+      }));
+  }
+  const point = available.failing && primary ? failurePointFromRecording(recordings.failing!, primary) : null;
+  // A missing/invalid failing recording cannot be laundered by a passing run
+  // into an incident scene. Nothing in the generic manifest can create one.
+  const scenes = failing && !available.failing ? []
+    : m.scenes.flatMap((scene) => sceneProjection(scene, m, available, point) ?? []);
   const problems = (side: "failing" | "passing"): { problems: string[] } | null => {
     const selected = m.multistep?.[side]?.problems.filter((item) => /^MULTISTEP_[A-Z_]+$/.test(item)).slice(0, 16) ?? [];
+    if (invalidAsset) selected.push("MULTISTEP_ASSET_TYPE_INVALID");
     if (m.results[side] && !available[side]) selected.push("MULTISTEP_CAPTURE_BINDING_INVALID");
-    if (side === "failing" && available.failing && !point?.assertion && !point?.request) selected.push("MULTISTEP_FAILURE_STEP_UNBOUND");
+    if (side === "failing" && available.failing && !point?.assertion) selected.push("MULTISTEP_FAILURE_STEP_UNBOUND");
     if (side === "failing" && available.failing && !scenes.some((scene) => scene.type === "DETECTION")) selected.push("MULTISTEP_FAILURE_STEP_UNBOUND");
     return selected.length ? { problems: [...new Set(selected)] } : null;
   };
   const history = m.determinism.history;
-  const overlappingRuns: OverlappingRun[] = m.reproduction.overlappingRuns.slice(0, 100).map((run) => ({
-    runId: safeId(run.runId) ?? "<unrecognized-id>", runLocation: safeLocation(run.runLocation),
-    startedAt: safeDate(run.startedAt) ?? "<unknown-timestamp>", stoppedAt: safeDate(run.stoppedAt),
-    startDeltaMs: typeof run.startDeltaMs === "number" && Number.isFinite(run.startDeltaMs) && Math.abs(run.startDeltaMs) < 1e9 ? run.startDeltaMs : 0,
-    overlapMs: run.overlapMs === null ? null : count(run.overlapMs), passed: run.passed === true,
-  }));
+  const overlappingRuns: OverlappingRun[] = m.reproduction.overlappingRuns.slice(0, 100).flatMap((run) => {
+    const start = safeDate(run.startedAt);
+    const stop = run.stoppedAt === null ? null : safeDate(run.stoppedAt);
+    if (!start || (run.stoppedAt !== null && !stop)
+      || typeof run.startDeltaMs !== "number" || !Number.isFinite(run.startDeltaMs) || Math.abs(run.startDeltaMs) >= 1e9
+      || (run.overlapMs !== null && (!Number.isSafeInteger(run.overlapMs) || run.overlapMs < 0 || run.overlapMs >= 1e9))) {
+      return []; // an invalid clock never becomes a fabricated zero interval
+    }
+    return [{ runId: safeId(run.runId) ?? "<unrecognized-id>", runLocation: safeLocation(run.runLocation),
+      startedAt: start, stoppedAt: stop, startDeltaMs: run.startDeltaMs,
+      overlapMs: run.overlapMs, passed: run.passed === true }];
+  });
   const projected: ManifestV3 = {
     schemaVersion: "v3", generatedBy: "verify-fix bundle", generatedAt: safeDate(m.generatedAt) ?? "1970-01-01T00:00:00.000Z",
     incidentId: `multistep:${safeId(m.check.id) ?? "unknown"}:${safeId(failing?.id ?? passing?.id) ?? "unknown"}`,
@@ -213,9 +210,13 @@ export function constrainMultiStepManifest(m: ManifestV3,
       errorGroupId: null, rcaId: null,
       assets: m.provenance.assets.filter((asset) => (asset.result === "failing" || asset.result === "passing")
         && ASSET_NAMES.has(asset.name) && /^[a-f0-9]{64}$/.test(asset.sha256)
+        && (asset.type === "local-asset" || asset.type === "remote-asset")
         && Number.isSafeInteger(asset.bytes) && asset.bytes >= 0 && asset.bytes <= 64 * 1024 * 1024)
-        .map((asset) => ({ result: asset.result, name: asset.name, type: asset.type === "local-asset" ? "local-asset" : "remote-asset",
-          bytes: asset.bytes, sha256: asset.sha256 })),
+        .map((asset) => asset.type === "remote-asset" ? ({
+          result: asset.result, name: asset.name, type: "remote-asset", bytes: asset.bytes, sha256: asset.sha256,
+          resultId: safeId(asset.resultId) ?? undefined, assetType: asset.assetType,
+          manifestEntrySha256: asset.manifestEntrySha256,
+        }) : ({ result: asset.result, name: asset.name, type: "local-asset", bytes: asset.bytes, sha256: asset.sha256 })),
       apiCalls: m.provenance.apiCalls.slice(0, 1000).map((call) => ({ method: call.method === "GET" || call.method === "POST" ? call.method : "OTHER",
         url: API_OPERATIONS.has(call.url) ? call.url : "<checkly-request>", status: count(call.status, 599) })) },
     notes: ["Multistep evidence uses fixed routes, typed bodies, source bindings and error categories. Locally constructed fixtures prove mechanics only."],

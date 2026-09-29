@@ -11,12 +11,13 @@ import { knownRoute, knownStepTitle, MULTISTEP_ROUTES } from "./routes.ts";
 import { multiStepSourcePath } from "./files.ts";
 import { recordedNestedBookingConfirmed } from "./shape.ts";
 import { MULTISTEP_DETECTION_MODE } from "../scene/modes.ts";
+import { MULTISTEP_CHECK_NAME, storedMultiStepIdentityProblem } from "./identity.ts";
 
 const ASSET_NAMES = new Set(["test-results.json", "check-run-data.json", "logs.txt"]);
 const API_OPERATIONS = new Set(["asset", "get-check", "list-results", "list-assets", "get-result", "error-group", "rca"]);
 const SAFE_ASSUMPTIONS = new Set(["locations", "run-parallel", "env-vars", "target-resolution", "overlapping-run"]);
 const TRUSTED_LOCATIONS = new Set(["us-east-1", "eu-west-1"]);
-const TRUSTED_ENV_KEYS = new Set(["ENVIRONMENT_URL", "MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1"]);
+const TRUSTED_ENV_KEYS = new Set(["ENVIRONMENT_URL", "MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1", "VERCEL_AUTOMATION_BYPASS_SECRET"]);
 const safeLocation = (value: string): string => TRUSTED_LOCATIONS.has(value) ? value : "<unknown-location>";
 const safeId = (value: unknown): string | null => typeof value === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(value) ? value : null;
 const safeDate = (value: unknown): string | null => {
@@ -110,6 +111,7 @@ export function constrainMultiStepManifest(m: ManifestV3,
   const primary = m.check.file && paths.includes(m.check.file) ? m.check.file : null;
   const sourceText = primary ? sources.get(primary) : null;
   const sourceModel = primary && sourceText ? parseMultiStepProject(sources, primary) : null;
+  const invalidIdentity = storedMultiStepIdentityProblem(m, sourceModel);
   const invalidAsset = m.provenance.assets.some((asset) => !ASSET_NAMES.has(asset.name)
     || (asset.type !== "local-asset" && asset.type !== "remote-asset"
       || asset.type === "remote-asset" && (asset.assetType !== "report" && asset.assetType !== "file"
@@ -122,7 +124,7 @@ export function constrainMultiStepManifest(m: ManifestV3,
     const result = side === "failing" ? failing : passing;
     const pointer = side === "failing" ? m.recordings.multistepFailing : m.recordings.multistepPassing;
     const asset = m.provenance.assets.filter((item) => item.result === side && item.name === "test-results.json");
-    available[side] = !invalidAsset && Boolean(recordings[side] && result && primary && sourceText
+    available[side] = !invalidAsset && !invalidIdentity && Boolean(recordings[side] && result && primary && sourceText
       && pointer === `recordings/${side}.multistep.json` && asset.length === 1
       && matchesRemoteMultiStepBinding(recordings[side]!, {
         side, checkId: m.check.id, result: result!, sourceFile: primary!, sourceText: sourceText!,
@@ -138,6 +140,7 @@ export function constrainMultiStepManifest(m: ManifestV3,
   const problems = (side: "failing" | "passing"): { problems: string[] } | null => {
     const selected = m.multistep?.[side]?.problems.filter((item) => /^MULTISTEP_[A-Z_]+$/.test(item)).slice(0, 16) ?? [];
     if (invalidAsset) selected.push("MULTISTEP_ASSET_TYPE_INVALID");
+    if (invalidIdentity) selected.push(invalidIdentity);
     if (m.results[side] && !available[side]) selected.push("MULTISTEP_CAPTURE_BINDING_INVALID");
     if (side === "failing" && available.failing && !point?.assertion) selected.push("MULTISTEP_FAILURE_STEP_UNBOUND");
     if (side === "failing" && available.failing && !scenes.some((scene) => scene.type === "DETECTION")) selected.push("MULTISTEP_FAILURE_STEP_UNBOUND");
@@ -163,13 +166,14 @@ export function constrainMultiStepManifest(m: ManifestV3,
       description: failing ? "Recorded Multistep failure; raw diagnostics and RCA omitted." : "Recorded Multistep baseline; raw diagnostics omitted.",
       sourceReference: null, status: failing ? "captured" : "no-failure-yet" },
     check: { id: safeId(m.check.id) ?? "<unrecognized-id>", deployedId: safeId(m.check.deployedId) ?? "<unrecognized-id>",
-      name: "Multistep check", checkType: "MULTI_STEP", repo: null, file: primary, files: paths,
+      name: MULTISTEP_CHECK_NAME, checkType: "MULTI_STEP", repo: null, file: primary, files: paths,
       logicalId: safeId(m.check.logicalId), projectCommit: /^[a-f0-9]{40}$/.test(m.check.projectCommit ?? "") ? m.check.projectCommit : null },
     config: {
       frequencyMinutes: m.config.frequencyMinutes === null ? null : count(m.config.frequencyMinutes, 1440),
       locations: m.config.locations.map(safeLocation).slice(0, 2), privateLocations: [], runParallel: m.config.runParallel === true,
       retryStrategy: null, doubleCheck: typeof m.config.doubleCheck === "boolean" ? m.config.doubleCheck : null,
-      activated: m.config.activated === true, muted: m.config.muted === true, tags: [], runtimeId: null,
+      activated: m.config.activated === true, muted: m.config.muted === true,
+      tags: sourceModel?.construct?.tags ?? [], runtimeId: null,
       environmentVariables: m.config.environmentVariables.filter((entry) => TRUSTED_ENV_KEYS.has(entry.key))
         .map((entry) => ({ key: entry.key, secret: entry.secret === true })),
       playwright: null, apiRequest: null,

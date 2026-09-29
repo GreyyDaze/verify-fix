@@ -288,3 +288,25 @@ test("cli: `bundle` without credentials exits 2 with guidance; help lists both c
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("MULTI_STEP --keep-raw refuses before any result download or raw disk output", async () => {
+  const out = mkdtempSync(join(tmpdir(), "vf-multistep-no-raw-"));
+  try {
+    const { client, downloads } = fakeClient();
+    let listed = false;
+    client.getCheck = async () => ({ ...CHECK, checkType: "MULTI_STEP" });
+    client.listResults = async () => { listed = true; throw new Error("history must not be fetched"); };
+    const logs: string[] = [];
+    await assert.rejects(
+      buildBundle({ checkId: CHECK.id, outDir: out, keepRaw: true, assetsDir: "private-path-canary", log: (line) => logs.push(line) },
+        { client, accountId: "synthetic-account" }),
+      /MULTISTEP_RAW_OUTPUT_FORBIDDEN/,
+    );
+    assert.equal(listed, false);
+    assert.equal(downloads.length, 0);
+    assert.equal(existsSync(join(out, "raw")), false);
+    assert.ok(!logs.join(" ").includes("private-path-canary"));
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+});

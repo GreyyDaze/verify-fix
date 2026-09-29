@@ -23,6 +23,9 @@ new MultiStepCheck("slots-booking-multistep", {
   locations: ["us-east-1", "eu-west-1"],
   // Both locations run concurrently; per-region accounts keep them isolated.
   runParallel: true,
+  // An omitted double-check may inherit an account default that retries a
+  // failure. Preserve one attempt per scheduled run and fail closed on drift.
+  doubleCheck: false,
   tags: ["slots-booking", "verify-fix-example", "multistep"],
   environmentVariables: [
     { key: "ENVIRONMENT_URL", value: process.env.ENVIRONMENT_URL ?? "" },
@@ -34,6 +37,11 @@ new MultiStepCheck("slots-booking-multistep", {
     {
       key: "MULTISTEP_USER_EU_WEST_1",
       value: process.env.MULTISTEP_USER_EU_WEST_1 ?? "",
+      secret: true,
+    },
+    {
+      key: "VERCEL_AUTOMATION_BYPASS_SECRET",
+      value: process.env.CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET ?? "",
       secret: true,
     },
   ],

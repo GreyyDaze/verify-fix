@@ -18,6 +18,7 @@
 import type { ObservationValue } from "../types.ts";
 import { MULTISTEP_STEP_TITLES } from "./routes.ts";
 import { multiStepShapeProblems } from "./shape.ts";
+import { bindRawEvidence, rawJsonUniqueKeys, rawReporterSchema, rawTreeBounded } from "./raw-evidence.ts";
 
 export interface MultiStepRequestEvidence {
   /** request title from checklyData, when present */
@@ -118,8 +119,10 @@ function headerRecord(value: unknown, problems?: string[]): Record<string, strin
   const put = (name: unknown, item: unknown): void => {
     const text = Array.isArray(item) ? item.map(asString).filter((v): v is string => v !== null).join(", ") : asString(item);
     const key = asString(name);
-    if (key !== null && text !== null) out[key.toLowerCase()] = text;
-    else problems?.push("header entry does not read as text (corrupt evidence)");
+    if (key !== null && text !== null) {
+      if (Object.hasOwn(out, key.toLowerCase())) problems?.push("MULTISTEP_RAW_SCHEMA_INVALID");
+      out[key.toLowerCase()] = text;
+    } else problems?.push("header entry does not read as text (corrupt evidence)");
   };
   const record = asRecord(value);
   if (record) {
@@ -128,7 +131,7 @@ function headerRecord(value: unknown, problems?: string[]): Record<string, strin
   }
   if (Array.isArray(value)) {
     for (const entry of value) {
-      if (Array.isArray(entry) && entry.length >= 2) {
+      if (Array.isArray(entry) && entry.length === 2) {
         put(entry[0], entry[1]);
       } else {
         const item = asRecord(entry);
@@ -143,10 +146,10 @@ function headerRecord(value: unknown, problems?: string[]): Record<string, strin
 }
 
 /** Flatten nested `checklyData` arrays to their record elements (bounded, silent — may run twice per child). */
-function checklyRecords(child: JsonStep): Array<Record<string, unknown>> {
+function checklyRecords(child: JsonStep, problems: string[]): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
   const walk = (value: unknown, depth: number): void => {
-    if (depth > 4) return;
+    if (depth > 4) { problems.push("MULTISTEP_RAW_SCHEMA_INVALID"); return; }
     const record = asRecord(value);
     if (record) {
       out.push(record);
@@ -168,7 +171,7 @@ function unwrapDataField(value: unknown): unknown {
 }
 
 function requestEvidence(child: JsonStep, problems: string[]): MultiStepRequestEvidence | null {
-  const records = checklyRecords(child);
+  const records = checklyRecords(child, problems);
   const requests = records.filter((r) => "method" in r || "url" in r || "request" in r || "requestBody" in r || "requestHeaders" in r);
   const raw = requests[0] ?? null;
   if (!raw) return null;
@@ -248,7 +251,7 @@ function requestEvidence(child: JsonStep, problems: string[]): MultiStepRequestE
 
 /** Assertion evidence carried by checklyData (expected/actual), separate from request fields. */
 function checklyAssertionEvidence(child: JsonStep, failed: boolean, problems: string[]): MultiStepAssertionEvidence | null {
-  const records = checklyRecords(child);
+  const records = checklyRecords(child, problems);
   const assertions = records.filter((r) => "expected" in r || "expectedData" in r || "actual" in r || "actualData" in r);
   const raw = assertions[0] ?? null;
   if (!raw) return null;
@@ -423,7 +426,7 @@ function findResultSteps(report: JsonReport, problems: string[]): {
   let resultErrorInvalid = false;
   let sawSpecs = false;
   const walkSuite = (suite: unknown, depth: number): void => {
-    if (depth > 12 || entries.length > 500) return;
+    if (depth > 12 || entries.length > 500) { problems.push("MULTISTEP_RAW_SCHEMA_INVALID"); return; }
     const record = asRecord(suite);
     if (!record) return;
     const specs = Array.isArray(record.specs) ? record.specs : [];
@@ -532,11 +535,22 @@ export function normalizeMultiStepCapture(input: NormalizeMultiStepInput): Multi
     problems.push("test-results.json asset is missing — execution evidence is unavailable (UNCERTAIN)");
   }
   let report: JsonReport | null = null;
+  const rawRoots: unknown[] = [];
+  const register = (text: string, parsed: unknown, reporter = false): boolean => {
+    if (Buffer.byteLength(text, "utf8") > 32 * 1024 * 1024 || !rawTreeBounded(parsed)
+      || !rawJsonUniqueKeys(text) || reporter && !rawReporterSchema(parsed)) {
+      problems.push("MULTISTEP_RAW_SCHEMA_INVALID");
+      return false;
+    }
+    rawRoots.push(parsed);
+    return true;
+  };
   if (input.testResults !== null && input.testResults !== undefined && input.testResults !== "") {
     try {
       const parsed = JSON.parse(input.testResults);
       report = asRecord(parsed) as JsonReport | null;
       if (!report) problems.push("test-results.json is not a JSON object (corrupt or truncated asset)");
+      else if (!register(input.testResults, parsed, true)) report = null;
     } catch {
       problems.push("test-results.json is not valid JSON (corrupt or truncated asset)");
     }
@@ -624,6 +638,13 @@ export function normalizeMultiStepCapture(input: NormalizeMultiStepInput): Multi
     ? null
     : parseCheckRunData(input.checkRunData, problems);
 
+  for (const optional of [input.logs, input.checkRunData]) {
+    if (optional) {
+      try { register(optional, JSON.parse(optional)); }
+      catch { /* parseLogs/parseCheckRunData already assign a fixed problem */ }
+    }
+  }
+
   const failed = steps.some((s) => s.status === "failed");
   // Retain the contradiction independently of `problems` so a later caller
   // cannot promote a picked outer field by clearing a diagnostic list.
@@ -638,7 +659,9 @@ export function normalizeMultiStepCapture(input: NormalizeMultiStepInput): Multi
   if (stats && (stats.expected + stats.unexpected !== 1 || stats.flaky !== 0)) {
     problems.push("MULTISTEP_RESULT_STATS_INVALID");
   }
-  return { kind, stats, reporterStatus, reporterErrors, steps, checkRunData, logs, recurrence, problems: [...new Set(problems)] };
+  const capture = { kind, stats, reporterStatus, reporterErrors, steps, checkRunData, logs, recurrence, problems: [...new Set(problems)] };
+  if (!capture.problems.includes("MULTISTEP_RAW_SCHEMA_INVALID")) bindRawEvidence(capture, rawRoots);
+  return capture;
 }
 
 /**

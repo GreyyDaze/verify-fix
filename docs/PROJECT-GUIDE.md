@@ -1319,8 +1319,10 @@ candidates were also run manually through real Chromium against the local app.
 
 The app now returns the nested booking success payload while the checked-in
 single Multistep check still tests the historical flat `body.confirmed` on its
-book step. Its five ordered steps and one construct are checked in **without**
-deploying the check or editing that canonical stale assertion. The verifier's
+book step. Its five ordered steps and one construct (two parallel locations,
+explicit `doubleCheck: false` to prevent a failure rerun) are checked in
+**without** deploying the check or editing that canonical stale assertion.
+An omitted or unknown effective double-check is not admitted as proof. The verifier's
 remote-v3 admission, source policy, bounded asset/file/ZIP readers, exact
 HTTP-200 nested-field mutation, independent reporter/proxy/request audits and
 regional account isolation have local **synthetic** fixtures. The local test
@@ -1329,17 +1331,21 @@ those names and its approved bypass/environment label, not the shared browser
 or API values. A synthetic
 `PASS` with fabricated determinism/assumptions is not a Checkly, browser,
 deployment or cloud verdict. Historic Phase 6 `158/158` is not the current
-Phase 7 suite. The pre-commit Node v24.21.0 local checkpoint ran 286/286
-focused workflow/Multistep tests and 452 full-suite tests (445 pass, exactly
-seven known legacy seeded failures, zero skips). Those failures are old DSL
-assertions against the newly nested app response, not real Checkly failures;
-an eighth failure or a skip is unacceptable.
+Phase 7 suite. The current pre-commit Node v24.21.0 checkpoint passed
+166/166 focused Multistep/CLI/scene tests, 259/259 focused
+workflow/bundle/API tests and 1/1 packed external-consumer test, all with
+zero skips. The 464-test full suite had 457 pass, exactly the same seven
+known `test/verify.spec.ts` failures, zero skips. These are old DSL assertions
+against the newly nested app response, not real Checkly failures; an eighth
+failure or a skip is unacceptable. Root/example typechecks and builds,
+helper and workflow shell syntax checks, and the local collision check
+(5/5) also passed.
 
 | Gate | Locally implemented/staged | Not yet established |
 | --- | --- | --- |
 | Real evidence | v3 schema and admission exercised with mock authenticated-result paths and bounded synthetic ZIPs. | Actual passing and failing Multistep result assets, source line and parser/token semantics must be inspected; sanitized bundle must be produced with packed `verify-fix bundle` after explicit account approval. No new RCA is triggered here. |
 | URL roles | Secret-free GitHub preflight requires current `main`, same deployment ID/SHA/environment, distinct safe HTTPS origins, latest authenticated Vercel Bot success and a human status marked exactly `verify-fix:stable-alias-verified` (create it with `auto_inactive: false`). Missing/ambiguous/revoked status waits or fails before approval; after approval and after deployment preview recheck both IDs and URLs. | Human verification of the stable alias for the *same deployment*, generated URL HTTP-200 health readiness, approved bypass secret and account-backed Checkly parity. No Vercel API token or host guess. |
-| Protected job | Reusable workflow checks out the verifier and incident from the immutable `trusted_ref`, candidate dependencies separately, uses 0600 temporary files, verifies the generated URL before any deploy, then uses only the stable origin for Checkly deployment. An explicit reviewed Phase 7 bundle and bypass must exist or it fails closed. | Current `gate.yml` caller pin still points to the **older** reusable workflow; this staged one cannot run until a separately reviewed pin advance. A real protected PASS, actual `checkly deploy` and repaired scheduled green in both locations have not occurred. |
+| Protected job | Reusable workflow checks out the verifier and incident at immutable `verifier_ref` V and the helper snapshot at a distinct later immutable `workflow_ref` W. Candidate dependencies stay separate; the job uses 0600 temporary files, verifies the generated URL before any deploy, then uses only the stable origin for Checkly deployment. An explicit reviewed Phase 7 bundle and bypass must exist or it fails closed. | Current `gate.yml` caller pin still points to the **older** reusable workflow; this staged one cannot run until a separately reviewed pin advance. A real protected PASS, actual `checkly deploy` and repaired scheduled green in both locations have not occurred. |
 
 When real parity is authorized, use `checkly test --record --grep
 '^slots booking multistep transaction$' --retries 0` and **one** environment

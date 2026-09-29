@@ -11,6 +11,7 @@ import { SceneExecutor, multistepRegionForLocation } from "../../src/executor/sc
 import { runMultiStepSandbox } from "../../src/multistep/executor.ts";
 import { buildReport } from "../../src/report/report.ts";
 import type { Bundle, Scene } from "../../src/types.ts";
+import { syntheticRemoteBundle } from "./remote-fixture.ts";
 
 const WEB = new URL("../../examples/slots-booking/web/", import.meta.url).pathname;
 const FILE = "checks/multistep-booking.spec.ts";
@@ -61,56 +62,43 @@ function startApp(): Promise<App> {
       stop: () => new Promise<void>((done) => server.close(() => done())) });
   }));
 }
-function scene(): Scene {
-  return {
-    sceneId: "two-regions", type: "REPRODUCTION", mode: "live-concurrent:2", state: "synthetic flat contract",
-    environment: "target", verdict: { mustFail: false,
-      provenance: { kind: "recorded", runId: "synthetic", artifactId: "recordings/failing.multistep.json" },
-      envAssumptions: ["locations", "target-resolution"] },
-    experiments: [{ repetitions: 1, durationSec: 30, expectStable: true }], assertionsInvolved: [],
-  };
+function scene(bundle: Bundle): Scene {
+  return bundle.scenes.find((row) => row.type === "REPRODUCTION")!;
 }
-function bundle(locations: string[] = ["us-east-1", "eu-west-1"]): Bundle {
-  return {
-    schemaVersion: "v3", incidentId: "synthetic-region-transaction", incident: { title: "synthetic", description: "synthetic" },
-    check: { repo: "", file: FILE, name: "slots booking multistep transaction", checkType: "MULTI_STEP", logicalId: "slots-booking-multistep", deployedId: "synthetic" },
-    checkSource: SPEC, files: { [FILE]: SPEC, "checks/multistep-booking.check.ts": CONSTRUCT }, configFile: null,
-    config: { runParallel: true, locations, frequencyMinutes: 5,
-      environmentVariables: ["ENVIRONMENT_URL", "MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1"] },
-    recordedOrigin: null, dir: WEB, playwright: null, api: null,
-    multistep: { kind: "failing", steps: ["login", "session", "slots", "book 09:30"], problems: [] },
-    scenes: [scene()], envAssumptions: [{ id: "locations", text: "fixture", verified: true }, { id: "target-resolution", text: "fixture", verified: true }],
-    determinism: { targetRuns: 20, achieved: 20, sequentialPassRate: 1, overlapFailRate: 0, lastVerifiedAt: "2026-09-27" },
-    runBudget: { maxPerScene: 1, used: 0 }, oracleProvenance: { recorded: 1, codeDerived: 0 },
-  };
-}
+const BYPASS = "synthetic-bypass-only-5610";
+const identities = { MULTISTEP_USER_US_EAST_1: EAST, MULTISTEP_USER_EU_WEST_1: WEST,
+  CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: BYPASS };
 
 // The real adapter may take a few seconds to synthesize per-run certificates.
 test("two locations receive DISTINCT trusted REGION accounts; ordered traffic, measured zero browsers and per-run costs propagate to report", { timeout: 180_000 }, async () => {
   const app = await startApp();
-  const b = bundle();
+  const b = await syntheticRemoteBundle();
   const executor = new SceneExecutor({ target: app.origin, projectDir: WEB,
-    env: { MULTISTEP_USER_US_EAST_1: EAST, MULTISTEP_USER_EU_WEST_1: WEST }, barrierTimeoutMs: 25_000, sandboxTimeoutMs: 90_000 });
+    env: identities, barrierTimeoutMs: 25_000, sandboxTimeoutMs: 90_000 });
   try {
     assert.equal(multistepRegionForLocation("us-east-1"), "us-east-1");
     assert.equal(multistepRegionForLocation("eu-west-1"), "eu-west-1");
-    const observation = await executor.runScene(b, SPEC, scene());
+    const observation = await executor.runScene(b, SPEC, scene(b));
     assert.equal(observation.observed, "pass", observation.reason ?? JSON.stringify(observation.trace));
-    assert.equal(observation.repetitions, 1);
-    assert.deepEqual(app.accounts.slice().sort(), [WEST, EAST].sort(), "each monitoring location used its OWN account");
-    assert.equal(app.paths.length, 8, "four ordered upstream requests per sandbox run");
+    const repeats = scene(b).experiments[0]!.repetitions;
+    assert.equal(observation.repetitions, repeats);
+    assert.deepEqual(app.accounts.slice().sort(), [...Array(repeats).fill(WEST), ...Array(repeats).fill(EAST)].sort(),
+      "each monitoring location used its OWN account in every repetition");
+    assert.equal(app.paths.length, 8 * repeats, "four ordered upstream requests per sandbox run");
     const byMethod = app.paths.reduce((counts, path) => (counts.set(path, (counts.get(path) ?? 0) + 1), counts), new Map<string, number>());
-    assert.deepEqual([...byMethod.entries()].sort(), [["POST /api/login", 2], ["GET /api/session", 2], ["GET /api/slots", 2], ["POST /api/book", 2]].sort());
+    assert.deepEqual([...byMethod.entries()].sort(), [["POST /api/login", 2 * repeats], ["GET /api/session", 2 * repeats],
+      ["GET /api/slots", 2 * repeats], ["POST /api/book", 2 * repeats]].sort());
     const cost = executor.costReport();
-    assert.deepEqual(cost.multiStepBrowserCounts, [0, 0], "actual per-run descendant process samples, not the declared browser project count");
-    assert.deepEqual(cost.byScene[0]?.multiStepBrowserCounts, [0, 0]);
+    assert.deepEqual(cost.multiStepBrowserCounts, Array(2 * repeats).fill(0),
+      "actual per-run descendant process samples, not the declared browser project count");
+    assert.deepEqual(cost.byScene[0]?.multiStepBrowserCounts, Array(2 * repeats).fill(0));
     assert.equal(cost.browserProcesses, 0);
-    assert.equal(cost.httpRequests, 8);
+    assert.equal(cost.httpRequests, 8 * repeats);
     const report = buildReport({ bundle: b, determinismGate: { blocked: false }, unverifiedAssumptions: [] } as unknown as Parameters<typeof buildReport>[0],
       { verdict: "UNCERTAIN", exitCode: 2, rows: [], reasons: [], adequacy: null, weakness: null }, new Map(),
       { cost, multistep: b.multistep });
-    assert.match(report.markdown, /Multistep browser-process measurements: 2 run\(s\), 2 measured, 0 unavailable; peak 0/);
-    assert.deepEqual((report.json.cost as typeof cost).multiStepBrowserCounts, [0, 0]);
+    assert.match(report.markdown, new RegExp(`Multistep browser-process measurements: ${2 * repeats} run\\(s\\), ${2 * repeats} measured, 0 unavailable; peak 0`));
+    assert.deepEqual((report.json.cost as typeof cost).multiStepBrowserCounts, Array(2 * repeats).fill(0));
   } finally {
     await executor.close();
     await app.stop();
@@ -119,16 +107,17 @@ test("two locations receive DISTINCT trusted REGION accounts; ordered traffic, m
 
 test("project-level config cannot relabel a Multistep construct's two trusted locations as one region", { timeout: 180_000 }, async () => {
   const app = await startApp();
-  const b = bundle();
+  const b = await syntheticRemoteBundle();
   const executor = new SceneExecutor({ target: app.origin, projectDir: WEB,
-    env: { MULTISTEP_USER_US_EAST_1: EAST, MULTISTEP_USER_EU_WEST_1: WEST } });
+    env: identities });
   try {
-    const observation = await executor.runScene(b, SPEC, scene(), { phase: "candidate", files: b.files,
+    const observation = await executor.runScene(b, SPEC, scene(b), { phase: "candidate", files: b.files,
       config: { ...b.config!, locations: ["us-east-1"], runParallel: false } });
     assert.equal(observation.observed, "pass");
-    assert.deepEqual(app.accounts.slice().sort(), [WEST, EAST].sort());
-    assert.equal(app.paths.length, 8);
-    assert.deepEqual(executor.costReport().multiStepBrowserCounts, [0, 0]);
+    const repeats = scene(b).experiments[0]!.repetitions;
+    assert.deepEqual(app.accounts.slice().sort(), [...Array(repeats).fill(WEST), ...Array(repeats).fill(EAST)].sort());
+    assert.equal(app.paths.length, 8 * repeats);
+    assert.deepEqual(executor.costReport().multiStepBrowserCounts, Array(2 * repeats).fill(0));
   } finally {
     await executor.close();
     await app.stop();
@@ -138,28 +127,31 @@ test("project-level config cannot relabel a Multistep construct's two trusted lo
 test("unknown or conflicting region is UNCERTAIN before a runner starts; CI is reserved inside the adapter", { timeout: 180_000 }, async () => {
   const app = await startApp();
   const unknown = new SceneExecutor({ target: app.origin, projectDir: WEB,
-    env: { MULTISTEP_USER_US_EAST_1: EAST, MULTISTEP_USER_EU_WEST_1: WEST } });
+    env: identities });
   const conflict = new SceneExecutor({ target: app.origin, projectDir: WEB,
-    env: { MULTISTEP_USER_US_EAST_1: EAST, MULTISTEP_USER_EU_WEST_1: WEST, REGION: "us-east-1" } });
+    env: { ...identities, REGION: "us-east-1" } });
   const dirty = new SceneExecutor({ target: app.origin, projectDir: WEB,
-    env: { MULTISTEP_USER_US_EAST_1: `${EAST} `, MULTISTEP_USER_EU_WEST_1: EAST } });
+    env: { ...identities, MULTISTEP_USER_US_EAST_1: `${EAST} `, MULTISTEP_USER_EU_WEST_1: EAST } });
   try {
     assert.equal(multistepRegionForLocation("ap-south-1"), null);
-    const a = await unknown.runScene(bundle(["ap-south-1", "eu-west-1"]), SPEC, scene());
+    const altered = await syntheticRemoteBundle();
+    altered.config!.locations = ["ap-south-1", "eu-west-1"];
+    const a = await unknown.runScene(altered, SPEC, scene(altered));
     assert.equal(a.observed, "uncertain");
-    assert.match(a.reason ?? "", /both trusted regions/);
+    assert.match(a.reason ?? "", /on-disk remote authority/);
     assert.equal(unknown.costReport().localRuns, 0);
-    const c = await conflict.runScene(bundle(), SPEC, scene());
+    const bound = await syntheticRemoteBundle();
+    const c = await conflict.runScene(bound, SPEC, scene(bound));
     assert.equal(c.observed, "uncertain");
     assert.match(c.reason ?? "", /overrides a trusted runner key/);
     assert.equal(conflict.costReport().localRuns, 0);
-    const d = await dirty.runScene(bundle(), SPEC, scene());
+    const d = await dirty.runScene(bound, SPEC, scene(bound));
     assert.equal(d.observed, "uncertain");
-    assert.match(d.reason ?? "", /both be present and distinct/);
+    assert.match(d.reason ?? "", /regional account or protected bypass inputs/);
     assert.equal(dirty.costReport().localRuns, 0);
     assert.equal(app.paths.length, 0);
     const out = await runMultiStepSandbox({ projectDir: WEB, baseUrl: app.origin,
-      files: { [FILE]: SPEC }, checkFile: FILE, env: { CI: "0", REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: EAST, MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" } });
+      files: { [FILE]: SPEC }, checkFile: FILE, env: { ...identities, CI: "0", REGION: "us-east-1" } });
     assert.equal(out.inconclusive, true);
     assert.equal(out.browserProcesses, null);
     assert.equal(out.environmentOrigin, null);
@@ -188,14 +180,15 @@ test("a real browser-like DESCENDANT process is sampled, propagated to scene cos
   ].join("\n"));
   const app = await startApp();
   const executor = new SceneExecutor({ target: app.origin, projectDir,
-    env: { MULTISTEP_USER_US_EAST_1: EAST, MULTISTEP_USER_EU_WEST_1: WEST } });
+    env: identities });
   try {
-    const observation = await executor.runScene(bundle(), SPEC, { ...scene(), mode: "live" });
+    const bound = await syntheticRemoteBundle();
+    const observation = await executor.runScene(bound, SPEC, scene(bound));
     assert.equal(observation.observed, "uncertain", "a stub CLI cannot satisfy the bridge/reporter proof");
     assert.equal(app.paths.length, 0);
     const counts = executor.costReport().multiStepBrowserCounts;
     assert.ok(counts && counts[0] !== null && counts[0] >= 1, JSON.stringify(counts));
-    assert.equal(executor.costReport().browserProcesses, counts[0]);
+    assert.equal(executor.costReport().browserProcesses, counts.reduce<number>((sum, count) => sum + (count ?? 0), 0));
     assert.deepEqual(executor.costReport().byScene[0]?.multiStepBrowserCounts, counts);
   } finally {
     await executor.close();
@@ -212,7 +205,7 @@ test("successful ordered bridge+reporter traffic without browser sampling remain
   try {
     process.env.PATH = `${fakeBin}:${saved ?? ""}`;
     const out = await runMultiStepSandbox({ projectDir: WEB, baseUrl: app.origin,
-      files: { [FILE]: SPEC }, checkFile: FILE, env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: EAST, MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" } });
+      files: { [FILE]: SPEC }, checkFile: FILE, env: { ...identities, REGION: "us-east-1" } });
     assert.equal(app.paths.length, 4, "the transaction actually ran");
     assert.equal(out.proxyEvidence.length, 4);
     assert.equal(out.reporterEvidence.length, 4);
@@ -226,21 +219,16 @@ test("successful ordered bridge+reporter traffic without browser sampling remain
   }
 });
 
-test("concurrency one runs BOTH trusted regions sequentially, not only the first account", { timeout: 180_000 }, async () => {
+test("the canonical parallel construct cannot be changed into a sequential schedule in memory", async () => {
   const app = await startApp();
-  const b = bundle();
-  b.config!.runParallel = false; // canonical two-region check scheduled one at a time
-  const executor = new SceneExecutor({ target: app.origin, projectDir: WEB,
-    env: { MULTISTEP_USER_US_EAST_1: EAST, MULTISTEP_USER_EU_WEST_1: WEST } });
+  const b = await syntheticRemoteBundle();
+  b.config!.runParallel = false;
+  const executor = new SceneExecutor({ target: app.origin, projectDir: WEB, env: identities });
   try {
-    const observation = await executor.runScene(b, SPEC, scene());
-    assert.equal(observation.observed, "pass", observation.reason);
-    assert.deepEqual(app.accounts, [EAST, WEST]);
-    assert.equal(app.paths.length, 8);
-    assert.deepEqual(executor.costReport().multiStepBrowserCounts, [0, 0]);
-    assert.equal(executor.costReport().httpRequests, 8);
-  } finally {
-    await executor.close();
-    await app.stop();
-  }
+    const observation = await executor.runScene(b, SPEC, scene(b));
+    assert.equal(observation.observed, "uncertain");
+    assert.match(observation.reason ?? "", /on-disk remote authority/);
+    assert.equal(app.paths.length, 0);
+    assert.equal(executor.costReport().localRuns, 0);
+  } finally { await executor.close(); await app.stop(); }
 });

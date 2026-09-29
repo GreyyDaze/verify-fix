@@ -77,7 +77,7 @@ export function evaluateMultiStepPolicy(
       }
       const keep = (c: NonNullable<MultiStepSourceModel["construct"]>) => ({
         name: c.name, entrypoint: c.entrypoint, frequencyMinutes: c.frequencyMinutes,
-        locations: c.locations, runParallel: c.runParallel, activated: c.activated,
+        locations: c.locations, runParallel: c.runParallel, doubleCheck: c.doubleCheck, activated: c.activated,
         muted: c.muted, tags: c.tags, environmentKeys: c.environmentKeys, environmentDefinitions: c.environmentDefinitions,
       });
       if (JSON.stringify(keep(candidate.construct)) !== JSON.stringify(keep(original.construct))) {

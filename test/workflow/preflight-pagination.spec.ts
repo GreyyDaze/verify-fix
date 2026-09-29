@@ -209,6 +209,19 @@ test("an unlinked full page or skipped page cannot silently omit older statuses"
   assert.equal(skipped.calls.length, 1);
 });
 
+test("a 101-row status page is invalid even without pagination or excessive bytes", async () => {
+  const rows = Array.from({ length: 101 }, (_, id) => ({ id }));
+  const noLink = makeFetch([{ status: 200, body: rows, link: null }]);
+  assert.deepEqual(await fetchAllStatuses(REPO, DEPLOYMENT_ID, TOKEN, noLink.fetchImpl),
+    { error: "statuses-response-invalid" });
+  assert.equal(noLink.calls.length, 1);
+  const linked = makeFetch([{ status: 200, body: rows,
+    link: `<https://api.github.com${EXPECTED_PATH}?per_page=100&page=2>; rel="next"` }]);
+  assert.deepEqual(await fetchAllStatuses(REPO, DEPLOYMENT_ID, TOKEN, linked.fetchImpl),
+    { error: "statuses-response-invalid" });
+  assert.equal(linked.calls.length, 1);
+});
+
 test("an oversized or redirected GitHub status response never becomes evidence", async () => {
   const huge = makeFetch([{ status: 200, body: "x".repeat(1024 * 1024), link: null }]);
   assert.deepEqual(await fetchAllStatuses(REPO, DEPLOYMENT_ID, TOKEN, huge.fetchImpl), { error: "statuses-response-invalid" });

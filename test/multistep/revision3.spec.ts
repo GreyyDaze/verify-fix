@@ -297,7 +297,8 @@ test("rev3/executor: the child runs with a FRESH HOME (removed afterwards), a re
     projectDir: p,
     files,
     checkFile: "multistep-booking.spec.ts",
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", LD_LIBRARY_PATH: "/must/not/leak", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", LD_LIBRARY_PATH: "/must/not/leak", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass-sandbox-238" },
   });
   // NOTE: LD_LIBRARY_PATH in ctx.env is a RESERVED key → rejected before running
   assert.equal(outcome.inconclusive, true, outcome.reason ?? "");
@@ -314,7 +315,8 @@ test("rev3/executor: the child runs with a FRESH HOME (removed afterwards), a re
     projectDir: p2,
     files: files2,
     checkFile: "multistep-booking.spec.ts",
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass-sandbox-238" },
   });
   assert.equal(outcome2.inconclusive, true, "a fake JSON report without bridge/reporter traffic cannot PASS");
   assert.equal(outcome2.passed, false);
@@ -342,7 +344,8 @@ test("rev3/executor: reporter stdout over the bound yields no admissible evidenc
   const outcome = await runMultiStepSandbox({
     baseUrl: "https://fixture.invalid", projectDir: p, files,
     checkFile: "multistep-booking.spec.ts",
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass-sandbox-238" },
   });
   assert.equal(outcome.passed, false);
   assert.equal(outcome.inconclusive, true);
@@ -359,7 +362,8 @@ test("rev3/executor: raw stderr content is never retained or used as evidence", 
     projectDir: p,
     files,
     checkFile: "multistep-booking.spec.ts",
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass-sandbox-238" },
   });
   assert.equal(outcome.inconclusive, true, "stderr cannot supply missing bridge/reporter observations");
   assert.equal(outcome.passed, false);
@@ -382,7 +386,8 @@ test("rev3/executor: bridge/reporter mismatch — bridge traffic that does not m
       projectDir: p,
       files,
       checkFile: "multistep-booking.spec.ts",
-      env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" },
+      env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass-sandbox-238" },
     });
     assert.equal(outcome.passed, false);
     assert.equal(outcome.inconclusive, true);
@@ -396,10 +401,10 @@ test("rev3/executor: bridge/reporter mismatch — bridge traffic that does not m
 test("rev3/executor: bridgeReporterMismatch — zero bridge requests never PASS; exact matches stand", () => {
   const capture = normalizeMultiStepCapture({ testResults: passingTestResults() });
   const bridgeEvs = [
-    { index: 1, method: "POST", path: "/api/login", queryKeys: [], requestHeaderNames: [], status: 200, authorization: false },
-    { index: 2, method: "GET", path: "/api/session", queryKeys: [], requestHeaderNames: [], status: 200, authorization: true },
-    { index: 3, method: "GET", path: "/api/slots", queryKeys: [], requestHeaderNames: [], status: 200, authorization: false },
-    { index: 4, method: "POST", path: "/api/book", queryKeys: [], requestHeaderNames: [], status: 200, authorization: true },
+    { index: 1, method: "POST", path: "/api/login", queryKeys: [], requestHeaderNames: ["x-vercel-protection-bypass"], status: 200, authorization: false },
+    { index: 2, method: "GET", path: "/api/session", queryKeys: [], requestHeaderNames: ["x-vercel-protection-bypass"], status: 200, authorization: true },
+    { index: 3, method: "GET", path: "/api/slots", queryKeys: [], requestHeaderNames: ["x-vercel-protection-bypass"], status: 200, authorization: false },
+    { index: 4, method: "POST", path: "/api/book", queryKeys: [], requestHeaderNames: ["x-vercel-protection-bypass"], status: 200, authorization: true },
   ];
   const auditOf = (items: typeof bridgeEvs) => items.map(({ index, method, path, status, authorization }) => ({
     index, step: ["login", "session", "slots", "book 09:30"][index - 1]!,
@@ -439,7 +444,8 @@ test("rev3/executor: the canonical API-only spec is statically browser-free; a b
     projectDir: project,
     files: { "bad.spec.ts": bad },
     checkFile: "bad.spec.ts",
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass-sandbox-238" },
   });
   assert.equal(outcome.passed, false);
   assert.equal(outcome.inconclusive, true);
@@ -517,7 +523,7 @@ test("rev3/sanitize: account-inside-token overlap is replaced longest-first and 
 test("rev3/sanitize: strict allow-list — unknown keys are dropped, check-run metadata removed, logs content redacted", () => {
   const raw = rawPassing();
   const login = resultSteps(raw).find((s) => s.title === "login")!;
-  login.steps[0].checklyData[0].timings = { startTime: 1, endTime: 2, rawAuthorizationHeader: `Bearer ${FAKE_TOKEN}` };
+  login.steps[0].checklyData[0].timings = { startTime: 1, endTime: 2, rawAuthorizationHeader: "untrusted-timing-extra" };
   const capture = normalizeMultiStepCapture({ testResults: requery(raw), checkRunData: JSON.stringify({
     dependencies: { "@playwright/test": "1.50.0" },
     imports: [{ path: "x" }],

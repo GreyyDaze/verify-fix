@@ -191,7 +191,8 @@ test("unsupported Multistep syntax is UNCERTAIN before any scene/runner executes
   assert.match(invalid.reason ?? "", /source is unsupported before execution/);
   assert.equal(invalid.environmentOrigin, null, "source preflight runs before missing dependency lookup");
   const unavailable = await runMultiStepSandbox({ projectDir: emptyProject, baseUrl: "https://fixture.invalid",
-    checkFile: FILE, files: Object.fromEntries(files()), env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "fixture-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" } });
+    checkFile: FILE, files: Object.fromEntries(files()), env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "fixture-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass-sandbox-110" } });
   assert.match(unavailable.reason ?? "", /runner dependencies are unavailable/);
   assert.ok(!JSON.stringify(unavailable).includes(emptyProject), "raw project paths never become sandbox evidence");
   const unsafe = await runMultiStepSandbox({ projectDir: emptyProject, baseUrl: "https://fixture.invalid",
@@ -234,10 +235,10 @@ test("bridge traffic and JSON requests cannot replace a missing dedicated report
   assert.ok(capture.ok);
   if (!capture.ok) return;
   const bridge = [
-    { index: 1, method: "POST", path: "/api/login", status: 200, hasQuery: false, queryKeys: [], requestHeaderNames: [], authorization: false },
-    { index: 2, method: "GET", path: "/api/session", status: 200, hasQuery: false, queryKeys: [], requestHeaderNames: [], authorization: true },
-    { index: 3, method: "GET", path: "/api/slots", status: 200, hasQuery: false, queryKeys: [], requestHeaderNames: [], authorization: false },
-    { index: 4, method: "POST", path: "/api/book", status: 200, hasQuery: false, queryKeys: [], requestHeaderNames: [], authorization: true },
+    { index: 1, method: "POST", path: "/api/login", status: 200, hasQuery: false, queryKeys: [], requestHeaderNames: ["x-vercel-protection-bypass"], authorization: false },
+    { index: 2, method: "GET", path: "/api/session", status: 200, hasQuery: false, queryKeys: [], requestHeaderNames: ["x-vercel-protection-bypass"], authorization: true },
+    { index: 3, method: "GET", path: "/api/slots", status: 200, hasQuery: false, queryKeys: [], requestHeaderNames: ["x-vercel-protection-bypass"], authorization: false },
+    { index: 4, method: "POST", path: "/api/book", status: 200, hasQuery: false, queryKeys: [], requestHeaderNames: ["x-vercel-protection-bypass"], authorization: true },
   ];
   assert.match(bridgeReporterMismatch(bridge, capture.capture, null) ?? "", /dedicated request audit missing/);
   const wrongOrder = ["/api/session", "/api/login", "/api/slots", "/api/book"] as const;
@@ -485,9 +486,9 @@ test("critical scalar ++ and -- (regional selection, slot, versions) cannot pres
     const altered = SPEC.replace("  await test.step('confirm transaction'", `  ${mutation}\n  await test.step('confirm transaction'`);
     assert.notEqual(altered, SPEC);
     const model = candidate(altered);
-    assert.ok(model.errors.some((error) => /security-critical Multistep.*scalar/.test(error)), mutation);
+    assert.ok(model.script?.banned.some((reason) => /security-critical Multistep scalar increment/.test(reason)), mutation);
     const policy = evaluateMultiStepPolicy(ORIGINAL, model);
-    assert.ok(policy.uncertain || policy.rejected, mutation);
+    assert.match(policy.rejected ?? "", /security-critical Multistep scalar increment/, mutation);
     const out = await runMultiStepSandbox({ projectDir: WEB, baseUrl: "https://fixture.invalid", checkFile: FILE,
       files: Object.fromEntries(files(altered)), originalFiles: Object.fromEntries(files()),
       env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "user-fixture-001", MULTISTEP_USER_EU_WEST_1: "user-fixture-002" } });

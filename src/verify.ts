@@ -20,6 +20,7 @@ import type { CandidateRevisionMetadata, CandidateTargetBinding } from "./candid
 import { evaluateApiPolicy, type ApiPolicyResult } from "./api/policy.ts";
 import { evaluateMultiStepPolicy, type MultiStepPolicyResult } from "./multistep/policy.ts";
 import { parseMultiStepProject } from "./multistep/source.ts";
+import { multiStepDiskRebound } from "./multistep/rebind.ts";
 
 export const PR12_HEALTHY_RUNS = 5; // PR-12: ≥5 repeated healthy runs, else flake → UNCERTAIN
 
@@ -73,6 +74,8 @@ export function makeExecutor(opts: { target?: string | null; targetRevision?: st
 export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   const verifyStartedAt = Date.now();
   const { bundle, verbose } = opts;
+  const diskBound = bundle.schemaVersion !== "v3" || bundle.check.checkType !== "MULTI_STEP"
+    || multiStepDiskRebound(bundle);
   const patch: PatchSet = typeof opts.patch === "string" ? inlinePatch(bundle, opts.patch) : opts.patch;
   const patchSource = patchedCheckSource(bundle, patch);
   const executor = opts.executor ?? makeExecutor({ target: opts.target, targetRevision: opts.targetRevision, env: opts.env, environmentName: opts.environmentName, maxRunsPerScene: opts.maxRunsPerScene, projectDir: opts.projectDir, browserExecutablePath: opts.browserExecutablePath, verbose });
@@ -108,6 +111,12 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   let envDodge = detectEnvScopeDodge(bundle.checkSource, patchSource, { locations: runConfig?.locations, declaredEnvKeys: declared });
   if (isMultiStep && envDodge) envDodge = "regional account data flow changed or generated at runtime — trusted per-location mapping not proven";
   const provided = { ...(opts.env ?? {}) };
+  // The Checkly construct reads its approved CHECKLY_SECRET_* input and injects
+  // the protected-target bypass as a check variable. Mark availability only;
+  // never copy the secret value into verification diagnostics or evidence.
+  if (isMultiStep && provided.CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET) {
+    provided.VERCEL_AUTOMATION_BYPASS_SECRET = "available-via-approved-checkly-binding";
+  }
   const regionalKeys = regionalUserKeys(patchSource, { locations: runConfig?.locations, declaredEnvKeys: declared });
   if (!envDodge && regionalKeys) {
     const values = regionalKeys.map((key) => provided[key]).filter((value): value is string => Boolean(value));
@@ -135,6 +144,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   const added = newFiles(bundle, patch);
 
   const contract = buildContract(bundle, patchSource, candidateFileMap, candidateCheckFile);
+  if (!diskBound) contract.provenanceViolations.push("MULTISTEP_DISK_BINDING_INVALID");
   if (verbose) {
     console.error(`[verify] ${bundle.incidentId}: ${bundle.scenes.length} scenes, determinism gate blocked=${contract.determinismGate.blocked}, config changes=${configPolicy.changes.length}, env missing=${envCheck.missing.map((m) => m.name).join(",") || "none"}`);
   }
@@ -142,7 +152,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   const observations = new Map<string, SceneObservation>();
   // Unsupported Multistep source is a pre-execution UNCERTAIN gate. A child
   // must never run first and only *then* have its result changed to UNCERTAIN.
-  const missingEnvReason = multistepPolicy?.uncertain
+  const missingEnvReason = (!diskBound ? "MULTISTEP_DISK_BINDING_INVALID" : null) ?? multistepPolicy?.uncertain
     ?? apiPolicy?.uncertain
     ?? (apiPolicy && !opts.target ? "ENVIRONMENT_URL is missing; pass --target so {{ENVIRONMENT_URL}} can be resolved without a fallback" : null)
     ?? (envCheck.missing.length > 0
@@ -203,6 +213,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     let detObs: SceneObservation | null = null;
     let healthyObs: SceneObservation | null = null;
     let survived: boolean;
+    let inconclusive = false;
     if (staticKill) {
       survived = false;
     } else if (missingEnvReason) {
@@ -213,12 +224,18 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
       // A detection kill is conclusive. Avoid a paid remote healthy run.
       healthyObs = !detCaught && healthyScene ? await executor.runScene(bundle, m.source, healthyScene, mutationCtx) : null;
       const healthyCaught = healthyObs?.observed === "fail"; // broke healthy → caught
-      survived = !(detCaught || healthyCaught);
+      // A budget, timeout, missing report or unavailable runner is not a
+      // mutant kill and is not proof the mutant survived either. Only two
+      // admitted observations (or a conclusive kill) can decide it.
+      inconclusive = !detCaught && !healthyCaught
+        && (detObs?.observed == null || healthyObs?.observed == null
+          || detObs.observed === "uncertain" || healthyObs.observed === "uncertain");
+      survived = !inconclusive && !(detCaught || healthyCaught);
     }
-    mutantResults.push({ name: m.name, family: m.family, survived, detail: m.detail });
+    mutantResults.push({ name: m.name, family: m.family, survived, ...(inconclusive ? { inconclusive: true } : {}), detail: m.detail });
     if (verbose) {
       const how = staticKill ? `static: ${staticKill}` : `det="${detObs?.observed ?? "n/a"}", healthy="${healthyObs?.observed ?? "n/a"}"`;
-      console.error(`[verify] mutant ${m.name} (${m.family}) survived=${survived} (${how})`);
+      console.error(`[verify] mutant ${m.name} (${m.family}) outcome=${inconclusive ? "inconclusive" : survived ? "survived" : "killed"} (${how})`);
     }
   }
   const healthySceneIds = bundle.scenes.filter((s) => s.type === "HEALTHY").map((s) => s.sceneId);
@@ -227,6 +244,8 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
 
   const adequacy = assessAdequacy({ contract, sceneObservations: observations, mutants: mutantResults });
 
+  if (diskBound && bundle.schemaVersion === "v3" && bundle.check.checkType === "MULTI_STEP"
+    && !multiStepDiskRebound(bundle)) contract.provenanceViolations.push("MULTISTEP_DISK_BINDING_INVALID");
   const decision = decide({
     contract,
     observations,
@@ -236,30 +255,30 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     runBudgetExhausted: executor.budgetExhausted || false,
   });
 
-  // ── static rejections outrank whatever the scenes said ───────────────────
+  // ── static rejections outrank observations only for admitted bundles ────
   // A removed incident check, dodge, or masking-only config change is a
   // definite finding, not missing evidence: FAILED even when scenes did not run.
-  if (patch.rejection) {
+  if (!contract.provenanceViolations.length && patch.rejection) {
     decision.reasons.push(`candidate identity: ${patch.rejection}`);
     decision.verdict = "FAILED";
     decision.exitCode = 1;
   }
-  if (envDodge) {
+  if (!contract.provenanceViolations.length && envDodge) {
     decision.reasons.push(`env-scope dodge detected: ${envDodge}`);
     decision.verdict = "FAILED";
     decision.exitCode = 1;
   }
-  if (configPolicy.rejected) {
+  if (!contract.provenanceViolations.length && configPolicy.rejected) {
     decision.reasons.push(`config policy: ${configPolicy.rejected}`);
     decision.verdict = "FAILED";
     decision.exitCode = 1;
   }
-  if (apiPolicy?.rejected) {
+  if (!contract.provenanceViolations.length && apiPolicy?.rejected) {
     decision.reasons.push(`API policy: ${apiPolicy.rejected}`);
     decision.verdict = "FAILED";
     decision.exitCode = 1;
   }
-  if (multistepPolicy?.rejected) {
+  if (!contract.provenanceViolations.length && multistepPolicy?.rejected) {
     decision.reasons.push(`multistep policy: ${multistepPolicy.rejected}`);
     decision.verdict = "FAILED";
     decision.exitCode = 1;
@@ -267,17 +286,17 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   for (const n of configPolicy.notes) decision.reasons.push(`config: ${n}`);
   for (const n of apiPolicy?.notes ?? []) decision.reasons.push(`API: ${n}`);
   for (const n of multistepPolicy?.notes ?? []) decision.reasons.push(`multistep: ${n}`);
-  if (apiPolicy?.uncertain && !patch.rejection && !envDodge && !configPolicy.rejected && !apiPolicy.rejected && !multistepPolicy?.rejected) {
+  if (!contract.provenanceViolations.length && apiPolicy?.uncertain && !patch.rejection && !envDodge && !configPolicy.rejected && !apiPolicy.rejected && !multistepPolicy?.rejected) {
     decision.reasons.push(`API evidence unresolved: ${apiPolicy.uncertain}`);
     decision.verdict = "UNCERTAIN";
     decision.exitCode = 2;
   }
-  if (multistepPolicy?.uncertain && !patch.rejection && !envDodge && !configPolicy.rejected && !apiPolicy?.rejected && !multistepPolicy.rejected) {
+  if (!contract.provenanceViolations.length && multistepPolicy?.uncertain && !patch.rejection && !envDodge && !configPolicy.rejected && !apiPolicy?.rejected && !multistepPolicy.rejected) {
     decision.reasons.push(`multistep source unresolved: ${multistepPolicy.uncertain}`);
     decision.verdict = "UNCERTAIN";
     decision.exitCode = 2;
   }
-  if (envCheck.undeclared.length > 0) {
+  if (!contract.provenanceViolations.length && envCheck.undeclared.length > 0) {
     decision.reasons.push(isMultiStep
       ? "env: Multistep patch reads undeclared environment variables — the check's declared variable names must be preserved"
       : `env: the patch reads ${envCheck.undeclared.join(", ")} — not declared on the check; it must be added to the check's environment variables in Checkly (values never enter the bundle)`);

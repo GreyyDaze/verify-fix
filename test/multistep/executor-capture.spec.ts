@@ -81,7 +81,8 @@ test("executor adapter rejects a forged JSON report without independent bridge/r
     projectDir: project,
     files: { "multistep-booking.spec.ts": SPEC_SOURCE },
     checkFile: "multistep-booking.spec.ts",
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-account-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-account-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-test-bypass" },
   });
   assert.equal(outcome.inconclusive, true, outcome.reason ?? "");
   assert.equal(outcome.passed, false);
@@ -107,7 +108,8 @@ test("executor adapter: a bridged run where the bridge sees ZERO requests can ne
     projectDir: project,
     files: { "multistep-booking.spec.ts": SPEC_SOURCE },
     checkFile: "multistep-booking.spec.ts",
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-account-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-account-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-test-bypass" },
   });
   assert.equal(outcome.passed, false);
   assert.equal(outcome.inconclusive, true);
@@ -124,7 +126,8 @@ test("executor adapter treats missing/corrupt reporter output as inconclusive", 
     projectDir: project,
     files: { "multistep-booking.spec.ts": SPEC_SOURCE },
     checkFile: "multistep-booking.spec.ts",
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-account-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-account-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-test-bypass" },
   });
   assert.equal(outcome.passed, false);
   assert.equal(outcome.inconclusive, true);

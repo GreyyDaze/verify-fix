@@ -84,13 +84,13 @@ function fakeClient(opts: FakeOpts = {}): ChecklyClient {
       return {
         id: "synthetic-check", name: "slots booking multistep transaction", checkType: "MULTI_STEP",
         activated: true, muted: false, frequency: 5, runParallel: true, locations: opts.checkLocations ?? ["us-east-1", "eu-west-1"],
-        privateLocations: [CANARY], tags: [CANARY], retryStrategy: { path: CANARY }, runtimeId: CANARY,
-        script: SPEC, scriptPath: `/${CANARY}/multistep-booking.spec.ts`,
+        privateLocations: [], tags: ["slots-booking", "verify-fix-example", "multistep"], retryStrategy: null, doubleCheck: false, runtimeId: null,
+        script: SPEC, scriptPath: "multistep-booking.spec.ts",
         environmentVariables: [
           { key: "ENVIRONMENT_URL", value: FAKE_ORIGIN, secret: false },
           { key: "MULTISTEP_USER_US_EAST_1", value: FAKE_ACCOUNT, secret: true },
           { key: "MULTISTEP_USER_EU_WEST_1", value: "other-fixture", secret: true },
-          { key: "CANARY_NAME", value: opts.shortSecret ? "abc" : CANARY, secret: true },
+          { key: "VERCEL_AUTOMATION_BYPASS_SECRET", value: opts.shortSecret ? "abc" : "synthetic-protected-bypass-2910", secret: true },
         ],
       };
     },
@@ -239,6 +239,27 @@ test("deployed Checkly scheduling that differs from the construct gates both evi
     assert.ok(drift.manifest.multistep?.[side]?.problems.includes("MULTISTEP_DEPLOYED_CONFIG_MISMATCH"));
   }
   assert.ok(loadBundle(drift.outDir).bundle.multistep?.problems.includes("MULTISTEP_DEPLOYED_CONFIG_MISMATCH"));
+  const captured = await captureRemote();
+  const manifestPath = join(captured.outDir, "manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  assert.equal(manifest.config.runtimeId, null);
+  manifest.config.runtimeId = "alternate-runtime";
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  assert.ok(loadBundle(captured.outDir).bundle.multistep?.problems.includes("MULTISTEP_DEPLOYED_CONFIG_MISMATCH"),
+    "disk manifest runtime drift must not be silently erased when reloading evidence");
+  for (const mutation of [
+    (m: typeof manifest) => { m.config.shouldFail = true; },
+    (m: typeof manifest) => { m.config.doubleCheck = null; },
+    (m: typeof manifest) => { m.config.doubleCheck = true; },
+    (m: typeof manifest) => { m.config.environmentVariables[0].extraField = true; },
+    (m: typeof manifest) => { m.config.repair.extraField = true; },
+  ]) {
+    const poisoned = structuredClone(captured.manifest);
+    mutation(poisoned);
+    writeFileSync(manifestPath, JSON.stringify(poisoned));
+    assert.ok(loadBundle(captured.outDir).bundle.multistep?.problems.includes("MULTISTEP_DEPLOYED_CONFIG_MISMATCH"),
+      "unmodeled stored configuration must never disappear during the disk rebind");
+  }
 });
 
 test("tampered, legacy, extra-field and symlinked v3 recordings are invalid rather than free-form evidence", async () => {
@@ -702,7 +723,8 @@ test("exact output tree and full preflight secret scan reject stale files before
 // browser, deployment, production or cloud evidence.
 const DETECTION_EAST = "synthetic-detection-east";
 const DETECTION_WEST = "synthetic-detection-west";
-const DETECTION_ENV = { MULTISTEP_USER_US_EAST_1: DETECTION_EAST, MULTISTEP_USER_EU_WEST_1: DETECTION_WEST };
+const DETECTION_ENV = { MULTISTEP_USER_US_EAST_1: DETECTION_EAST, MULTISTEP_USER_EU_WEST_1: DETECTION_WEST,
+  CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass-only-7392" };
 
 test("remote-bound HTTP-200 nested confirmation mutation is one field and the repaired candidate fails on THAT line in both regions", { timeout: 180_000 }, async () => {
   const out = await captureRemote();
@@ -746,14 +768,20 @@ test("remote-bound HTTP-200 nested confirmation mutation is one field and the re
 
 test("full synthetic Stage 7 verdict reaches PASS only with remote-bound HTTP-200 detection, five healthy repetitions, and unweakened nested assertions", { timeout: 240_000 }, async () => {
   const out = await captureRemote();
+  // SYNTHETIC decision fixture: write the decision-law prerequisites to the
+  // local fixture manifest, then re-load it. This is NOT a real measurement;
+  // a mutable in-memory override must not borrow on-disk remote authority.
+  const manifestPath = join(out.outDir, "manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  manifest.determinism.measured = true;
+  manifest.determinism.method = "local-runner";
+  manifest.determinism.sequential = { runs: 20, passed: 20, passRate: 1, sessions: [] };
+  manifest.determinism.overlap = { pairs: 20, pairsWithFailure: 20, failRate: 1, sessions: [] };
+  manifest.determinism.lastVerifiedAt = "2026-09-27T00:00:00.000Z";
+  manifest.envAssumptions = manifest.envAssumptions.map((item: { verified: boolean }) => ({ ...item, verified: true }));
+  writeFileSync(manifestPath, JSON.stringify(manifest));
   const bundle = loadBundle(out.outDir).bundle;
   assert.deepEqual(bundle.multistep?.problems, []);
-  // SYNTHETIC decision fixture: the real capture has NO measured determinism.
-  // Supplying the decision-law prerequisite here is not a measurement or a
-  // Checkly/cloud claim. The real verifier retains its unchanged gate.
-  bundle.determinism = { targetRuns: 20, achieved: 20, sequentialPassRate: 1, overlapFailRate: 0,
-    reproductionFailRate: 1, baselinePassRate: 1, method: "local-runner", lastVerifiedAt: "2026-09-27" };
-  bundle.envAssumptions = bundle.envAssumptions.map((item) => ({ ...item, verified: true }));
   const app = await startDetectionApp();
   try {
     const result = await verify({ bundle, patch: repairedNestedSpec(), target: app.origin,
@@ -876,7 +904,7 @@ test("JSON request audit admits ONLY the trusted local false confirmation; remot
   const routes = [["POST", "/api/login", "login"], ["GET", "/api/session", "session"],
     ["GET", "/api/slots", "slots"], ["POST", "/api/book", "book 09:30"]] as const;
   const bridge = routes.map(([method, path], i) => ({ index: i + 1, method, path, status: 200,
-    queryKeys: [], requestHeaderNames: i === 1 || i === 3 ? ["authorization"] : [],
+    queryKeys: [], requestHeaderNames: i === 1 || i === 3 ? ["authorization", "x-vercel-protection-bypass"] : ["x-vercel-protection-bypass"],
     authorization: i === 1 || i === 3 }));
   const audit = routes.map(([method, path, step]) => ({ method, path, step, originMatches: true, hasQuery: false }));
   assert.equal(bridgeReporterMismatch(bridge, capture, audit, FAKE_ORIGIN, true), null);
@@ -904,11 +932,16 @@ test("fixed proxy mutation changes exactly booking.confirmed on a completed HTTP
   // This directly tests the response bytes. Only SceneExecutor may set the
   // proxy capability for a verdict, after trustedMultiStepDetection reloads
   // the failing remote v3 bundle; this standalone proxy test is not proof.
+  const remote = await captureRemote();
+  const diskBundle = loadBundle(remote.outDir).bundle;
+  const boundScene = diskBundle.scenes.find((s) => s.type === "DETECTION")!;
+  const capability = trustedMultiStepDetection(diskBundle, boundScene);
+  assert.ok(capability, "even synthetic mutation mechanics require a rebound failing-side capability");
   const app = await startDetectionApp({ bookHeaders: { "set-cookie": `session=${CANARY}`, "x-private": CANARY } });
   const proxy = new SceneProxy();
   try {
     const [origin] = await proxy.arm({ mode: parseMode(MULTISTEP_DETECTION_MODE), target: app.origin,
-      runs: 1, trustedMultiStepDetection: true });
+      runs: 1, trustedMultiStepDetection: capability! });
     const account = DETECTION_EAST;
     const login = await fetch(`${origin}/api/login`, { method: "POST",
       headers: { "content-type": "application/json" }, body: JSON.stringify({ account }) });
@@ -934,6 +967,45 @@ test("fixed proxy mutation changes exactly booking.confirmed on a completed HTTP
       [3, "/api/slots", 200, "target"], [4, "/api/book", 200, "injected"],
     ]);
     assert.deepEqual(app.paths, ["POST /api/login", "GET /api/session", "GET /api/slots", "POST /api/book"]);
+  } finally {
+    await proxy.close();
+    await app.close();
+  }
+});
+
+test("proxy refuses forged capability, query-bearing routes and excess calls without mutating target bytes or leaking query", async () => {
+  const remote = await captureRemote();
+  const bundle = loadBundle(remote.outDir).bundle;
+  const scene = bundle.scenes.find((s) => s.type === "DETECTION")!;
+  const capability = trustedMultiStepDetection(bundle, scene);
+  assert.ok(capability);
+  const app = await startDetectionApp();
+  const proxy = new SceneProxy();
+  try {
+    await assert.rejects(proxy.arm({ mode: parseMode(MULTISTEP_DETECTION_MODE), target: app.origin,
+      runs: 1, trustedMultiStepDetection: { ...capability! } }), /SCENE_PROXY_DETECTION_AUTHORITY_MISSING/);
+    const [origin] = await proxy.arm({ mode: parseMode(MULTISTEP_DETECTION_MODE), target: app.origin,
+      runs: 1, trustedMultiStepDetection: capability! });
+    const login = await fetch(`${origin}/api/login`, { method: "POST",
+      headers: { "content-type": "application/json" }, body: JSON.stringify({ account: DETECTION_EAST }) });
+    const { token } = await login.json() as { token: string };
+    await (await fetch(`${origin}/api/session`, { headers: { authorization: `Bearer ${token}` } })).text();
+    await (await fetch(`${origin}/api/slots`)).text();
+    const queryCanary = "sensitive-query-not-evidence";
+    const forged = await fetch(`${origin}/api/book?nonce=${queryCanary}`, { method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ slot: "09:30" }) });
+    assert.equal(forged.status, 400, "query-bearing request is not the canonical fourth call");
+    assert.equal(app.paths.length, 3, "forged fourth call never reaches the target");
+    const overflow = await fetch(`${origin}/api/book`, { method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ slot: "09:30" }) });
+    assert.equal(overflow.status, 400, "a fifth call cannot borrow the fourth ordinal");
+    assert.ok(!JSON.stringify(proxy.hits()).includes(queryCanary));
+    assert.equal(proxy.hits().length, 5, "request-evidence list is bounded");
+    await (await fetch(`${origin}/api/book?nonce=${queryCanary}`, { method: "POST" })).text();
+    assert.equal(proxy.hits().length, 5, "unbounded additional traffic does not grow evidence");
+    assert.ok(proxy.hits().every((hit) => hit.source !== "injected"));
   } finally {
     await proxy.close();
     await app.close();

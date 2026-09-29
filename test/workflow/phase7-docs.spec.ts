@@ -21,7 +21,7 @@ test("Phase 7 stage/legend, account checkpoints, dual-role provenance and inacti
   assert.match(plan, /\| 7\.0 baseline \|/);
   assert.match(plan, /\| 7\.4 production\/scheduled proof \|/);
   assert.match(plan, /Evidence\/accounting legend/);
-  assert.match(plan, /seven known seeded failures/);
+  assert.match(plan, /seven known `test\/verify\.spec\.ts` failures/);
   assert.match(guide, /158\/158[\s\S]{0,120}Phase 7 suite/);
   assert.match(example, /body\.confirmed/);
   assert.match(web, /body\.confirmed/);

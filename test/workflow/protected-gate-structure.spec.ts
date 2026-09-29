@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 
 const gatePath = fileURLToPath(new URL("../../.github/workflows/gate.yml", import.meta.url));
 const protectedPath = fileURLToPath(
@@ -33,43 +34,15 @@ function jobBlocks(text: string): Record<string, string> {
 
 const jobs = jobBlocks(protectedGate);
 
-/**
- * The one known legacy caller pin: the protected-workflow ref that predates
- * the Stage 2 snapshot. Missing `trusted_ref` is valid ONLY here.
- */
-const LEGACY_CALLER_PIN = "fd2fe8a2b2c8a2974aa3a082fe730f6d621c5d5d";
-
-test("caller coupling supports exactly the two valid commit states", () => {
-  const uses = gate.match(
-    /uses:\s+GreyyDaze\/verify-fix\/\.github\/workflows\/protected-gate\.yml@([0-9a-f]{40})/,
-  );
-  assert.ok(uses, "gate must pin the reusable workflow by 40-hex SHA");
-
-  const hasTrustedRefKey = /trusted_ref/.test(gate);
-  const trustedRef = gate.match(/trusted_ref:\s*([0-9a-f]{40})/);
-
-  if (!hasTrustedRefKey) {
-    // Snapshot state: gate.yml is exactly the known legacy caller — old
-    // pin, no trusted_ref. No other missing-trusted_ref state is valid.
-    assert.equal(
-      uses[1],
-      LEGACY_CALLER_PIN,
-      "without trusted_ref, gate must point at the known legacy pin only",
-    );
-    return;
-  }
-
-  // Final caller state: trusted_ref present, byte-identical to uses, and
-  // moved off the legacy pin onto the new Stage 2 snapshot.
-  assert.ok(trustedRef, "trusted_ref must be a 40-hex SHA when present");
-  assert.equal(uses[1], trustedRef[1], "trusted_ref must equal the uses pin byte-for-byte");
-  assert.notEqual(uses[1], LEGACY_CALLER_PIN, "final state must call the new snapshot, not the legacy pin");
-  assert.match(gate, /Keep this pin byte-identical to the `uses:` ref/);
-  assert.doesNotMatch(
-    gate,
-    /predates the Stage 2 helpers/,
-    "the sequencing comment must be updated together with the pin",
-  );
+/** The caller remains byte-for-byte at the earlier Stage 2 pin. The
+ * reviewed verifier V and later workflow snapshot W are separate FUTURE
+ * inputs; this staged reusable workflow is not active at the old caller. */
+test("the Stage 2 caller stays byte-identical and does not activate V or W", () => {
+  assert.equal(createHash("sha256").update(gate).digest("hex"),
+    "3d984b94e436971a01717893ffb1d1dd974ce1be222534cec0db208264a684e5");
+  assert.match(gate, /protected-gate\.yml@9b4322c6e4f14d71ce89274a28c7a18444b00a61/);
+  assert.match(gate, /trusted_ref: 9b4322c6e4f14d71ce89274a28c7a18444b00a61/);
+  assert.doesNotMatch(gate, /verifier_ref:|workflow_ref:/);
 });
 
 test("workflows never execute TypeScript entrypoints or experimental Node flags", () => {
@@ -94,7 +67,7 @@ test("every job that executes helpers runs setup-node with NODE_VERSION first", 
     ["preview-gate", "production-preflight", "production-verify-and-deploy"],
   );
   for (const [name, block] of invokerJobs) {
-    const setupIndex = block.indexOf("uses: actions/setup-node@v4");
+    const setupIndex = block.indexOf("uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020");
     const invokeIndex = block.search(/^\s*run: node .*\.github\/helpers\//m);
     assert.notEqual(setupIndex, -1, `${name} must install the pinned runtime`);
     assert.ok(
@@ -122,14 +95,14 @@ test("production preflight is secret-free: no secrets, no environment, no Vercel
   assert.match(joined, /GH_TOKEN: \$\{\{ github\.token \}\}/, "preflight uses github.token only");
 });
 
-test("every helper-executing job checks out trusted code at inputs.trusted_ref with a pin guard", () => {
+test("every helper-executing job checks out the later W helpers with a pin guard", () => {
   const invokers = Object.entries(jobs).filter(([, block]) =>
     /^\s*run: node .*\.github\/helpers\//m.test(block),
   );
   for (const [name, block] of invokers) {
-    assert.match(block, /ref: \$\{\{ inputs\.trusted_ref \}\}/, name);
+    assert.match(block, /ref: \$\{\{ inputs\.workflow_ref \}\}/, name);
     assert.match(block, /path: workflow-trusted/, name);
-    assert.match(block, /\[\[ "\$TRUSTED_REF" =~ \^\[0-9a-f\]\{40\}\$ \]\]/, name);
+    assert.match(block, /\[\[ "\$WORKFLOW_REF" =~ \^\[0-9a-f\]\{40\}\$ \]\]/, name);
     assert.match(block, /git -C workflow-trusted rev-parse HEAD/, name);
   }
 });
@@ -221,7 +194,7 @@ test("trusted helper checkouts persist no credentials", () => {
     /^\s*run: node .*\.github\/helpers\//m.test(block),
   );
   for (const [name, block] of invokers) {
-    const checkoutSegments = block.split("uses: actions/checkout@v4");
+    const checkoutSegments = block.split("uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262");
     assert.ok(checkoutSegments.length >= 2, `${name} must check out code`);
     // Each checkout's `with:` block lives in the segment that follows its
     // `uses:` line — every one must disable persisted credentials.
@@ -240,12 +213,19 @@ test("trusted helper checkouts persist no credentials", () => {
   }
 });
 
+test("preview deployment status lookups reject full and oversized pages rather than guessing the latest URL", () => {
+  const preflight = jobs["candidate-preflight"]!;
+  assert.match(preflight, /per_page: 100/);
+  assert.match(preflight, /!Array\.isArray\(statuses\) \|\| statuses\.length >= 100/);
+  assert.doesNotMatch(preflight, /statuses\.length === 100/);
+});
+
 test("candidate and preview jobs never receive production verification outputs", () => {
   const candidate = jobs["candidate-preflight"]!;
   const candidateCode = codeLines(candidate).join("\n");
   assert.ok(!candidateCode.includes("verification_url"));
   assert.ok(!candidateCode.includes("monitoring_url"));
-  assert.match(candidateCode, /TRUSTED_REF: \$\{\{ inputs\.trusted_ref \}\}/);
+  assert.match(candidateCode, /VERIFIER_REF: \$\{\{ inputs\.verifier_ref \}\}/);
   assert.ok(!candidateCode.includes("outputs.generated_status_id"));
   assert.ok(!candidateCode.includes("outputs.stable_status_id"));
 });
@@ -334,8 +314,8 @@ test("production Checkly deploy previews immediately before force with identical
     assert.doesNotMatch(block!, /checkly deploy --force/, `${jobName} must not force-deploy`);
   }
 
-  const previewIdx = deployJob.indexOf("run: npx checkly deploy --preview");
-  const forceIdx = deployJob.indexOf("run: npx checkly deploy --force");
+  const previewIdx = deployJob.indexOf("run: ./node_modules/.bin/checkly deploy --preview");
+  const forceIdx = deployJob.indexOf("run: ./node_modules/.bin/checkly deploy --force");
   assert.ok(previewIdx !== -1, "the preview step must exist in the production job");
   assert.ok(forceIdx !== -1, "the force step must exist in the production job");
   assert.ok(previewIdx < forceIdx, "preview must execute before force");
@@ -367,8 +347,8 @@ test("production Checkly deploy previews immediately before force with identical
   // nothing printed alongside them.
   const previewLine = deployJob.slice(previewIdx).split("\n")[0]!;
   const forceLine = deployJob.slice(forceIdx).split("\n")[0]!;
-  assert.equal(previewLine.trim(), "run: npx checkly deploy --preview");
-  assert.equal(forceLine.trim(), "run: npx checkly deploy --force");
+  assert.equal(previewLine.trim(), "run: ./node_modules/.bin/checkly deploy --preview");
+  assert.equal(forceLine.trim(), "run: ./node_modules/.bin/checkly deploy --force");
 
   const previewHeaderIdx = deployJob.lastIndexOf("- name:", previewIdx);
   assert.ok(previewHeaderIdx !== -1 && previewHeaderIdx < previewIdx);
@@ -480,10 +460,10 @@ test("protected job uses pinned verifier, private target metadata and complete b
   const checkout = job.indexOf("path: trusted\n");
   const runtime = job.indexOf("path: candidate-runtime\n");
   const verify = job.indexOf("node trusted/bin/verify-fix verify");
-  const preview = job.indexOf("npx checkly deploy --preview");
+  const preview = job.indexOf("./node_modules/.bin/checkly deploy --preview");
   const final = job.indexOf("id: final-roles");
   const comparison = job.indexOf("FINAL_GENERATED_ID");
-  const force = job.indexOf("npx checkly deploy --force");
+  const force = job.indexOf("./node_modules/.bin/checkly deploy --force");
   assert.ok(runtime > 0 && checkout > runtime && verify > checkout, "trusted verifier checkout is distinct from deployed source");
   assert.ok(verify < preview && preview < final && final < comparison && comparison < force,
     "PASS then preview then latest identity/status recheck then deploy");
@@ -557,12 +537,24 @@ test("all multiline workflow shell blocks parse under bash -n", () => {
   assert.ok(count >= 13, `checked only ${count} multiline run blocks`);
 });
 
-test("the reusable workflow pins all three verifier checkouts to its trusted_ref, not an obsolete API-era SHA", () => {
+test("V verifier and later W helpers have separate checked-out refs; action pins are official immutable SHAs", () => {
+  assert.doesNotMatch(protectedGate, /run: npx /, "the workflow may execute only installed, lockfile-bound CLIs");
   assert.equal([...protectedGate.matchAll(/^\s+path: trusted$/gm)].length, 3);
-  assert.equal([...protectedGate.matchAll(/^\s+ref: \$\{\{ inputs\.trusted_ref \}\}$/gm)].length, 6,
-    "three verifier and three helper checkouts use the SAME immutable ref");
+  assert.equal([...protectedGate.matchAll(/^\s+ref: \$\{\{ inputs\.verifier_ref \}\}$/gm)].length, 3,
+    "three V verifier checkouts");
+  assert.equal([...protectedGate.matchAll(/^\s+ref: \$\{\{ inputs\.workflow_ref \}\}$/gm)].length, 3,
+    "three distinct W helper checkouts");
   assert.equal([...protectedGate.matchAll(/Require the protected verifier checkout to equal the trusted pin/g)].length, 3);
-  assert.doesNotMatch(protectedGate, /9b39750e61daabc21d80fd7ea3e17d651c3b6088/);
-  assert.match(gate, /protected-gate\.yml@9b4322c6e4f14d71ce89274a28c7a18444b00a61/,
-    "the old caller pin stays unchanged; new workflow is staged until a reviewed later pin update");
+  assert.equal([...protectedGate.matchAll(/Require the helper checkout to equal the trusted pin/g)].length, 3);
+  assert.doesNotMatch(protectedGate, /inputs\.trusted_ref|9b39750e61daabc21d80fd7ea3e17d651c3b6088/);
+  const official = {
+    "actions/github-script": "f28e40c7f34bde8b3046d885e986cb6290c5673b", // verified official v7
+    "actions/checkout": "11d5960a326750d5838078e36cf38b85af677262", // verified official v4
+    "actions/setup-node": "49933ea5288caeca8642d1e84afbd3f7d6820020", // verified official v4
+    "actions/upload-artifact": "ea165f8d65b6e75b540449e92b4886f43607fa02", // verified official v4
+  };
+  for (const match of protectedGate.matchAll(/^\s+uses: (actions\/[a-z-]+)@([^\s]+)$/gm)) {
+    assert.equal(match[2], official[match[1] as keyof typeof official], `${match[1]} must be pinned`);
+    assert.match(match[2]!, /^[0-9a-f]{40}$/);
+  }
 });

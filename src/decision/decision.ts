@@ -101,7 +101,7 @@ export function decide(input: DecisionInput): Decision {
     return { verdict: "UNCERTAIN", exitCode: 2, rows, reasons, adequacy: adequacy.strength, weakness: adequacy.weakness };
   }
 
-  const survivedMutants: MutantResult[] = adequacy.mutants.filter((m) => m.survived);
+  const survivedMutants: MutantResult[] = adequacy.mutants.filter((m) => m.survived && !m.inconclusive);
   if (survivedMutants.length > 0) {
     const gap = adequacy.strength.score < ORACLE_STRENGTH_THRESHOLD;
     reasons.push(
@@ -113,6 +113,11 @@ export function decide(input: DecisionInput): Decision {
 
   if (runBudgetExhausted) {
     reasons.push("run budget exhausted → UNCERTAIN, never PASS (PR-10)");
+    return { verdict: "UNCERTAIN", exitCode: 2, rows, reasons, adequacy: adequacy.strength, weakness: adequacy.weakness };
+  }
+
+  if (adequacy.mutants.some((m) => m.inconclusive)) {
+    reasons.push("one or more mutation runs lack conclusive evidence → UNCERTAIN, never a kill or PASS (PR-10)");
     return { verdict: "UNCERTAIN", exitCode: 2, rows, reasons, adequacy: adequacy.strength, weakness: adequacy.weakness };
   }
 

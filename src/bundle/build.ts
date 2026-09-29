@@ -32,6 +32,7 @@ import type { MultiStepRecording } from "../multistep/capture.ts";
 import { constrainMultiStepManifest, multiStepRunMetadata } from "../multistep/bundle-evidence.ts";
 import { multistepProblemCategory } from "../multistep/sanitize.ts";
 import { parseMultiStepConstruct, parseMultiStepProject } from "../multistep/source.ts";
+import { deployedMultiStepProblem } from "../multistep/identity.ts";
 import { multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_BYTES, MULTISTEP_MAX_SOURCE_FILE_BYTES, MULTISTEP_MAX_SOURCE_FILES } from "../multistep/files.ts";
 
 export interface BuildOptions {
@@ -285,11 +286,11 @@ export function collectProjectSources(check: ChecklyCheck, projectDir: string | 
           const deployed = sources.find((item) => item.path === mainSource);
           const project = sources.find((item) => item.path === entrypoint);
           if (deployed && project && deployed.content !== project.content) warnings.push("MULTISTEP_SOURCE_PROJECT_MISMATCH");
-          if (deployed && project) {
-            // The deployed API script wins as the recorded original, while
-            // local imports remain available for static closure verification.
-            project.content = deployed.content;
-            if (deployed !== project) sources.splice(sources.indexOf(deployed), 1);
+          if (deployed && project && deployed !== project) {
+            // NEVER overwrite the construct's entrypoint with a different
+            // deployed script: the disagreement is an admission failure, not
+            // a way to make a source hash match after the fact.
+            sources.splice(sources.indexOf(deployed), 1);
           }
           if (project) mainSource = entrypoint;
         } else {
@@ -299,7 +300,14 @@ export function collectProjectSources(check: ChecklyCheck, projectDir: string | 
       const sourceMap = new Map(sources.map((source) => [source.path.replaceAll("\\", "/"), source.content]));
       const closureProblem = multiStepSourceClosureProblem(sourceMap);
       if (closureProblem) warnings.push(closureProblem);
-      else if (mainSource && parseMultiStepProject(sourceMap, mainSource)?.errors.length) warnings.push("MULTISTEP_SOURCE_UNPROVEN");
+      const model = mainSource && !closureProblem ? parseMultiStepProject(sourceMap, mainSource) : null;
+      if (model?.errors.length) warnings.push("MULTISTEP_SOURCE_UNPROVEN");
+      // The project config describes the *other* Playwright check too. The
+      // incident logical ID belongs to the executed Multistep construct.
+      logicalId = model?.construct?.logicalId ?? null;
+      const deployedProblem = deployedMultiStepProblem(check, model,
+        mainSource ? sourceMap.get(mainSource) ?? null : null);
+      if (deployedProblem) warnings.push(deployedProblem);
     }
 
     if (check.checkType === "API") {
@@ -734,13 +742,18 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
 
   // 1. check
   const check = await client.getCheck(opts.checkId);
-  log(`[bundle] check ${check.id} "${check.name}" type=${check.checkType} locations=${(check.locations ?? []).join(",")} runParallel=${Boolean(check.runParallel)}`);
+  if (check.checkType === "MULTI_STEP") log("[bundle] Multistep deployed check fetched; configuration and script require exact local binding");
+  else log(`[bundle] check ${check.id} "${check.name}" type=${check.checkType} locations=${(check.locations ?? []).join(",")} runParallel=${Boolean(check.runParallel)}`);
   const secretValues = (check.environmentVariables ?? []).map((v) => v.value).filter((v): v is string => typeof v === "string");
   const isMultiStep = check.checkType === "MULTI_STEP";
+  // A raw ZIP, log or JSON asset must never be persisted for this protected
+  // transaction, even when a legacy capture flag asks to retain raw bytes.
+  // Reject before the first result download, not after writing a raw/ tree.
+  if (isMultiStep && opts.keepRaw) throw new Error("MULTISTEP_RAW_OUTPUT_FORBIDDEN");
   const multistepAssets = opts.assetsDir && isMultiStep ? readMultiStepAssets(opts.assetsDir) : null;
   if (opts.assetsDir && !isMultiStep) warnings.push("--assets is only used for MULTI_STEP checks; ignored for this check type");
   if (opts.assetsDir && isMultiStep) {
-    log(`[bundle] --assets ${opts.assetsDir}: failing [${multistepAssets?.failing?.found.join(", ") ?? "none"}], passing [${multistepAssets?.passing?.found.join(", ") ?? "none"}]`);
+    log(`[bundle] local assets supplied: failing [${multistepAssets?.failing?.found.join(", ") ?? "none"}], passing [${multistepAssets?.passing?.found.join(", ") ?? "none"}]`);
   }
 
   // 2. history

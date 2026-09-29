@@ -106,7 +106,7 @@ describe("scene proxy", () => {
       const [url] = await proxy.arm({ mode: parseMode("live"), target: null, runs: 1 });
       const r = await fetch(`${url}/x`);
       assert.equal(r.status, 502);
-      assert.match(await r.text(), /no target/);
+      assert.match(await r.text(), /proxy forward unavailable/);
       assert.equal(proxy.hits()[0].source, "error");
     } finally {
       await proxy.close();

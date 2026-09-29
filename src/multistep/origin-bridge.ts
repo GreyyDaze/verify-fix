@@ -202,7 +202,7 @@ export async function startOriginBridge(upstreamUrl: string): Promise<OriginBrid
       const method = req.method ?? "OTHER";
       const authorization = Object.keys(req.headers).some((h) => h.toLowerCase() === "authorization");
       const headerBytes = Object.entries(req.headers).reduce((sum, [name, value]) => sum + name.length + (Array.isArray(value) ? value.join(",").length : String(value ?? "").length), 0);
-      const headerNames = new Set(["host", "content-type", "authorization", "accept", "user-agent"]);
+      const headerNames = new Set(["host", "content-type", "authorization", "accept", "user-agent", "x-vercel-protection-bypass"]);
       const requestHeaderNames = Object.keys(req.headers).map((h) => h.toLowerCase()).filter((h) => headerNames.has(h)).sort();
       const entry: BridgeRequestEvidence = { index: 0, method: ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].includes(method) ? method : "OTHER", path, queryKeys: [], hasQuery: query, requestHeaderNames, status: 0, authorization };
 
@@ -217,7 +217,9 @@ export async function startOriginBridge(upstreamUrl: string): Promise<OriginBrid
         if (recorded) return;
         recorded = true;
         entry.index = evidence.length + 1;
-        evidence.push(entry);
+        if (evidence.length < 129) evidence.push(entry);
+        // The 129th entry is a permanent overflow witness: the required
+        // transaction is exactly four requests, never an unbounded array.
       };
       const fail = (status: number, forwardError: boolean): void => {
         if (settled) return;
@@ -388,7 +390,8 @@ export async function startOriginBridge(upstreamUrl: string): Promise<OriginBrid
     // leaf private keys, the CSR, and the OpenSSL configuration from disk.
     // Every deletion is attempted even if an earlier one fails.
     const server: Server = createHttpsServer({ key, cert }, handle);
-    await Promise.allSettled([rm(cfg, { force: true }), rm(caKey, { force: true }), rm(leafKey, { force: true }), rm(leafCsr, { force: true })]);
+    const erased = await Promise.allSettled([rm(cfg, { force: true }), rm(caKey, { force: true }), rm(leafKey, { force: true }), rm(leafCsr, { force: true })]);
+    if (erased.some((item) => item.status === "rejected")) throw new Error("MULTISTEP_BRIDGE_CLEANUP_FAILED");
 
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
@@ -406,19 +409,21 @@ export async function startOriginBridge(upstreamUrl: string): Promise<OriginBrid
         if (closed) return;
         closed = true;
         // Run every teardown step even if one of them fails.
-        await Promise.allSettled([
+        const cleaned = await Promise.allSettled([
           (async () => {
             server.closeAllConnections?.();
-            await new Promise<void>((resolve) => server.close(() => resolve()));
+            await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
           })(),
           rm(dir, { recursive: true, force: true }),
         ]);
+        if (cleaned.some((item) => item.status === "rejected")) throw new Error("MULTISTEP_BRIDGE_CLEANUP_FAILED");
       },
     };
-  } catch (error) {
-    // Setup failure: run the full directory cleanup before rethrowing.
-    await Promise.allSettled([rm(dir, { recursive: true, force: true })]);
-    if (error instanceof Error && error.message.startsWith("openssl failed")) throw error;
-    throw new Error(`origin bridge could not start: ${error instanceof Error ? error.message : String(error)}`);
+  } catch {
+    // Setup errors (including OpenSSL and cleanup exceptions) may contain
+    // paths and private target details. No raw exception reaches a report.
+    const cleaned = await Promise.allSettled([rm(dir, { recursive: true, force: true })]);
+    throw new Error(cleaned.some((item) => item.status === "rejected")
+      ? "MULTISTEP_BRIDGE_CLEANUP_FAILED" : "MULTISTEP_BRIDGE_SETUP_FAILED");
   }
 }

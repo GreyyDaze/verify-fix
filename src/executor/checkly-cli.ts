@@ -5,7 +5,10 @@
 // test session. It never deploys or changes a scheduled monitor.
 
 import { runChecklySandbox } from "../checkly-sandbox.ts";
-import { trustedRegionalAccounts } from "../multistep/accounts.ts";
+import { trustedAutomationBypass, trustedRegionalAccounts } from "../multistep/accounts.ts";
+import { multiStepDiskRebound } from "../multistep/rebind.ts";
+import { evaluateMultiStepPolicy } from "../multistep/policy.ts";
+import { parseMultiStepProject } from "../multistep/source.ts";
 import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExecutor, type ObservationValue, type RunContext, type Scene, type SceneObservation, type TraceStep } from "../types.ts";
 
 const MULTISTEP_REMOTE_NAMES = ["MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1",
@@ -16,11 +19,15 @@ const MULTISTEP_REMOTE_NAMES = ["MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_W
  * input file also holds browser/API credentials; those must never be sent to
  * a Multistep test session. The sandbox binds ENVIRONMENT_URL to its exact
  * trusted target separately. Null is an inconclusive pre-run rejection. */
-export function scopedChecklyEnvironment(bundle: Bundle, env: Record<string, string>): Record<string, string> | null {
+export function scopedChecklyEnvironment(bundle: Bundle, env: Record<string, string>, region?: string): Record<string, string> | null {
   if (bundle.check.checkType !== "MULTI_STEP") return { ...env };
-  if (!trustedRegionalAccounts(env)) return null;
+  const accounts = trustedRegionalAccounts(env, region);
+  if (!accounts || !trustedAutomationBypass(env)
+    || ["TEST_USER", "TEST_USER_US_EAST_1", "TEST_USER_EU_WEST_1"].some((key) =>
+      env[key] && (env[key] === accounts.east || env[key] === accounts.west))) return null;
   return Object.fromEntries(MULTISTEP_REMOTE_NAMES
-    .filter((key) => env[key] !== undefined)
+    .filter((key) => env[key] !== undefined && (!region || !key.startsWith("MULTISTEP_USER_")
+      || key === (region === "us-east-1" ? "MULTISTEP_USER_US_EAST_1" : "MULTISTEP_USER_EU_WEST_1")))
     .map((key) => [key, env[key]!]));
 }
 
@@ -73,14 +80,32 @@ export class ChecklyCliExecutor implements ExperimentExecutor {
   }
 
   async runScene(bundle: Bundle, patchSource: string, scene: Scene, ctx?: RunContext): Promise<SceneObservation> {
-    const environment = this.target ? `checkly cloud → target ${new URL(this.target).host}` : "checkly cloud → no target";
+    let host: string | null = null;
+    if (this.target) {
+      try {
+        const parsed = new URL(this.target);
+        if (parsed.protocol !== "https:" || parsed.origin !== this.target || parsed.username || parsed.password) {
+          throw new Error("invalid target");
+        }
+        host = parsed.host;
+      } catch {
+        return this.uncertain(scene, "remote scene needs a bare HTTPS target origin", 0, [], [], [],
+          "checkly cloud → invalid target");
+      }
+    }
+    const environment = host ? `checkly cloud → target ${host}` : "checkly cloud → no target";
     if (scene.type !== "HEALTHY" && scene.type !== "REGRESSION") {
       return this.uncertain(scene, `Checkly CLI executor does not run ${scene.type} scenes`, 0, [], [], [], environment);
     }
     if (!this.target) return this.uncertain(scene, "remote scene needs --target <url>", 0, [], [], [], environment);
     if (!this.projectDir) return this.uncertain(scene, "remote scene needs --project <dir>", 0, [], [], [], environment);
-    if (!process.env.CHECKLY_API_KEY) {
-      return this.uncertain(scene, "remote scene needs CHECKLY_API_KEY in the environment", 0, [], [], [], environment);
+    if (!process.env.CHECKLY_API_KEY || !/^[A-Za-z0-9_-]{1,128}$/.test(process.env.CHECKLY_ACCOUNT_ID ?? "")) {
+      return this.uncertain(scene, "remote scene needs an approved Checkly API key and account ID", 0, [], [], [], environment);
+    }
+    const isMultiStep = bundle.check.checkType === "MULTI_STEP";
+    if (isMultiStep && (!multiStepDiskRebound(bundle)
+      || !bundle.scenes.some((item) => JSON.stringify(item) === JSON.stringify(scene)))) {
+      return this.uncertain(scene, "Multistep on-disk authority or scene changed before a cloud run", 0, [], [], [], environment);
     }
 
     const used = this.used.get(scene.sceneId) ?? 0;
@@ -93,8 +118,12 @@ export class ChecklyCliExecutor implements ExperimentExecutor {
     const repetitions = Math.min(wanted, remaining);
     this.used.set(scene.sceneId, used + repetitions);
 
-    const config = ctx?.config ?? bundle.config;
+    const config = isMultiStep ? bundle.config : ctx?.config ?? bundle.config;
     const locations = config?.locations.length ? config.locations : bundle.config?.locations ?? [];
+    if (isMultiStep && (JSON.stringify(locations) !== JSON.stringify(["us-east-1", "eu-west-1"])
+      || config?.runParallel !== true)) {
+      return this.uncertain(scene, "Multistep requires its unchanged two-region parallel schedule", 0, [], [], [], environment);
+    }
     if (locations.length === 0) return this.uncertain(scene, "candidate config has no Checkly location", 0, [], [], [], environment);
     const combinedEnv = { ...this.env, ...(scene.env ?? {}) };
     if (bundle.check.checkType === "MULTI_STEP" && Object.keys(scene.env ?? {}).some((key) =>
@@ -109,6 +138,17 @@ export class ChecklyCliExecutor implements ExperimentExecutor {
     const files = { ...(ctx?.files ?? bundle.files), [checkFile]: patchSource };
     const checkName = ctx?.checkName ?? bundle.check.name ?? bundle.check.logicalId;
     if (!checkName) return this.uncertain(scene, "bundle has no check name for Checkly --grep", 0, [], [], [], environment);
+    if (isMultiStep) {
+      const original = parseMultiStepProject(new Map(Object.entries(bundle.files)), bundle.check.file);
+      const candidate = parseMultiStepProject(new Map(Object.entries(files)), checkFile);
+      const policy = evaluateMultiStepPolicy(original, candidate);
+      const keys = Object.keys(bundle.files).sort();
+      if (policy.rejected || policy.uncertain || checkFile !== bundle.check.file || checkName !== bundle.check.name
+        || JSON.stringify(Object.keys(files).sort()) !== JSON.stringify(keys)
+        || keys.some((key) => key !== checkFile && files[key] !== bundle.files[key])) {
+        return this.uncertain(scene, "Multistep source identity or construct changed before a cloud run", 0, [], [], [], environment);
+      }
+    }
 
     const trace: TraceStep[] = [];
     const sessions: string[] = [];
@@ -132,22 +172,22 @@ export class ChecklyCliExecutor implements ExperimentExecutor {
         assets: ctx?.assets,
         target: this.target!,
         targetRevision: this.targetRevision,
-        env: scopedEnv,
+        env: isMultiStep ? scopedChecklyEnvironment(bundle, combinedEnv, location)! : scopedEnv,
         location,
         checkName,
+        checkType: bundle.check.checkType,
         testSessionName: `verify-fix ${bundle.incidentId} ${scene.sceneId} ${repetition + 1}/${repetitions} ${location}`,
         timeoutMs: this.timeoutMs,
       }).catch((error: Error) => ({
         passed: false,
         inconclusive: true,
-        reason: `Checkly CLI could not run: ${error.message}`,
+        reason: "Checkly sandbox execution unavailable",
         testSessionId: null,
         checkResultIds: [],
         cloudRuns: 0,
         trace: [] as TraceStep[],
         exitCode: null,
         wallTimeMs: 0,
-        raw: "",
       }))));
 
       costRow.repetitions += 1;
@@ -159,6 +199,11 @@ export class ChecklyCliExecutor implements ExperimentExecutor {
       if (costRow.phase === "mutation") this.cost.mutationRuns += results.reduce((sum, result) => sum + result.cloudRuns, 0);
 
       for (const result of results) {
+        if (result.testSessionId && sessions.includes(result.testSessionId)
+          || result.checkResultIds.some((id) => resultIds.includes(id))) {
+          return this.uncertain(scene, "duplicate Checkly session or result across distinct regional runs",
+            repetition + 1, trace, sessions, resultIds, environment);
+        }
         if (result.testSessionId) sessions.push(result.testSessionId);
         resultIds.push(...result.checkResultIds);
       }

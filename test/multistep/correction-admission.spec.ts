@@ -8,7 +8,7 @@ import { sanitizeMultiStepCapture } from "../../src/multistep/sanitize.ts";
 import { buildMultiStepRecording, MULTISTEP_DRAFT_SCHEMA } from "../../src/multistep/capture.ts";
 import { multiStepShapeProblems } from "../../src/multistep/shape.ts";
 import { validMultiStepStoredRecording } from "../../src/multistep/recording-schema.ts";
-import { failingTestResults, passingTestResults } from "./helpers.ts";
+import { FAKE_TOKEN, failingTestResults, passingTestResults } from "./helpers.ts";
 
 type Report = Record<string, any>;
 function run(report: Report): Report { return report.suites[0].suites[0].specs[0].tests[0].results[0]; }
@@ -116,4 +116,45 @@ test("admission: wrong book shape, missing body, contradictory result/stats/erro
     location: { file: "/synthetic/checks/multistep-booking.spec.ts", line: 142, column: 24 } }];
   assert.deepEqual(normalizeMultiStepCapture({ testResults: JSON.stringify(echo) }).problems, [],
     "the result's single correctly located copy of the SAME book assertion is not an extra error");
+});
+
+
+test("raw asset admission bounds ignored branches, counts every token occurrence and rejects shadowed JSON keys", () => {
+  const extraBranches: Array<[string, (data: Report) => void]> = [
+    ["top-level reporter metadata", (d) => { d.extra = { ignored: FAKE_TOKEN }; }],
+    ["nested reporter config", (d) => { d.config.extra = [FAKE_TOKEN]; }],
+    ["unselected assertion metadata", (d) => { run(d).steps[3].steps[1].ignored = FAKE_TOKEN; }],
+    ["unknown alias inside checklyData", (d) => { body(d, 3).shadowResponse = { body: { token: FAKE_TOKEN } }; }],
+    ["token in a key", (d) => { d.config[FAKE_TOKEN] = "synthetic-hidden"; }],
+  ];
+  for (const [label, attack] of extraBranches) {
+    const report = raw();
+    attack(report);
+    const text = JSON.stringify(report);
+    const capture = normalizeMultiStepCapture({ testResults: text });
+    const transaction = extractTransaction(capture);
+    assert.ok(capture.problems.length || transaction.problems.length, `${label}: ignored token must be accounted for`);
+    assert.equal(buildMultiStepRecording({ texts: { testResults: text, logs: null, checkRunData: null } }).ok,
+      false, `${label}: no bounded recording`);
+  }
+  for (const field of ["logs", "checkRunData"] as const) {
+    const texts: { testResults: string; logs: string | null; checkRunData: string | null } = {
+      testResults: failingTestResults(), logs: null, checkRunData: null,
+    };
+    texts[field] = JSON.stringify({ ignored: [{ secret: FAKE_TOKEN }] });
+    const recording = buildMultiStepRecording({ texts });
+    assert.equal(recording.ok, false, `${field}: token in optional unselected raw asset cannot pass`);
+    assert.ok(!JSON.stringify(recording).includes(FAKE_TOKEN));
+  }
+  const nested = raw();
+  let extra: unknown = "synthetic-leaf";
+  for (let i = 0; i < 36; i++) extra = { branch: extra };
+  nested.config.unused = extra;
+  reject(nested, "deep ignored branch obeys the raw tree depth bound");
+  nested.config.unused = Array.from({ length: 4100 }, (_, index) => index);
+  reject(nested, "large ignored branch obeys the raw member bound");
+  const text = failingTestResults().replace('"status":200', '"status":401,"status":200');
+  assert.notEqual(text, failingTestResults());
+  const shadow = buildMultiStepRecording({ texts: { testResults: text, logs: null, checkRunData: null } });
+  assert.equal(shadow.ok, false, "a duplicate key cannot mask an HTTP 401");
 });

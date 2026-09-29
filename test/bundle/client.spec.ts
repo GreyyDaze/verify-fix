@@ -152,7 +152,9 @@ test("credentials: env wins; otherwise the Checkly CLI login files are read; val
     writeFileSync(join(dir, "config.json"), JSON.stringify({ accountId: "acct-file" }));
     assert.deepEqual(resolveCredentials(env, "linux"), { apiKey: "cu_from_file", accountId: "acct-file", source: "checkly-cli-login" });
     assert.deepEqual(resolveCredentials({ ...env, CHECKLY_API_KEY: "cu_env", CHECKLY_ACCOUNT_ID: "acct-env" }, "linux"), { apiKey: "cu_env", accountId: "acct-env", source: "env" });
-    assert.equal(resolveCredentials({ ...env, CHECKLY_API_KEY: "cu_env" }, "linux")?.source, "mixed");
+    assert.equal(resolveCredentials({ ...env, CHECKLY_API_KEY: "cu_env" }, "linux"), null,
+      "a partial protected input must not borrow the other half from a different cached account");
+    assert.equal(resolveCredentials({ ...env, CHECKLY_ACCOUNT_ID: "acct-env" }, "linux"), null);
     assert.equal(checklyCliConfigDir({ HOME: "/Users/a" }, "darwin"), "/Users/a/Library/Preferences/@checkly/cli");
     assert.equal(checklyCliConfigDir({ HOME: "/Users/a", CHECKLY_ENV: "staging" }, "darwin"), "/Users/a/Library/Preferences/@checkly/cli-staging");
   } finally {

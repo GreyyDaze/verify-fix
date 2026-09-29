@@ -204,7 +204,7 @@ export async function fetchAllStatuses(repo, deploymentId, token, fetchImpl = fe
     } catch {
       return { error: "statuses-response-invalid" };
     }
-    if (!Array.isArray(body)) return { error: "statuses-response-invalid" };
+    if (!Array.isArray(body) || body.length > STATUS_PAGE_SIZE) return { error: "statuses-response-invalid" };
     collected.push(...body);
     if (collected.length > MAX_STATUSES) return { error: "statuses-truncated" };
 

@@ -15,6 +15,7 @@ import { validMultiStepStoredRecording } from "./multistep/recording-schema.ts";
 import { multistepProblemCategory } from "./multistep/sanitize.ts";
 import { readBoundedBundleFile, multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_FILE_BYTES, MULTISTEP_MAX_SOURCE_FILES } from "./multistep/files.ts";
 import { parseMultiStepProject } from "./multistep/source.ts";
+import { storedMultiStepIdentityProblem } from "./multistep/identity.ts";
 import { failurePointFromRecording, matchesRemoteMultiStepBinding } from "./multistep/binding.ts";
 import type { MultiStepRecording } from "./multistep/capture.ts";
 
@@ -240,6 +241,8 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
     if (!sourceModel?.script || sourceModel.errors.length || sourceModel.script.file !== file) {
       problems.push("MULTISTEP_SOURCE_CLOSURE_BOUND");
     }
+    const identityProblem = storedMultiStepIdentityProblem(m, sourceModel);
+    if (identityProblem) problems.push(identityProblem);
     if (m.provenance.assets.some((asset) => !["test-results.json", "logs.txt", "check-run-data.json"].includes(asset.name)
       || (asset.type !== "remote-asset" && asset.type !== "local-asset"
         || asset.type === "remote-asset" && (asset.assetType !== "report" && asset.assetType !== "file"

@@ -13,6 +13,8 @@ export interface MutantResult {
   name: string;
   family: "operator" | "llm";
   survived: boolean;
+  /** No conclusive mutation observation. Neither a kill nor a survivor. */
+  inconclusive?: boolean;
   detail: string;
 }
 
@@ -73,7 +75,7 @@ export function assessAdequacy(input: AdequacyInput): AdequacyOutput {
   const verifiedEnv = b.envAssumptions.filter((a) => a.verified).length;
   const envCompleteness = totalEnv === 0 ? 1 : verifiedEnv / totalEnv;
 
-  const killed = mutants.filter((m) => m.survived === false).length;
+  const killed = mutants.filter((m) => !m.inconclusive && m.survived === false).length;
   const mutantKillRate = mutants.length === 0 ? 0 : killed / mutants.length;
 
   const score = Math.min(1, 0.3 * falsifiability + 0.3 * coverage + 0.2 * envCompleteness + 0.2 * mutantKillRate);

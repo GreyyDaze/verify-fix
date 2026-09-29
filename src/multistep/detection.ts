@@ -3,6 +3,7 @@
 // side, a local asset, or a self-declared mode cannot grant this capability.
 // This does not add a recording schema, a provenance kind, or a verdict law.
 import { loadBundle } from "../bundle.ts";
+import { sameBoundedData } from "./rebind.ts";
 import type { Bundle, Scene } from "../types.ts";
 import { MULTISTEP_DETECTION_MODE } from "../scene/modes.ts";
 import type { MultiStepFailureAssertion } from "./capture.ts";
@@ -12,6 +13,14 @@ import { recordedNestedBookingConfirmed } from "./shape.ts";
 
 export interface TrustedMultiStepDetection {
   readonly failureAssertion: MultiStepFailureAssertion;
+}
+
+// The object shape is not a capability: only objects minted after the remote
+// on-disk rebind are in this private set. Neither a boolean nor a lookalike
+// from a caller can instruct SceneProxy to mutate a response.
+const minted = new WeakSet<object>();
+export function isTrustedMultiStepDetection(value: unknown): value is TrustedMultiStepDetection {
+  return value !== null && typeof value === "object" && minted.has(value);
 }
 
 /** Re-open the on-disk bundle at the point of execution. The loader rebinds
@@ -29,7 +38,7 @@ export function trustedMultiStepDetection(bundle: Bundle, scene: Scene): Trusted
     const failure = loaded.multistep?.failureAssertion;
     const boundScene = loaded.scenes.find((item) => item.type === "DETECTION");
     if (loaded.multistep?.problems.length || !failure || !boundScene
-      || JSON.stringify(scene) !== JSON.stringify(boundScene)
+      || !sameBoundedData(scene, boundScene)
       // Rebind every *authority-bearing* in-memory value. Determinism and
       // environment assumptions are independent decision-law prerequisites:
       // a synthetic test may supply them without gaining mutation authority.
@@ -37,7 +46,7 @@ export function trustedMultiStepDetection(bundle: Bundle, scene: Scene): Trusted
       // scene, construct/config, or failing-side binding.
       || (["dir", "check", "checkSource", "files", "configFile", "config", "scenes",
         "multistep", "recordedOrigin", "oracleProvenance"] as const).some((key) =>
-        JSON.stringify(bundle[key]) !== JSON.stringify(loaded[key]))
+        !sameBoundedData(bundle[key], loaded[key]))
       || !scene.assertionsInvolved.includes(failure.id)
       || scene.verdict.provenance.kind !== "recorded"
       || scene.verdict.provenance.artifactId !== "recordings/failing.multistep.json") return null;
@@ -52,7 +61,9 @@ export function trustedMultiStepDetection(bundle: Bundle, scene: Scene): Trusted
       || recording.binding.failureAssertion?.line !== failure.line
       || recording.binding.failureAssertion?.subject !== "body.confirmed"
       || recording.binding.failureAssertion?.repairedSubject !== "body.booking.confirmed") return null;
-    return { failureAssertion: recording.binding.failureAssertion };
+    const proof = Object.freeze({ failureAssertion: Object.freeze({ ...recording.binding.failureAssertion }) });
+    minted.add(proof);
+    return proof;
   } catch {
     return null; // fixed category: never echo paths, asset URLs or secrets
   }

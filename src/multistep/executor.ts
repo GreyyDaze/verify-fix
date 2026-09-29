@@ -57,7 +57,7 @@ import { evaluateMultiStepPolicy } from "./policy.ts";
 import { canonicalMultiStepScriptProblem, parseMultiStepProject } from "./source.ts";
 import { MAX_REPORTER_AUDIT_BYTES, parseReporterAudit, TRUSTED_REQUEST_REPORTER, type ReporterRequestEvidence } from "./reporter.ts";
 import { parseMultiStepScript } from "./source.ts";
-import { trustedRegionalAccounts } from "./accounts.ts";
+import { AUTOMATION_BYPASS_INPUT, trustedAutomationBypass, trustedRegionalAccounts } from "./accounts.ts";
 import { multiStepDetectionShapeProblems, multiStepShapeProblems } from "./shape.ts";
 import { boundDetectionFailureAssertion, boundFailureAssertion } from "./binding.ts";
 
@@ -257,6 +257,9 @@ export function bridgeReporterMismatch(
     if (b.status !== 200) {
       return `bridge/reporter HTTP status contradicts the required 200 at request ${i + 1} — no trustworthy execution evidence`;
     }
+    if (!b.requestHeaderNames.includes("x-vercel-protection-bypass")) {
+      return `bridge/reporter bypass header missing at request ${i + 1} — no protected target evidence`;
+    }
     const needsAuthorization = b.path === "/api/session" || b.path === "/api/book";
     if (b.authorization !== needsAuthorization) {
       return `bridge/reporter authorization-site mismatch at request ${i + 1} — no trustworthy execution evidence`;
@@ -369,7 +372,7 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
     return inconclusive("Multistep detection lacks validated remote failing-side provenance — no runner was started");
   }
 
-  const permitted = new Set(["REGION", "MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1"]);
+  const permitted = new Set(["REGION", "MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1", AUTOMATION_BYPASS_INPUT]);
   for (const [key, value] of Object.entries(ctx.env ?? {})) {
     if (RESERVED_ENV_KEYS.has(key.toUpperCase()) || !permitted.has(key)
       || typeof value !== "string" || value.length > 512 || value.includes("\0")) {
@@ -384,6 +387,8 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
     return inconclusive("Multistep regional account values must both be present, trimmed and distinct — no runner was started");
   }
   const selectedAccount = accounts.selected!;
+  const bypass = trustedAutomationBypass(ctx.env);
+  if (!bypass) return inconclusive("Multistep protected target bypass is unavailable — no runner was started");
   // Dependency lookup is also an evidence gate, not a thrown filesystem path
   // in a report. Crucially it runs AFTER source preflight: unsupported source
   // is rejected before attempting to resolve or execute any CLI.
@@ -436,6 +441,7 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
         env: {
           // Only the selected regional identity crosses into this child.
           REGION: ctx.env!.REGION,
+          VERCEL_AUTOMATION_BYPASS_SECRET: bypass,
           [ctx.env!.REGION === "us-east-1" ? "MULTISTEP_USER_US_EAST_1" : "MULTISTEP_USER_EU_WEST_1"]: selectedAccount,
           PATH: process.env.PATH ?? "",
           HOME: freshHome,

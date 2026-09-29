@@ -28,6 +28,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Har, HarEntry } from "../trace/har-types.ts";
 import type { InjectRule, ParsedMode } from "./modes.ts";
+import { isTrustedMultiStepDetection, type TrustedMultiStepDetection } from "../multistep/detection.ts";
+import { knownRoute } from "../multistep/routes.ts";
 
 export interface ProxyHit {
   runIndex: number;
@@ -56,7 +58,7 @@ export interface ArmOptions {
   /** lockstep barrier: how long to wait for the other runs' request k before forwarding anyway */
   barrierTimeoutMs?: number;
   /** Granted only after re-loading and validating a remote failing v3 bundle. */
-  trustedMultiStepDetection?: boolean;
+  trustedMultiStepDetection?: TrustedMultiStepDetection;
 }
 
 const HOP_BY_HOP = new Set(["host", "connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "proxy-connection", "content-length", "accept-encoding", "expect"]);
@@ -161,6 +163,11 @@ export class SceneProxy {
     this.ordinals = Array.from({ length: opts.runs }, () => 0);
     this.actionOrdinals = Array.from({ length: opts.runs }, () => 0);
     this.replayUsed = new Map();
+    if (opts.mode.kind === "multistep-detection" && !isTrustedMultiStepDetection(opts.trustedMultiStepDetection)) {
+      throw new Error("SCENE_PROXY_DETECTION_AUTHORITY_MISSING");
+    }
+    if (opts.mode.kind === "replay" && opts.replayHar && (!Array.isArray(opts.replayHar.log?.entries)
+      || opts.replayHar.log.entries.length > 2000)) throw new Error("SCENE_PROXY_RECORDING_INVALID");
     this.detectionStates = Array.from({ length: opts.runs }, () => null);
     this.barrier = opts.mode.kind === "live-concurrent" && opts.runs > 1 ? new Barrier(opts.runs, opts.barrierTimeoutMs ?? 2000) : null;
     this.urls = [];
@@ -207,13 +214,34 @@ export class SceneProxy {
     const opts = this.opts!;
     const ordinal = ++this.ordinals[runIndex];
     const method = (req.method ?? "GET").toUpperCase();
-    const url = new URL(req.url ?? "/", this.urls[runIndex]);
+    let url: URL;
+    try { url = new URL(req.url ?? "/", this.urls[runIndex]); }
+    catch {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end('{"error":"invalid scene request"}');
+      return;
+    }
+    const detection = opts.mode.kind === "multistep-detection";
     const action = shouldInterleave(req);
-    const hit: ProxyHit = { runIndex, ordinal, method, path: url.pathname, status: 0, action, source: "error" };
-    this.hitsList.push(hit);
+    const hit: ProxyHit = { runIndex, ordinal, method,
+      path: detection ? knownRoute(url.pathname) ?? "<unknown-route>" : url.pathname,
+      status: 0, action, source: "error" };
+    // The fifth request is evidence of a noncanonical run; never let an
+    // unbounded stream of later requests grow the in-memory evidence list.
+    if (!detection || ordinal <= 5) this.hitsList.push(hit);
+    const expected = [["POST", "/api/login"], ["GET", "/api/session"],
+      ["GET", "/api/slots"], ["POST", "/api/book"]] as const;
+    if (detection && (ordinal > 4 || !expected[ordinal - 1]
+      || method !== expected[ordinal - 1]![0] || req.url !== expected[ordinal - 1]![1]
+      || url.origin !== this.urls[runIndex])) {
+      hit.status = 400;
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end('{"error":"noncanonical scene request"}');
+      return;
+    }
     let body: Buffer;
     try {
-      body = await readBody(req, opts.mode.kind === "multistep-detection" ? 1024 : undefined);
+      body = await readBody(req, detection ? 1024 : 1024 * 1024);
     } catch {
       hit.status = 413;
       res.writeHead(413, { "content-type": "application/json" });
@@ -225,11 +253,11 @@ export class SceneProxy {
     const forward = async () => {
       try {
         answer = await this.answer(opts, runIndex, ordinal, method, url, req, body);
-      } catch (err) {
-        const message = opts.mode.kind === "multistep-detection"
-          ? "verify-fix detection forward unavailable" : `verify-fix proxy: ${(err as Error).message}`;
+      } catch {
+        // Never reflect upstream error text: it may contain credentials,
+        // signed URLs, cookies or the target's own private diagnostics.
         answer = { status: 502, headers: { "content-type": "application/json" },
-          body: Buffer.from(JSON.stringify({ error: message })), source: "error" };
+          body: Buffer.from('{"error":"verify-fix proxy forward unavailable"}'), source: "error" };
       }
     };
     // Browser document/script/style/image requests can arrive in a different
@@ -257,12 +285,12 @@ export class SceneProxy {
         if (!opts.target) throw new Error("browser replay needs a target because the HAR omits page asset bodies");
         return this.forwardToTarget(opts.target, this.urls[runIndex], method, url, req, body);
       }
-      return this.fromRecording(opts.replayHar ?? null, method, url);
+      return this.fromRecording(opts.replayHar ?? null, runIndex, method, url);
     }
     if (mode.kind === "inject" && matchesRule(mode.rule, method, url)) return injected(mode.rule, opts.failingHar ?? null);
     if (mode.kind === "unknown" || mode.kind === "pending") throw new Error(mode.reason);
     if (!opts.target) throw new Error("no target for a live scene (pass --target <url>)");
-    if (mode.kind === "multistep-detection" && !opts.trustedMultiStepDetection) {
+    if (mode.kind === "multistep-detection" && !isTrustedMultiStepDetection(opts.trustedMultiStepDetection)) {
       throw new Error("Multistep detection has no remote failing-side provenance");
     }
     const forwarded = await this.forwardToTarget(opts.target, this.urls[runIndex], method, url, req, body,
@@ -355,16 +383,15 @@ export class SceneProxy {
       if (DROP_RESPONSE.has(name)) return;
       out[name] = name === "location" ? rewriteOrigin(value, target, proxyOrigin) : value;
     });
-    const responseBody = detectionResponseLimit === undefined
-      ? Buffer.from(await res.arrayBuffer()) : await boundedResponseBody(res, detectionResponseLimit);
+    const responseBody = await boundedResponseBody(res, detectionResponseLimit ?? 16 * 1024 * 1024);
     return { status: res.status, headers: out, body: responseBody, source: "target" };
   }
 
-  private fromRecording(har: Har | null, method: string, url: URL): Answer {
+  private fromRecording(har: Har | null, runIndex: number, method: string, url: URL): Answer {
     if (!har) return notRecorded(method, url, "no recording loaded for replay");
     const candidates = har.log.entries.filter((e) => e.request.method.toUpperCase() === method && samePath(e.request.url, url));
     if (candidates.length === 0) return notRecorded(method, url, "no recorded response");
-    const key = `${method} ${url.pathname}`;
+    const key = `${runIndex}:${method} ${url.pathname}${url.search}`;
     const used = this.replayUsed.get(key) ?? 0;
     this.replayUsed.set(key, used + 1);
     // successive identical requests get successive recorded responses; the last one repeats
@@ -427,9 +454,9 @@ function samePath(recordedUrl: string, url: URL): boolean {
   try {
     const r = new URL(recordedUrl);
     if (r.pathname !== url.pathname) return false;
-    // a recorded query string must match when the live request has one (RSC requests etc.)
-    if (r.search && url.search) return r.search === url.search;
-    return true;
+    // Neither a missing, added, nor changed query can borrow a recorded
+    // response. Hashes and fragments are not a supported replay identity.
+    return r.search === url.search && !r.hash && !url.hash;
   } catch {
     return false;
   }

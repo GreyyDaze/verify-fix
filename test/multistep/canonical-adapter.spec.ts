@@ -27,6 +27,7 @@ interface ReceivedRequest {
   method: string;
   url: string;
   authorization: string | null;
+  bypass: string | null;
   body: Record<string, unknown> | null;
   statusSent: number;
 }
@@ -80,7 +81,9 @@ function startSyntheticApp(mode: "flat" | "nested", errorAt?: { position: number
         payload = { error: "not found" };
       }
       if (errorAt && received.length === errorAt.position) status = errorAt.status;
-      received.push({ method: req.method ?? "", url, authorization, body, statusSent: status });
+      received.push({ method: req.method ?? "", url, authorization,
+        bypass: typeof req.headers["x-vercel-protection-bypass"] === "string"
+          ? req.headers["x-vercel-protection-bypass"] : null, body, statusSent: status });
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(payload));
     });
@@ -129,7 +132,8 @@ function runCanonical(appUrl: string, timeoutMs = 150_000) {
     projectDir: WEB,
     files: { "multistep-booking.spec.ts": CANONICAL_SPEC },
     checkFile: "multistep-booking.spec.ts",
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: ACCOUNT, MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct" },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: ACCOUNT, MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass-sandbox-376" },
     timeoutMs,
   });
 }
@@ -179,6 +183,11 @@ test("canonical spec through the adapter (passing flat app): HTTPS origin kept, 
     assert.equal(app.received[1]?.authorization, `Bearer ${TOKEN}`);
     assert.equal(app.received[3]?.authorization, `Bearer ${TOKEN}`);
     assert.deepEqual(app.received[3]?.body, { slot: "09:30" });
+    assert.ok(app.received.every((request) => request.bypass === "synthetic-bypass-sandbox-376"),
+      "every canonical request forwards the approved bypass header to the protected target");
+    assert.ok(!JSON.stringify(out.proxyEvidence).includes("synthetic-bypass-sandbox-376"),
+      "bounded bridge evidence retains header NAMES, never bypass values");
+    assert.ok(!JSON.stringify(out.trace).includes("synthetic-bypass-sandbox-376"));
   } finally {
     watcher.stop();
     await app.close();

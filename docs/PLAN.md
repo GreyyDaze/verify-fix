@@ -191,8 +191,8 @@ The browser and Phase 6 API contracts remain separate.
 
 | Checkpoint | Implemented and locally exercised | Still requires real evidence/approval |
 | --- | --- | --- |
-| 7.0 baseline | One construct, fixed five-step script, nested live app contract, separate account *names* for `us-east-1`/`eu-west-1`; no committed values. | Configure distinct real regional Multistep identities, separately from browser users, before any deployment. |
-| 7.1 remote-bound bundle | Bounded sanitized v3 Multistep result/asset intake and strict source/step/assertion/side binding; forged, partial, local-only or passing-side evidence is UNCERTAIN. Local fixtures mock the authenticated Checkly asset path. | Inspect actual passing and failing Checkly result assets *outside this repo*, confirm observed schema and source line, capture using the packed CLI, review and pin a sanitized real bundle. Do not fabricate assets or trigger new Rocky analysis without approval. |
+| 7.0 baseline | One construct, fixed five-step script, nested live app contract, parallel locations with explicit `doubleCheck: false` (no failure rerun), separate account *names* for `us-east-1`/`eu-west-1`; no committed values. | Configure distinct real regional Multistep identities, separately from browser users, before any deployment. |
+| 7.1 remote-bound bundle | Bounded sanitized v3 Multistep result/asset intake and strict source/step/assertion/side binding; absent/unknown effective double-check or runtime config and forged, partial, local-only or passing-side evidence are UNCERTAIN. Local fixtures mock the authenticated Checkly asset path. | Inspect actual passing and failing Checkly result assets *outside this repo*, confirm observed schema and source line, capture using the packed CLI, review and pin a sanitized real bundle. Do not fabricate assets or trigger new Rocky analysis without approval. |
 | 7.2 detection | Fixed HTTP-200 proxy changes only nested `booking.confirmed: true → false` after a valid original transaction; reporter, independent request audit, proxy hits and two isolated region accounts must agree. Local synthetic fixtures can exercise the gate; they do not confer production authority. | Exact `checkly test --record --grep '^slots booking multistep transaction$' --retries 0`, one input mechanism (`--env-file` **or** `--env`, never both); prove both regions, browser count and original/repair behaviour on the actual target. Parser/token/bypass details not validated by those recordings remain deferred. |
 | 7.3 production URL gate | Staged secret-free preflight checks current `main`, deployment identity and both URL roles *before* production approval; pinned verifier checks the generated URL. Post-approval and post-preview status/identity rechecks precede force deployment to the stable URL. The protected job requires an explicitly configured, pinned Phase 7 Multistep bundle and a configured bypass; missing prerequisites fail closed. | Review and later advance the immutable caller pin **in a separate approval step**. The current `gate.yml` still calls the previous snapshot; edits to `protected-gate.yml` in this branch are not active. Configure/review the real bundle and bypass separately; do not guess the bypass value or Vercel API mechanism. |
 | 7.4 production/scheduled proof | No real Phase 7 deployment, cloud parity, gate PASS, Checkly deployment or scheduled green is claimed. | Verify generated-URL readiness (HTTP 200 + health JSON, no redirects), protected PASS at exact revision, preview and force deploy only after PASS, then observe the repaired scheduled Multistep green in *both* locations. Only then start Phase 8. |
@@ -223,15 +223,18 @@ never readiness; no temporary domain exception is an accepted replacement.
 runs belong to Phase 6, not Phase 7. A local fixture labeled `PASS` proves only
 the verifier's mechanics under explicit synthetic assumptions; it is not a
 Checkly capture, browser session, deployed revision, Vercel readiness or cloud
-proof. The pre-commit Phase 7 checkpoint on Node v24.21.0 (lockfile installs
-with `--ignore-scripts`) had **286/286** focused workflow/Multistep tests and
-a **452-test full suite: 445 pass, seven known seeded failures, zero skips**;
-these seven are the legacy real-app DSL assertions against the now-nested app
-response, not new Phase 7 failures. A new eighth failure or a skip is
-unacceptable. The Next production build and synthetic in-memory collision
-check (5/5) passed; the CLI was packed and installed into an external locked,
-script-disabled consumer. The committed-HEAD recheck and exact hashes belong in
-the final review report. Real checkpoints above remain open.
+proof. The current pre-commit Phase 7 checkpoint on Node v24.21.0
+(lockfile installs with `--ignore-scripts`) passed **166/166** focused
+Multistep/CLI/scene tests, **259/259** focused workflow/bundle/API tests,
+and **1/1** packed external-consumer test (zero skips in each). The **464-test
+full suite: 457 pass, exactly seven known `test/verify.spec.ts` failures,
+zero skips** has the same seven failures as the preceding checkpoint. These
+are the legacy real-app DSL assertions against the now-nested app response,
+not new Phase 7 failures; an eighth failure or a skip is unacceptable. Root
+and example typechecks/builds, four helper syntax checks, workflow Bash syntax
+checks, and the synthetic local in-memory collision check (5/5) passed. The
+committed-HEAD recheck and exact hashes belong in the final review report.
+Real checkpoints above remain open.
 
 ## Phase 8 — CLI setup and copied live learning project
 

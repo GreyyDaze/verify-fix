@@ -33,6 +33,7 @@ export interface MultiStepConstructModel {
   frequencyMinutes: number | null;
   locations: string[];
   runParallel: boolean | null;
+  doubleCheck: boolean | null;
   activated: boolean | null;
   muted: boolean | null;
   tags: string[];
@@ -235,9 +236,9 @@ export function parseMultiStepConstruct(files: Map<string, string>): { model: Mu
   const options = hit.node.arguments?.[1];
   if (!options || !ts.isObjectLiteralExpression(options)) {
     errors.push(`MultiStepCheck options are not a static object in ${hit.file}`);
-    return { model: { executed, logicalId, name: null, entrypoint: null, frequencyMinutes: null, locations: [], runParallel: null, activated: null, muted: null, tags: [], environmentKeys: [], environmentDefinitions: [], errors }, constructFile: hit.file };
+    return { model: { executed, logicalId, name: null, entrypoint: null, frequencyMinutes: null, locations: [], runParallel: null, doubleCheck: null, activated: null, muted: null, tags: [], environmentKeys: [], environmentDefinitions: [], errors }, constructFile: hit.file };
   }
-  staticProperties(options, ["name", "activated", "muted", "frequency", "locations", "runParallel", "tags", "environmentVariables", "code"], errors, "MultiStepCheck options");
+  staticProperties(options, ["name", "activated", "muted", "frequency", "locations", "runParallel", "doubleCheck", "tags", "environmentVariables", "code"], errors, "MultiStepCheck options");
   const name = literalString(objectProperty(options, "name"));
   const rawLocations = stringArrayLiteral(objectProperty(options, "locations"));
   const locations = rawLocations ?? [];
@@ -247,22 +248,24 @@ export function parseMultiStepConstruct(files: Map<string, string>): { model: Mu
     return value?.kind === ts.SyntaxKind.TrueKeyword ? true : value?.kind === ts.SyntaxKind.FalseKeyword ? false : null;
   };
   const runParallel = bool("runParallel");
+  const doubleCheck = bool("doubleCheck");
   const activated = bool("activated");
   const muted = bool("muted");
   const frequency = frequencyMinutes(objectProperty(options, "frequency"));
-  if (name === null || rawLocations === null || runParallel === null || activated === null || muted === null || frequency === null) {
+  if (name === null || rawLocations === null || runParallel === null || doubleCheck === null || activated === null || muted === null || frequency === null) {
     errors.push("MultiStepCheck scheduling/identity settings do not resolve statically (UNCERTAIN)");
   }
   if (objectProperty(options, "tags") && !stringArrayLiteral(objectProperty(options, "tags"))) errors.push("MultiStepCheck tags do not resolve statically (UNCERTAIN)");
   const environmentKeys: string[] = [];
   const environmentDefinitions: MultiStepConstructModel["environmentDefinitions"] = [];
-  const approvedKeys = new Set(["ENVIRONMENT_URL", "MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1"]);
+  const approvedKeys = new Set(["ENVIRONMENT_URL", "MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1", "VERCEL_AUTOMATION_BYPASS_SECRET"]);
   const approvedEnvValue = (key: string, expression: ts.Expression): boolean => {
     // The canonical construct uses ?? '' to leave a missing deployment value
     // empty; no nonempty default or second environment key is admissible.
     const value = ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
       && literalString(expression.right) === "" ? expression.left : expression;
-    return approvedKeys.has(key) && ts.isPropertyAccessExpression(value) && value.name.text === key
+    return approvedKeys.has(key) && ts.isPropertyAccessExpression(value)
+      && value.name.text === (key === "VERCEL_AUTOMATION_BYPASS_SECRET" ? "CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET" : key)
       && ts.isPropertyAccessExpression(value.expression) && value.expression.name.text === "env"
       && ts.isIdentifier(value.expression.expression) && value.expression.expression.text === "process"
       && lexicalDeclaration("process", value) === null;
@@ -316,7 +319,7 @@ export function parseMultiStepConstruct(files: Map<string, string>): { model: Mu
     errors.push(`MultiStepCheck has no code.entrypoint in ${hit.file}`);
   }
   return {
-    model: { executed, logicalId, name, entrypoint, frequencyMinutes: frequency, locations, runParallel, activated, muted, tags, environmentKeys, environmentDefinitions, errors },
+    model: { executed, logicalId, name, entrypoint, frequencyMinutes: frequency, locations, runParallel, doubleCheck, activated, muted, tags, environmentKeys, environmentDefinitions, errors },
     constructFile: hit.file,
   };
 }
@@ -717,6 +720,11 @@ function headerAndBodyKeys(call: ts.CallExpression, sf: ts.SourceFile, errors: s
           if (!name || names.has(name)) { errors.push("request headers contain a duplicate or computed property — UNCERTAIN before execution"); continue; }
           names.add(name);
           headerKeys.push(name);
+          if (name.toLowerCase() === "x-vercel-protection-bypass"
+            && (!ts.isPropertyAssignment(property) || !ts.isIdentifier(property.initializer)
+              || property.initializer.text !== "bypass")) {
+            errors.push("protected target header is not bound to the approved runtime bypass — UNCERTAIN");
+          }
           if (ts.isPropertyAssignment(property) && /Bearer\s/.test(property.initializer.getText(sf))) usesBearer = true;
         }
       }
@@ -1090,7 +1098,7 @@ export function parseMultiStepScript(file: string, source: string, projectFiles?
   // configured locations share one account; changing SELECTED_SLOT must not
   // launder the same assertion ID into a different booking request.
   const guarded = new Set([
-    "CONTROL_CHARACTERS", "MONITORING_ACCOUNTS_BY_REGION", "region", "account", "SELECTED_SLOT", "rawEnvironmentUrl", "origin", "bearerToken",
+    "CONTROL_CHARACTERS", "MONITORING_ACCOUNTS_BY_REGION", "region", "account", "bypass", "SELECTED_SLOT", "rawEnvironmentUrl", "origin", "bearerToken",
     // Runtime data that carries the login/session/booking relationship across
     // steps. Preserving just the final expect() text is not enough if these
     // assignments can be replaced by constants or unrelated local values.
@@ -1146,7 +1154,7 @@ export function parseMultiStepScript(file: string, source: string, projectFiles?
       const root = propertyRoot(node.operand);
       if (root && guarded.has(root)) {
         securityBindings.push(`update:${node.operand.getText(sf)}:${node.operator}`);
-        errors.push("security-critical Multistep regional, account, slot or version scalar is mutated — UNCERTAIN before execution");
+        banned.push("security-critical Multistep scalar increment/decrement (regional selection, account, slot, token or version) — definite FAILED");
       }
       if (root && (evidenceAlias(root, node.operand) || (root === "process" && node.operand.getText(sf).startsWith("process.env")))) {
         errors.push("Playwright response, payload or runtime environment is mutated — UNCERTAIN before execution");
@@ -1162,6 +1170,16 @@ export function parseMultiStepScript(file: string, source: string, projectFiles?
     ts.forEachChild(node, securityVisit);
   };
   securityVisit(sf);
+  // The protected target header is an opaque runtime secret. A removed setup
+  // guard would permit a request without it; a different expression is not
+  // evidence that the Checkly secret is used. Neither is stored in reports.
+  const bypassGuard = sf.statements.some((statement) => ts.isIfStatement(statement)
+    && ts.isPrefixUnaryExpression(statement.expression)
+    && statement.expression.operator === ts.SyntaxKind.ExclamationToken
+    && ts.isIdentifier(statement.expression.operand) && statement.expression.operand.text === "bypass"
+    && ts.isThrowStatement(statement.thenStatement));
+  if (bypassGuard) securityBindings.push("guard:bypass:required");
+  else banned.push("protected target bypass setup guard removed");
 
   // ---- ENVIRONMENT_URL origin usage ----
   const readsEnvironmentUrl = /process\.env\.ENVIRONMENT_URL\b/.test(clean);
@@ -1197,6 +1215,11 @@ export function canonicalMultiStepScriptProblem(script: MultiStepScriptModel): s
   const expected = Object.entries(MULTISTEP_ROUTES).map(([route, method], index) => [MULTISTEP_STEP_TITLES[index], method, route]);
   const observed = script.requests.map((request) => [request.stepTitle, request.method, request.route]);
   if (JSON.stringify(observed) !== JSON.stringify(expected)) return "MULTISTEP_REQUEST_SEQUENCE_INVALID";
+  if (!script.securityBindings.includes("declare:bypass:const:process.env.VERCEL_AUTOMATION_BYPASS_SECRET")
+    || !script.securityBindings.includes("guard:bypass:required")
+    || script.requests.some((request) => request.headerKeys.filter((key) => key.toLowerCase() === "x-vercel-protection-bypass").length !== 1)) {
+    return "MULTISTEP_BYPASS_BINDING_INVALID";
+  }
   if (script.assertions.length === 0 || MULTISTEP_STEP_TITLES.some((title) => !script.assertions.some((item) => item.stepTitle === title))) {
     return "MULTISTEP_ASSERTIONS_UNPROVEN";
   }

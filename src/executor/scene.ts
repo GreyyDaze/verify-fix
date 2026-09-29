@@ -21,8 +21,9 @@ import { join } from "node:path";
 import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExecutor, type ObservationValue, type RunContext, type Scene, type SceneObservation, type TraceStep } from "../types.ts";
 import { runSandbox } from "../sandbox.ts";
 import { runPlaywrightSandbox } from "../playwright-sandbox.ts";
-import { trustedRegionalAccounts } from "../multistep/accounts.ts";
+import { AUTOMATION_BYPASS_INPUT, trustedAutomationBypass, trustedRegionalAccounts } from "../multistep/accounts.ts";
 import { trustedMultiStepDetection } from "../multistep/detection.ts";
+import { multiStepDiskRebound } from "../multistep/rebind.ts";
 import { runMultiStepSandbox } from "../multistep/executor.ts";
 import { knownRoute } from "../multistep/routes.ts";
 import { sceneExpected } from "../contract/contract.ts";
@@ -246,6 +247,9 @@ export class SceneExecutor implements ExperimentExecutor {
     }
     const mode = parseMode(scene.mode);
     const isMultiStep = bundle.check.checkType === "MULTI_STEP";
+    if (isMultiStep && bundle.schemaVersion === "v3" && !multiStepDiskRebound(bundle)) {
+      return this.uncertain(scene, "Multistep on-disk remote authority changed or is unresolved", 0, [], "target");
+    }
     // A MultiStepCheck construct overrides project-level Checkly scheduling.
     // Its unchanged deployed check configuration (captured in the bundle) is
     // the trusted location list; a patched checkly.config.ts for another check
@@ -295,8 +299,11 @@ export class SceneExecutor implements ExperimentExecutor {
       || Object.keys(scene.env ?? {}).some((key) => !multistepNames.includes(key)))) {
       return this.uncertain(scene, "Multistep env-file overrides a trusted runner key — no runner was started", 0, [], environment);
     }
-    if (isMultiStep && (!trustedRegionalAccounts(baseEnv))) {
-      return this.uncertain(scene, "Multistep regional account values must both be present and distinct — no runner was started", 0, [], environment);
+    const accounts = isMultiStep ? trustedRegionalAccounts(baseEnv) : null;
+    if (isMultiStep && (!accounts || !trustedAutomationBypass(baseEnv)
+      || ["TEST_USER", "TEST_USER_US_EAST_1", "TEST_USER_EU_WEST_1"].some((key) =>
+        baseEnv[key] && (baseEnv[key] === accounts.east || baseEnv[key] === accounts.west)))) {
+      return this.uncertain(scene, "Multistep regional account or protected bypass inputs are unavailable or overlap — no runner was started", 0, [], environment);
     }
 
     const budget = this.budgetFor(bundle);
@@ -335,7 +342,8 @@ export class SceneExecutor implements ExperimentExecutor {
       for (let batch = 0; batch < batches; batch++) {
         const urls = await this.proxy.arm({ mode, target: this.target, runs: concurrency, replayHar, replayBrowserAssetsFromTarget: replayBrowserAssets,
           failingHar, barrierTimeoutMs: this.barrierTimeoutMs,
-          trustedMultiStepDetection: mode.kind === "multistep-detection" });
+          trustedMultiStepDetection: mode.kind === "multistep-detection"
+            ? trustedMultiStepDetection(bundle, scene) ?? undefined : undefined });
         const startedAt = Date.now();
         const settled = await Promise.all(
           urls.map((url, runIndex) => {
@@ -344,6 +352,7 @@ export class SceneExecutor implements ExperimentExecutor {
               REGION: region!,
               MULTISTEP_USER_US_EAST_1: baseEnv.MULTISTEP_USER_US_EAST_1,
               MULTISTEP_USER_EU_WEST_1: baseEnv.MULTISTEP_USER_EU_WEST_1,
+              [AUTOMATION_BYPASS_INPUT]: baseEnv[AUTOMATION_BYPASS_INPUT],
             } : {
               ...baseEnv,
               CHECKLY: "1",
@@ -419,6 +428,9 @@ export class SceneExecutor implements ExperimentExecutor {
           if (outcome.inconclusive) return this.uncertain(scene, `${tag}${outcome.reason ?? "runner produced no admissible result"}`, rep + 1, mergedTrace, environment);
           if (!outcome.passed) repPassed = false;
         }
+      }
+      if (isMultiStep && bundle.schemaVersion === "v3" && !multiStepDiskRebound(bundle)) {
+        return this.uncertain(scene, "Multistep on-disk authority changed during execution", rep + 1, mergedTrace, environment);
       }
       if (mode.kind === "multistep-detection" && !trustedMultiStepDetection(bundle, scene)) {
         return this.uncertain(scene, "Multistep failing-side evidence changed during the scene", rep + 1, mergedTrace, environment);

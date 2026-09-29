@@ -5,10 +5,16 @@ name: verify-fix protected gate
 on:
   workflow_call:
     inputs:
-      trusted_ref:
+      verifier_ref:
         description: >-
-          Immutable commit that carries this protected workflow and its
-          trusted helpers. Must equal the caller's `uses:` pin.
+          V: reviewed immutable verifier and incident bundle commit. Distinct
+          from the later protected-workflow snapshot W.
+        required: true
+        type: string
+      workflow_ref:
+        description: >-
+          W: immutable reusable-workflow snapshot containing trusted helpers;
+          later the caller's `uses:` pin. Not the verifier commit V.
         required: true
         type: string
       deployment_id:
@@ -53,7 +59,7 @@ jobs:
     steps:
       - name: Validate deployment metadata and resolve its pull request
         id: pull-request
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
         env:
           DEPLOYMENT_ID: ${{ inputs.deployment_id }}
           DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
@@ -93,7 +99,7 @@ jobs:
               deployment_id: deploymentId,
               per_page: 100,
             })
-            if (statuses.length === 100) {
+            if (!Array.isArray(statuses) || statuses.length >= 100) {
               core.setFailed('Preview deployment status history may be incomplete.')
               return
             }
@@ -120,29 +126,29 @@ jobs:
             core.setOutput('fork', String(pull.head.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`))
 
       - name: Check out protected verifier and incident inputs
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ inputs.trusted_ref }}
+          ref: ${{ inputs.verifier_ref }}
           path: trusted
           persist-credentials: false
 
       - name: Require the protected verifier checkout to equal the trusted pin
         env:
-          TRUSTED_REF: ${{ inputs.trusted_ref }}
+          VERIFIER_REF: ${{ inputs.verifier_ref }}
         shell: bash
         run: |
-          [[ "$TRUSTED_REF" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git -C trusted rev-parse HEAD)" = "$TRUSTED_REF"
+          [[ "$VERIFIER_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C trusted rev-parse HEAD)" = "$VERIFIER_REF"
 
       - name: Check out the exact candidate for dependency lookup
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: ${{ steps.pull-request.outputs.head_repository }}
           ref: ${{ inputs.deployment_sha }}
           path: candidate-runtime
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -184,7 +190,7 @@ jobs:
 
       - name: Upload secret-free preflight evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: verify-fix-preflight-${{ inputs.deployment_sha }}
           path: artifacts/verify-fix-preflight.*
@@ -198,44 +204,44 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Check out protected verifier and incident inputs
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ inputs.trusted_ref }}
+          ref: ${{ inputs.verifier_ref }}
           path: trusted
           persist-credentials: false
 
       - name: Require the protected verifier checkout to equal the trusted pin
         env:
-          TRUSTED_REF: ${{ inputs.trusted_ref }}
+          VERIFIER_REF: ${{ inputs.verifier_ref }}
         shell: bash
         run: |
-          [[ "$TRUSTED_REF" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git -C trusted rev-parse HEAD)" = "$TRUSTED_REF"
+          [[ "$VERIFIER_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C trusted rev-parse HEAD)" = "$VERIFIER_REF"
 
       - name: Check out trusted workflow helpers at the immutable pin
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ inputs.trusted_ref }}
+          ref: ${{ inputs.workflow_ref }}
           path: workflow-trusted
           persist-credentials: false
 
       - name: Require the helper checkout to equal the trusted pin
         env:
-          TRUSTED_REF: ${{ inputs.trusted_ref }}
+          WORKFLOW_REF: ${{ inputs.workflow_ref }}
         shell: bash
         run: |
-          [[ "$TRUSTED_REF" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git -C workflow-trusted rev-parse HEAD)" = "$TRUSTED_REF"
+          [[ "$WORKFLOW_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C workflow-trusted rev-parse HEAD)" = "$WORKFLOW_REF"
 
       - name: Check out the exact candidate for runtime dependencies
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: ${{ needs.candidate-preflight.outputs.head_repository }}
           ref: ${{ inputs.deployment_sha }}
           path: candidate-runtime
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -250,10 +256,6 @@ jobs:
       - name: Install candidate dependencies without lifecycle scripts
         working-directory: candidate-runtime/${{ env.CANDIDATE_PROJECT_PATH }}
         run: npm ci --ignore-scripts
-
-      - name: Install Chromium in a separate approved step
-        working-directory: candidate-runtime/${{ env.CANDIDATE_PROJECT_PATH }}
-        run: npx playwright install --with-deps chromium
 
       - name: Require the runtime checkout to match the deployment
         env:
@@ -382,7 +384,7 @@ jobs:
 
       - name: Upload verification evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: verify-fix-${{ inputs.deployment_sha }}
           path: artifacts/verify-fix.*
@@ -415,7 +417,7 @@ jobs:
   # manual-only → waiting; a later event with both valid statuses may become
   # ready. Malformed, conflicting, ambiguous, wrong-deployment, or wrong-SHA
   # evidence fails closed. Helper code is the trusted checkout at
-  # inputs.trusted_ref (the caller's immutable pin), never candidate code.
+  # inputs.workflow_ref (later the caller's W pin), never candidate code.
   production-preflight:
     name: secret-free production URL preflight
     if: >-
@@ -433,24 +435,24 @@ jobs:
       stable_status_id: ${{ steps.resolve.outputs.stable_status_id }}
     steps:
       - name: Check out trusted workflow helpers at the immutable pin
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ inputs.trusted_ref }}
+          ref: ${{ inputs.workflow_ref }}
           path: workflow-trusted
           persist-credentials: false
 
       - name: Require the helper checkout to equal the trusted pin
         env:
-          TRUSTED_REF: ${{ inputs.trusted_ref }}
+          WORKFLOW_REF: ${{ inputs.workflow_ref }}
         shell: bash
         run: |
-          [[ "$TRUSTED_REF" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git -C workflow-trusted rev-parse HEAD)" = "$TRUSTED_REF"
+          [[ "$WORKFLOW_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C workflow-trusted rev-parse HEAD)" = "$WORKFLOW_REF"
 
       # Every helper-executing job installs the pinned runtime first — never
       # the runner's system Node.
       - name: Set up Node.js to run trusted helper code
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -476,7 +478,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Check out exact production source (not the verifier)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ inputs.deployment_sha }}
           path: candidate-runtime
@@ -484,21 +486,21 @@ jobs:
           persist-credentials: false
 
       - name: Check out trusted workflow helpers at the immutable pin
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ inputs.trusted_ref }}
+          ref: ${{ inputs.workflow_ref }}
           path: workflow-trusted
           persist-credentials: false
 
       - name: Require the helper checkout to equal the trusted pin
         env:
-          TRUSTED_REF: ${{ inputs.trusted_ref }}
+          WORKFLOW_REF: ${{ inputs.workflow_ref }}
         shell: bash
         run: |
-          [[ "$TRUSTED_REF" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git -C workflow-trusted rev-parse HEAD)" = "$TRUSTED_REF"
+          [[ "$WORKFLOW_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C workflow-trusted rev-parse HEAD)" = "$WORKFLOW_REF"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -545,19 +547,19 @@ jobs:
       # the main revision under test. The verifier and incident are an
       # immutable protected snapshot; neither comes from candidate code.
       - name: Check out protected verifier and incident inputs
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ inputs.trusted_ref }}
+          ref: ${{ inputs.verifier_ref }}
           path: trusted
           persist-credentials: false
 
       - name: Require the protected verifier checkout to equal the trusted pin
         env:
-          TRUSTED_REF: ${{ inputs.trusted_ref }}
+          VERIFIER_REF: ${{ inputs.verifier_ref }}
         shell: bash
         run: |
-          [[ "$TRUSTED_REF" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git -C trusted rev-parse HEAD)" = "$TRUSTED_REF"
+          [[ "$VERIFIER_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C trusted rev-parse HEAD)" = "$VERIFIER_REF"
 
       - name: Require checkout to equal the deployed revision
         env:
@@ -606,10 +608,6 @@ jobs:
       - name: Install project dependencies without lifecycle scripts
         working-directory: candidate-runtime/${{ env.CANDIDATE_PROJECT_PATH }}
         run: npm ci --ignore-scripts
-
-      - name: Install Chromium separately
-        working-directory: candidate-runtime/${{ env.CANDIDATE_PROJECT_PATH }}
-        run: npx playwright install --with-deps chromium
 
       - name: Build private runtime inputs and exact target metadata
         env:
@@ -711,10 +709,11 @@ jobs:
           # separate from the browser TEST_USER identities above.
           MULTISTEP_USER_US_EAST_1: ${{ secrets.MULTISTEP_USER_US_EAST_1 }}
           MULTISTEP_USER_EU_WEST_1: ${{ secrets.MULTISTEP_USER_EU_WEST_1 }}
+          CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           # Monitoring target = the manually verified stable alias only —
           # never the generated verification URL, never a guessed host.
           ENVIRONMENT_URL: ${{ needs.production-preflight.outputs.monitoring_url }}
-        run: npx checkly deploy --preview
+        run: ./node_modules/.bin/checkly deploy --preview
 
       - name: Recheck current main and both status IDs immediately before deploy
         id: final-roles
@@ -769,14 +768,15 @@ jobs:
           # separate from the browser TEST_USER identities above.
           MULTISTEP_USER_US_EAST_1: ${{ secrets.MULTISTEP_USER_US_EAST_1 }}
           MULTISTEP_USER_EU_WEST_1: ${{ secrets.MULTISTEP_USER_EU_WEST_1 }}
+          CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           # Monitoring target = the manually verified stable alias only —
           # never the generated verification URL, never a guessed host.
           ENVIRONMENT_URL: ${{ needs.production-preflight.outputs.monitoring_url }}
-        run: npx checkly deploy --force
+        run: ./node_modules/.bin/checkly deploy --force
 
       - name: Upload production verification evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: verify-fix-production-${{ inputs.deployment_sha }}
           path: artifacts/verify-fix-production.*

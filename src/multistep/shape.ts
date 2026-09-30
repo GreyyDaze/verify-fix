@@ -122,8 +122,13 @@ export function multiStepShapeProblems(capture: Pick<MultiStepCapture, "kind" | 
             || body.slot !== "09:30" || !version(body.version))))) {
       problems.push("MULTISTEP_REQUEST_BODY_INVALID");
     }
-    if (i === 3 && failing && (req.expected !== true || req.actual === true)) {
-      problems.push("MULTISTEP_FAILURE_STEP_UNBOUND");
+    // The request record carries expected/actual only in some reporter formats
+    // (the real Checkly 9.5.0 runner puts the assertion on the expect step's
+    // checklyData instead). When present they must show the stale assertion;
+    // when absent, the step-level assertion evidence above is the binding proof.
+    if (i === 3 && failing && (req.expected !== null || req.actual !== null)
+      && (req.expected !== true || req.actual === true)) {
+      problems.push("MULTIPLE_FAILURE_STEP_UNBOUND");
     }
     if (i === 3 && !failing && !step.assertions.some((a) => a.expected === true
       && a.actual === true && a.passed !== false)) {

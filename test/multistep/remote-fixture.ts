@@ -41,7 +41,8 @@ export async function syntheticRemoteBundle() {
   const entries = (id: string): AssetManifestEntry[] => ["test-results.json", "logs.txt", "check-run-data.json"]
     .map((filename) => ({ name: filename, type: filename === "logs.txt" ? "log" as const
       : filename === "check-run-data.json" ? "file" as const : "report" as const,
-      source: "synthetic-result", url: `https://fixture.invalid/${id}.zip`, archive: { entryName: filename } }));
+      source: { type: "check-result" as const, checkId: "synthetic-check", checkName: name, checkType: "MULTI_STEP", resultId: id },
+      contentType: "application/zip", url: `https://fixture.invalid/${id}.zip`, archive: { entryName: filename } }));
   const client = {
     calls: [],
     async getCheck() {

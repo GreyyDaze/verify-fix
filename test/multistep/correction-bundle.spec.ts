@@ -63,6 +63,22 @@ function summary(id: string, failure: boolean): CheckResultSummary {
     resultType: "FINAL", attempts: failure ? 2 : 1, errorGroupIds: [],
   };
 }
+/** Verified Checkly 9.5.0 manifest source scope: an OBJECT bound to the exact
+ * check and result ids, never a free-form string. */
+const sourceOf = (id: string): AssetManifestEntry["source"] => ({
+  type: "check-result", checkId: "synthetic-check", checkName: "slots booking multistep transaction",
+  checkType: "MULTI_STEP", resultId: id,
+});
+/** One valid archive-bundle entry of the shape `checkly assets download`
+ * produces: report/log/file type, application/zip content type, archive entry. */
+const entry = (name: string, id = "synthetic-fail", url?: string): AssetManifestEntry => ({
+  name,
+  type: name === "logs.txt" ? "log" : name === "check-run-data.json" ? "file" : "report",
+  source: sourceOf(id),
+  contentType: "application/zip",
+  url: url ?? `https://signed.invalid/${id}.zip`,
+  archive: { entryName: name },
+});
 interface FakeOpts {
   resultId?: string;
   checkLocations?: string[];
@@ -127,9 +143,7 @@ async function captureRemote(opts: FakeOpts = {}, fixtureDir: string | null = nu
     zips.set(id, writeZip(files));
   }
   const remote = (id: string) => ({ assets: ["test-results.json", "logs.txt", "check-run-data.json"].map((name) => ({
-    name, type: name === "logs.txt" ? "log" as const : name === "check-run-data.json" ? "file" as const : "report" as const,
-    source: "synthetic-result", url: `https://signed.invalid/${id}.zip?sig=${CANARY}`,
-    archive: { entryName: name },
+    ...entry(name, id, `https://signed.invalid/${id}.zip?sig=${CANARY}`),
   })) });
   return capture({ ...opts, remote: opts.remote ?? remote, download: opts.download ?? (async (url) => {
     const id = /\/(synthetic-(?:fail|pass))\.zip/.exec(url)?.[1];
@@ -294,10 +308,8 @@ test("remote ZIP capture is bounded before allocation and can record a valid, si
     ["synthetic-pass", writeZip({ "test-results.json": passingTestResults(), "logs.txt": passingLogs() })],
   ]);
   const budgets: number[] = [];
-  const remote = (id: string) => ({ assets: ["test-results.json", "logs.txt"].map((name) => ({
-    name, type: "report" as const, source: "synthetic", url: `https://signed.invalid/${id}.zip?secret=${CANARY}`,
-    archive: { entryName: name },
-  })) });
+  const remote = (id: string) => ({ assets: ["test-results.json", "logs.txt"].map((name) =>
+    entry(name, id, `https://signed.invalid/${id}.zip?secret=${CANARY}`)) });
   const out = await capture({ remote, download: async (url, max) => {
     budgets.push(max);
     const id = /\/(synthetic-(?:fail|pass))\.zip/.exec(url)?.[1];
@@ -315,15 +327,19 @@ test("remote duplicates/truncated manifests/CRC failures mark the whole side UNC
   const badCrc = Buffer.from(zip);
   const cdirOffset = badCrc.readUInt32LE(badCrc.length - 22 + 16);
   badCrc.writeUInt32LE(0, cdirOffset + 16); // central CRC disagrees with local CRC
-  const entry = (name: string): AssetManifestEntry => ({ name, type: "report", source: "synthetic", url: "https://signed.invalid/archive.zip", archive: { entryName: name } });
+  const valid = (name: string): AssetManifestEntry => ({ name, type: "report", source: sourceOf("synthetic-fail"), contentType: "application/zip", url: "https://signed.invalid/archive.zip", archive: { entryName: name } });
   const attacks = [
-    { remote: () => ({ assets: [entry("test-results.json"), entry("test-results.json")] }), data: zip, category: "MULTISTEP_DUPLICATE_ASSET" },
-    { remote: () => ({ assets: [entry("test-results.json")], truncated: true }), data: zip, category: "MULTISTEP_ASSET_MANIFEST_TRUNCATED" },
-    { remote: () => ({ assets: [entry("test-results.json")] }), data: badCrc, category: "MULTISTEP_ARCHIVE_INVALID" },
+    { remote: () => ({ assets: [valid("test-results.json"), valid("test-results.json")] }), data: zip, category: "MULTISTEP_DUPLICATE_ASSET" },
+    { remote: () => ({ assets: [valid("test-results.json")], truncated: true }), data: zip, category: "MULTISTEP_ASSET_MANIFEST_TRUNCATED" },
+    { remote: () => ({ assets: [valid("test-results.json")] }), data: badCrc, category: "MULTISTEP_ARCHIVE_INVALID" },
     { remote: () => ({ assets: [null as unknown as AssetManifestEntry] }), data: zip, category: "MULTISTEP_ASSET_MANIFEST_INVALID" },
-    { remote: () => ({ assets: [{ ...entry("test-results.json"), archive: { entryName: null as unknown as string } }] }), data: zip, category: "MULTISTEP_ASSET_MANIFEST_INVALID" },
+    { remote: () => ({ assets: [{ ...valid("test-results.json"), archive: { entryName: null as unknown as string } }] }), data: zip, category: "MULTISTEP_ASSET_MANIFEST_INVALID" },
     { remote: () => ({ assets: null as unknown as AssetManifestEntry[] }), data: zip, category: "MULTISTEP_ASSET_MANIFEST_INVALID" },
   ];
+  // A string source is not the verified Checkly 9.5.0 shape: the manifest entry
+  // must carry the result-scoped source OBJECT bound to this exact check/result.
+  const stringSource = await capture({ pass: null, remote: () => ({ assets: [{ ...valid("test-results.json"), source: "synthetic" as unknown as AssetManifestEntry["source"] }] }), download: async () => zip }, null);
+  assert.ok(stringSource.manifest.multistep?.failing?.problems.includes("MULTISTEP_ASSET_TYPE_INVALID"));
   for (const attack of attacks) {
     const out = await capture({ pass: null, remote: attack.remote, download: async () => attack.data }, null);
     assert.equal(out.manifest.recordings.multistepFailing, null);
@@ -342,8 +358,7 @@ test("the aggregate REMOTE download budget is passed to every fetch and rolls ba
   const limits: number[] = [];
   const out = await capture({ pass: null,
     remote: () => ({ assets: ["test-results.json", "logs.txt"].map((name, index) => ({
-      name, type: "report" as const, source: "synthetic",
-      url: `https://signed.invalid/archive-${index}.zip`, archive: { entryName: name },
+      ...entry(name, "synthetic-fail", `https://signed.invalid/archive-${index}.zip`),
     })) }),
     download: async (_url, maxBytes) => { limits.push(maxBytes); return archive; },
   }, null);
@@ -462,9 +477,8 @@ test("Multistep bundle output is bounded: reused directories cannot redirect fil
   const leaked = join(outside, "private.txt");
   writeFileSync(leaked, "leave intact");
   const zip = writeZip({ "test-results.json": failingTestResults(), "logs.txt": failingLogs() });
-  const remote = (id: string) => ({ assets: ["test-results.json", "logs.txt"].map((name) => ({
-    name, type: "report" as const, source: "synthetic", url: `https://signed.invalid/${id}.zip`, archive: { entryName: name },
-  })) });
+  const remote = (id: string) => ({ assets: ["test-results.json", "logs.txt"].map((name) =>
+    entry(name, id)) });
   const buildAt = (outDir: string) => buildBundle({ checkId: "synthetic-check", outDir, projectDir: project(), log: () => {} },
     { client: fakeClient({ remote, download: async (url) => /synthetic-pass/.test(url)
       ? writeZip({ "test-results.json": passingTestResults(), "logs.txt": passingLogs() }) : zip }),
@@ -669,7 +683,7 @@ test("v3 binding is mandatory and remote-only: v2 plus a binding, local hashes, 
 
 test("unknown remote manifest asset types and deployed-source drift fail before v3 finalization", async () => {
   const remote = (id: string) => ({ assets: [{ name: "test-results.json", type: "unknown" as "report",
-    source: "synthetic", url: `https://signed.invalid/${id}/report` }] });
+    source: sourceOf(id), url: `https://signed.invalid/${id}/report` }] });
   const unknown = await captureRemote({ remote, download: async () => { throw new Error("invalid types must not be downloaded"); } });
   assert.equal(unknown.manifest.recordings.multistepFailing, null);
   assert.ok(unknown.manifest.multistep?.failing?.problems.includes("MULTISTEP_ASSET_TYPE_INVALID"));
@@ -692,9 +706,8 @@ test("unknown remote manifest asset types and deployed-source drift fail before 
 test("exact output tree and full preflight secret scan reject stale files before any recapture write", async () => {
   const zipFail = writeZip({ "test-results.json": failingTestResults(), "logs.txt": failingLogs() });
   const zipPass = writeZip({ "test-results.json": passingTestResults(), "logs.txt": passingLogs() });
-  const remote = (id: string) => ({ assets: ["test-results.json", "logs.txt"].map((name) => ({
-    name, type: "report" as const, source: "synthetic", url: `https://signed.invalid/${id}.zip`, archive: { entryName: name },
-  })) });
+  const remote = (id: string) => ({ assets: ["test-results.json", "logs.txt"].map((name) =>
+    entry(name, id)) });
   const buildAt = (outDir: string) => buildBundle({ checkId: "synthetic-check", outDir, projectDir: project(), log: () => {} },
     { client: fakeClient({ remote, download: async (url) => url.includes("synthetic-fail") ? zipFail : zipPass }), accountId: "synthetic" });
   const dir = mkdtempSync(join(tmpdir(), "verify-fix-output-tree-exact-"));

@@ -74,9 +74,9 @@ function fakeClient(opts: { archive?: boolean; drift?: boolean } = {}) {
       return { ...s, playwrightCheckResult: { errors } } as CheckResult;
     },
     async getAssets(_checkId: string, id: string): Promise<AssetManifest> {
-      if (id === "r-fail" && opts.archive) return { assets: [{ type: "trace", name: "booking-trace.zip", url: "https://s3.example/archive.zip?sig=1", source: "playwright", archive: { entryName: "traces/booking-trace.zip" } }] };
-      if (id === "r-fail") return { assets: [{ type: "trace", name: "trace.zip", url: "https://s3.example/failing.zip?sig=1", source: "playwright" }] };
-      return { assets: [{ type: "trace", name: "trace.zip", url: "https://s3.example/passing.zip?sig=2", source: "playwright" }] };
+      if (id === "r-fail" && opts.archive) return { assets: [{ type: "trace", name: "booking-trace.zip", url: "https://s3.example/archive.zip?sig=1", source: { type: "check-result" }, archive: { entryName: "traces/booking-trace.zip" } }] };
+      if (id === "r-fail") return { assets: [{ type: "trace", name: "trace.zip", url: "https://s3.example/failing.zip?sig=1", source: { type: "check-result" } }] };
+      return { assets: [{ type: "trace", name: "trace.zip", url: "https://s3.example/passing.zip?sig=2", source: { type: "check-result" } }] };
     },
     async download(url: string) {
       downloads.push(url);

@@ -40,29 +40,64 @@ export function canonicalMultiStepIdentityProblem(model: MultiStepSourceModel | 
 /** The Checkly API's deployed script is independently compared byte-for-byte
  * with the *actual* construct entrypoint before any project file is saved.
  * A same-basename file elsewhere does not satisfy this comparison. */
-export function deployedMultiStepProblem(check: ChecklyCheck, model: MultiStepSourceModel | null,
-  sourceText: string | null): string | null {
-  if (canonicalMultiStepIdentityProblem(model)) return "MULTISTEP_CONSTRUCT_IDENTITY_INVALID";
+interface DeployedProblem {
+  problem: string | null;
+  /** Mismatched field names only — never values or raw provider text. */
+  fields: string[];
+}
+
+/**
+ * The canonical no-retry representation is EXACTLY `doubleCheck: false` plus
+ * `retryStrategy: null` (verified Checkly 9.5.0 GET-check response). Missing or
+ * contradictory retry information is never equivalent to it: doubleCheck:true,
+ * any retry strategy, or an absent doubleCheck/retryStrategy field is rejected.
+ */
+export function deployedProblem(check: ChecklyCheck, model: MultiStepSourceModel | null,
+  sourceText: string | null): DeployedProblem {
+  if (canonicalMultiStepIdentityProblem(model)) return { problem: "MULTISTEP_CONSTRUCT_IDENTITY_INVALID", fields: [] };
   if (check.checkType !== "MULTI_STEP" || check.name !== MULTISTEP_CHECK_NAME || !check.id
     || typeof check.script !== "string" || !sourceText || check.script !== sourceText
     || (check.scriptPath !== MULTISTEP_ENTRYPOINT && check.scriptPath !== "multistep-booking.spec.ts")) {
-    return "MULTISTEP_DEPLOYED_SOURCE_MISMATCH";
+    return { problem: "MULTISTEP_DEPLOYED_SOURCE_MISMATCH", fields: [] };
   }
-  if (check.frequency !== 5 || check.activated !== true || check.muted !== false
-    || check.runParallel !== true || !same(check.locations, MULTISTEP_LOCATIONS)
-    || !same(check.tags, MULTISTEP_TAGS)
-    || !same(envIdentity(check.environmentVariables ?? []), MULTISTEP_ENV)
-    || (check.privateLocations?.length ?? 0) !== 0 || check.groupId != null
-    || check.runtimeId != null || check.playwrightConfig != null
-    || check.testOnly === true || check.shouldFail === true
-    || check.frequencyOffset != null && check.frequencyOffset !== 0
-    || check.doubleCheck !== false || check.retryStrategy != null
-    || check.intent != null || check.aiAutoRepairEnabled === true
-    || check.pwProjects?.length || check.pwTags?.length || check.playwrightConfigPath
-    || check.installCommand || check.testCommand || check.request) {
-    return "MULTISTEP_DEPLOYED_CONFIG_MISMATCH";
-  }
-  return null;
+  const fields: string[] = [];
+  if (check.frequency !== 5) fields.push("frequency");
+  if (check.activated !== true) fields.push("activated");
+  if (check.muted !== false) fields.push("muted");
+  if (check.runParallel !== true) fields.push("runParallel");
+  if (!same(check.locations, MULTISTEP_LOCATIONS)) fields.push("locations");
+  if (!same(check.tags, MULTISTEP_TAGS)) fields.push("tags");
+  if (!same(envIdentity(check.environmentVariables ?? []), MULTISTEP_ENV)) fields.push("environmentVariables");
+  if ((check.privateLocations?.length ?? 0) !== 0) fields.push("privateLocations");
+  if (check.groupId != null) fields.push("groupId");
+  if (check.runtimeId != null) fields.push("runtimeId");
+  if (check.playwrightConfig != null) fields.push("playwrightConfig");
+  if (check.testOnly === true) fields.push("testOnly");
+  if (check.shouldFail === true) fields.push("shouldFail");
+  if (check.frequencyOffset != null && check.frequencyOffset !== 0) fields.push("frequencyOffset");
+  if (check.doubleCheck !== false) fields.push("doubleCheck");
+  if (check.retryStrategy !== null) fields.push("retryStrategy");
+  if (check.intent != null) fields.push("intent");
+  if (check.aiAutoRepairEnabled === true) fields.push("aiAutoRepairEnabled");
+  if (check.pwProjects?.length) fields.push("pwProjects");
+  if (check.pwTags?.length) fields.push("pwTags");
+  if (check.playwrightConfigPath) fields.push("playwrightConfigPath");
+  if (check.installCommand) fields.push("installCommand");
+  if (check.testCommand) fields.push("testCommand");
+  if (check.request) fields.push("request");
+  if (fields.length) return { problem: "MULTISTEP_DEPLOYED_CONFIG_MISMATCH", fields };
+  return { problem: null, fields: [] };
+}
+
+export function deployedMultiStepProblem(check: ChecklyCheck, model: MultiStepSourceModel | null,
+  sourceText: string | null): string | null {
+  return deployedProblem(check, model, sourceText).problem;
+}
+
+/** Mismatched deployed-config field names only — safe for diagnostics. */
+export function deployedProblemFields(check: ChecklyCheck, model: MultiStepSourceModel | null,
+  sourceText: string | null): string[] {
+  return deployedProblem(check, model, sourceText).fields;
 }
 
 // A stored config must be the exact sanitized projection. An extra field

@@ -89,6 +89,7 @@ interface JsonStep {
   steps?: unknown;
   checklyData?: unknown;
   category?: unknown;
+  stepId?: unknown;
   duration?: unknown;
 }
 
@@ -163,10 +164,12 @@ function checklyRecords(child: JsonStep, problems: string[]): Array<Record<strin
   return out;
 }
 
-/** The real body field: a record with only a `data` key wraps the payload. */
+/** The real body field: a record with a `data` key wraps the payload. The
+ * Checkly 9.5.0 runner adds Playwright transport options (maxRedirects)
+ * alongside `data`; the payload itself is always the `data` value. */
 function unwrapDataField(value: unknown): unknown {
   const record = asRecord(value);
-  if (record && Object.keys(record).length === 1 && "data" in record) return record.data;
+  if (record && "data" in record) return record.data;
   return value;
 }
 
@@ -214,6 +217,10 @@ function requestEvidence(child: JsonStep, problems: string[]): MultiStepRequestE
     || !sameField([raw.actual, raw.actualData].filter((value) => value != null))) {
     problems.push("MULTISTEP_REQUEST_SCHEMA_INVALID");
   }
+  // Verified Checkly 9.5.0 pw:api record: `requestHeaders` carries the request
+  // headers, while `headers` and `responseHeaders` BOTH carry the response
+  // headers (the runner duplicates them). Grouping `headers` with the request
+  // headers would manufacture a false contradiction from the real format.
   const headers = asRecord(raw.requestHeaders ?? raw.headers ?? request.headers) ?? raw.requestHeaders ?? raw.headers ?? request.headers;
   const responseHeaders = asRecord(raw.responseHeaders ?? response.headers) ?? raw.responseHeaders ?? response.headers;
   const sameHeaders = (values: unknown[]): boolean => {
@@ -222,8 +229,8 @@ function requestEvidence(child: JsonStep, problems: string[]): MultiStepRequestE
       .sort(([a], [b]) => a.localeCompare(b))));
     return normalized.every((value) => value === normalized[0]);
   };
-  if (!sameHeaders([raw.requestHeaders, raw.headers, nestedRequest?.headers].filter((value) => value != null))
-    || !sameHeaders([raw.responseHeaders, nestedResponse?.headers].filter((value) => value != null))) {
+  if (!sameHeaders([raw.requestHeaders, nestedRequest?.headers].filter((value) => value != null))
+    || !sameHeaders([raw.responseHeaders, raw.headers, nestedResponse?.headers].filter((value) => value != null))) {
     problems.push("MULTISTEP_REQUEST_SCHEMA_INVALID");
   }
   return {
@@ -595,12 +602,24 @@ export function normalizeMultiStepCapture(input: NormalizeMultiStepInput): Multi
       flattened.push(entry);
     }
     steps = [];
+    let admitted = 0;
     for (let i = 0; i < flattened.length; i++) {
-      if ((!input.reporterOnly && (flattened[i]!.step.category !== "test.step" || !Array.isArray(flattened[i]!.step.steps)))
-        || (flattened[i]!.step.steps !== undefined && !Array.isArray(flattened[i]!.step.steps))) {
+      const step = flattened[i]!.step;
+      // A genuine Playwright test.step is marked by `category: "test.step"` or
+      // by the serialized `stepId` prefix "test.step@" — the real Checkly 9.5.0
+      // runner marker. For DOWNLOADED assets, hook entries ("hook@…") and worker
+      // cleanup are reporter metadata, not transaction steps: they are skipped,
+      // never admitted as evidence and never allowed to shift the ordered step
+      // sequence. The local reporter (reporterOnly) keeps its original
+      // behavior: every top-level entry is collected.
+      const isTestStep = step.category === "test.step"
+        || (typeof step.stepId === "string" && /^test\.step@\d+$/.test(step.stepId));
+      if (!input.reporterOnly && !isTestStep) continue;
+      if (step.steps !== undefined && !Array.isArray(step.steps)) {
         problems.push("test-results.json top-level step is not a genuine Playwright test.step with nested children");
       }
-      steps.push(...collectStep(flattened[i]!.step, `step ${i + 1}`, problems, 0, flattened[i]!.resultStatus));
+      steps.push(...collectStep(step, `step ${admitted + 1}`, problems, 0, flattened[i]!.resultStatus));
+      admitted += 1;
     }
     // ---- stats/status/steps consistency: internally contradictory evidence is corrupt ----
     const statuses = found.statuses;

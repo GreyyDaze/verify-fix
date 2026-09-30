@@ -32,7 +32,7 @@ import type { MultiStepRecording } from "../multistep/capture.ts";
 import { constrainMultiStepManifest, multiStepRunMetadata } from "../multistep/bundle-evidence.ts";
 import { multistepProblemCategory } from "../multistep/sanitize.ts";
 import { parseMultiStepConstruct, parseMultiStepProject } from "../multistep/source.ts";
-import { deployedMultiStepProblem } from "../multistep/identity.ts";
+import { deployedProblem } from "../multistep/identity.ts";
 import { multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_BYTES, MULTISTEP_MAX_SOURCE_FILE_BYTES, MULTISTEP_MAX_SOURCE_FILES } from "../multistep/files.ts";
 
 export interface BuildOptions {
@@ -305,9 +305,13 @@ export function collectProjectSources(check: ChecklyCheck, projectDir: string | 
       // The project config describes the *other* Playwright check too. The
       // incident logical ID belongs to the executed Multistep construct.
       logicalId = model?.construct?.logicalId ?? null;
-      const deployedProblem = deployedMultiStepProblem(check, model,
+      const deployed = deployedProblem(check, model,
         mainSource ? sourceMap.get(mainSource) ?? null : null);
-      if (deployedProblem) warnings.push(deployedProblem);
+      if (deployed.problem) {
+        warnings.push(deployed.problem);
+        // Field names only — never values or raw provider text.
+        if (deployed.fields.length) warnings.push(`deployed config mismatch field: ${[...new Set(deployed.fields)].join(", ")}`);
+      }
     }
 
     if (check.checkType === "API") {
@@ -442,17 +446,35 @@ async function fetchResultWithTrace(
         let remoteUrl: URL;
         try { remoteUrl = new URL(asset.url); }
         catch { invalid = "MULTISTEP_ASSET_MANIFEST_INVALID"; break; }
+        // Verified Checkly 9.5.0 manifest shape (official API reference):
+        // `source` is a result-scope OBJECT, not a string; archive entries
+        // download as `application/zip` (the CLI's own archive content type).
+        const source = asset.source;
+        const sourceRecord = source && typeof source === "object" && !Array.isArray(source) ? source as unknown as Record<string, unknown> : null;
+        const sourceKeys = sourceRecord ? Object.keys(sourceRecord) : [];
+        const sourceId = (key: string): string | null =>
+          typeof sourceRecord?.[key] === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(sourceRecord[key] as string) ? sourceRecord[key] as string : null;
         if ((asset.type !== "report" && asset.type !== "file" && !(name === "logs.txt" && asset.type === "log"))
-          || typeof asset.source !== "string" || !asset.source || asset.source.length > 4096
-          || (asset.contentType !== undefined && (typeof asset.contentType !== "string" || asset.contentType.length > 512))
-          || (asset.archive && (Object.keys(asset.archive).length !== 1 || asset.archive.entryName.length > 256))
+          || !sourceRecord || sourceRecord.type !== "check-result"
+          || sourceKeys.some((key) => !["type", "checkId", "checkName", "checkType", "resultId", "testSessionId"].includes(key))
+          || sourceKeys.length > 6
+          || sourceId("checkId") !== checkId || sourceId("resultId") !== summary.id
+          || (asset.archive
+            ? (asset.contentType !== "application/zip"
+              || Object.keys(asset.archive).length !== 1 || asset.archive.entryName.length > 256)
+            : (asset.contentType !== undefined && (typeof asset.contentType !== "string" || asset.contentType.length > 512)))
           || remoteUrl.protocol !== "https:" || remoteUrl.username || remoteUrl.password
           || asset.url.length > 4096 || Object.keys(asset).some((key) => !["name", "type", "url", "contentType", "source", "archive"].includes(key))) {
           invalid = "MULTISTEP_ASSET_TYPE_INVALID";
           break;
         }
         const manifestEntrySha256 = sha256(Buffer.from(JSON.stringify({
-          type: asset.type, name: asset.name, source: asset.source, url: asset.url,
+          type: asset.type, name: asset.name, source: {
+            type: sourceRecord.type,
+            checkId: sourceId("checkId"), checkName: sourceId("checkName"),
+            checkType: sourceId("checkType"), resultId: sourceId("resultId"),
+            testSessionId: sourceId("testSessionId"),
+          }, url: asset.url,
           contentType: asset.contentType ?? null, archive: asset.archive?.entryName ?? null,
         }), "utf8"));
         try {
@@ -683,7 +705,13 @@ function writeMultiStepBundleFiles(outDir: string, files: Array<{ file: string; 
   let ancestor = dirname(outDir);
   while (true) {
     const stat = statOrNull(ancestor);
-    if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+    if (stat) {
+      // Resolve OS-level symlinks (macOS /var → /private/var, /tmp →
+      // /private/tmp): the resolved parent must be a real directory. The
+      // outDir itself and its contents stay lstat-checked (no-follow) below.
+      const target = stat.isSymbolicLink() ? statOrNull(realpathSync(ancestor)) : stat;
+      if (!target || !target.isDirectory()) throw new Error("MULTIPLE_OUTPUT_PATH_UNSAFE");
+    }
     if (ancestor === dirname(ancestor)) break;
     ancestor = dirname(ancestor);
   }

@@ -102,7 +102,12 @@ function startSyntheticApp(mode: "flat" | "nested", errorAt?: { position: number
   });
 }
 
-/** Samples the process table during a run; any browser-family process fails. */
+/** Samples the process table during a run; any browser-family process fails.
+ * The match is EXACT: a prefix match counted unrelated system processes such
+ * as `chrome-devtools-mcp` (an MCP server, not a browser) as browsers. Real
+ * browser executables report their exact name in `comm` (chrome, chromium,
+ * headless_shell, firefox, webkit, electron); anything with a suffix is not
+ * a browser process the verifier started. */
 function watchBrowserProcesses(): { stop: () => number } {
   let max = 0;
   const timer = setInterval(() => {
@@ -111,7 +116,7 @@ function watchBrowserProcesses(): { stop: () => number } {
       let hits = 0;
       for (const line of table.split("\n")) {
         const name = line.trim();
-        if (/^(chrome|chromium|headless_shell|firefox|webkit|electron)/i.test(name)) hits += 1;
+        if (/^(chrome|chromium|headless_shell|firefox|webkit|electron)$/i.test(name)) hits += 1;
       }
       if (hits > max) max = hits;
     } catch {

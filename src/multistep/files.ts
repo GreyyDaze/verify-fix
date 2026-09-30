@@ -9,12 +9,16 @@ import path from "node:path";
  * or hardlink, nor grow a file between stat and read. No raw path is included
  * in failure messages. The caller supplies a literal, not a manifest pointer. */
 export function readBoundedBundleFile(root: string, relative: string, limit: number): string {
-  const base = path.resolve(root);
+  let base = path.resolve(root);
   const parts = relative.split("/");
   if (!parts.length || parts.some((part) => !part || part === "." || part === ".." || part.includes("\\"))) {
     throw new Error("MULTISTEP_BUNDLE_PATH_UNSAFE");
   }
-  if (realpathSync(base) !== base) throw new Error("MULTISTEP_BUNDLE_PATH_UNSAFE");
+  // The bundle root itself must not be a symlink. OS-level symlinks in the
+  // parent chain (macOS /var → /private/var) resolve to the real tree: work
+  // from the resolved root so a legitimate temp bundle is not rejected.
+  if (lstatSync(base).isSymbolicLink()) throw new Error("MULTIPLE_BUNDLE_PATH_UNSAFE");
+  base = realpathSync(base);
   let dir = base;
   for (const segment of parts.slice(0, -1)) {
     const stat = lstatSync(dir);

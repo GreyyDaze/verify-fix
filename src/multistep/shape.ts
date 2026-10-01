@@ -122,12 +122,19 @@ export function multiStepShapeProblems(capture: Pick<MultiStepCapture, "kind" | 
             || body.slot !== "09:30" || !version(body.version))))) {
       problems.push("MULTISTEP_REQUEST_BODY_INVALID");
     }
-    // The request record carries expected/actual only in some reporter formats
+    // The request record repeats the assertion only in some reporter formats
     // (the real Checkly 9.5.0 runner puts the assertion on the expect step's
-    // checklyData instead). When present they must show the stale assertion;
-    // when absent, the step-level assertion evidence above is the binding proof.
-    if (i === 3 && failing && (req.expected !== null || req.actual !== null)
-      && (req.expected !== true || req.actual === true)) {
+    // checklyData instead, and fetch-record copies vary in serialization:
+    // received `undefined` serializes away, nulls and duplicated
+    // expectedData/actualData pairs appear). A copy is admissible when it
+    // carries no assertable primitive or agrees with the stale assertion; it
+    // is rejected only when it CONTRADICTS it. The binding proof itself stays
+    // with the step-level assertion evidence checked above — this law never
+    // admits or denies a binding on its own.
+    if (i === 3 && failing
+      && ((typeof req.expected === "boolean" || typeof req.expected === "number" || typeof req.expected === "string")
+        && req.expected !== true
+        || req.actual === true)) {
       problems.push("MULTISTEP_FAILURE_STEP_UNBOUND");
     }
     if (i === 3 && !failing && !step.assertions.some((a) => a.expected === true

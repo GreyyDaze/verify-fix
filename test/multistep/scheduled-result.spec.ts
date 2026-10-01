@@ -52,7 +52,7 @@ function headers(pairs: Array<[string, string]>): Json[] {
 function pwApi(stepId: string, title: string, init: {
   method: string; path: string; fetchUid: string;
   requestHeaders: Array<[string, string]>; responseHeaders: Array<[string, string]>;
-  requestBody: unknown; body: unknown;
+  requestBody: unknown; body: unknown; extra?: Json;
 }): Json {
   return {
     stepId, title, duration: 10,
@@ -64,6 +64,7 @@ function pwApi(stepId: string, title: string, init: {
       requestBody: init.requestBody, body: init.body, method: init.method,
       timings: { wait: 2.4, dns: 21.3, tcp: 2.1, firstByte: 66.9, download: 1.1, total: 93.9 },
       queryParams: [],
+      ...init.extra,
     }],
   };
 }
@@ -91,7 +92,7 @@ const flatBookBody = { confirmed: true, booking: "CONFIRMED", account: FAKE_ACCO
 
 /** The real failing scheduled run: hooks, four ordered test.steps, the stale
  * assertion failing inside "book 09:30", no confirmation step. */
-function failingSteps(reportedLine: number = RUNTIME_LINE): Json[] {
+function failingSteps(reportedLine: number = RUNTIME_LINE, bookFetchAssertion: Json | null = null): Json[] {
   const bookError = { message: STALE_ERROR, stack: STALE_STACK, isSoft: false, location: staleLocation(reportedLine) };
   return [
     hook("hook@1", "Before Hooks", [
@@ -153,6 +154,7 @@ function failingSteps(reportedLine: number = RUNTIME_LINE): Json[] {
         responseHeaders: [["content-type", "application/json"]],
         requestBody: { data: { slot: SELECTED_SLOT }, maxRedirects: 20 },
         body: nestedBookBody,
+        ...(bookFetchAssertion ? { extra: bookFetchAssertion } : {}),
       }),
       expectStep("expect@60", 200, 200),
       expectStep("expect@61", undefined, true, { message: STALE_ERROR, stack: STALE_STACK, isSoft: false, location: staleLocation(reportedLine) }),
@@ -204,8 +206,8 @@ function reportOf(steps: Json[], stats: Json, failed: boolean): string {
   });
 }
 
-function failingReport(reportedLine: number = RUNTIME_LINE): string {
-  return reportOf(failingSteps(reportedLine), { startTime: "2026-09-29T20:33:16.334Z", duration: 3388.141, expected: 0, skipped: 0, unexpected: 1, flaky: 0 }, true)
+function failingReport(reportedLine: number = RUNTIME_LINE, bookFetchAssertion: Json | null = null): string {
+  return reportOf(failingSteps(reportedLine, bookFetchAssertion), { startTime: "2026-09-29T20:33:16.334Z", duration: 3388.141, expected: 0, skipped: 0, unexpected: 1, flaky: 0 }, true)
     .split(`multistep-booking.spec.ts:${RUNTIME_LINE}:${RUNTIME_COLUMN}`).join(`multistep-booking.spec.ts:${reportedLine}:${RUNTIME_COLUMN}`);
 }
 
@@ -301,13 +303,15 @@ interface ManifestVariant {
   dropSourceIds?: boolean;
   reportedLine?: number;
   frequencyOffset?: number | null;
+  /** Assertion copy the real runner may also attach to the book fetch record. */
+  bookFetchAssertion?: Json;
 }
 
 function scheduledClient(variant: ManifestVariant = {}): ChecklyClient {
   const frequencyOffset = variant.frequencyOffset === undefined ? 37 : variant.frequencyOffset;
   const zipFor = (id: string): Buffer => writeZip(id === "synthetic-pass"
     ? { "test-results.json": passingReport(), "check-run-data.json": checkRunData(), "logs.txt": logs() }
-    : { "test-results.json": failingReport(variant.reportedLine ?? RUNTIME_LINE), "check-run-data.json": checkRunData(), "logs.txt": logs() });
+    : { "test-results.json": failingReport(variant.reportedLine ?? RUNTIME_LINE, variant.bookFetchAssertion ?? null), "check-run-data.json": checkRunData(), "logs.txt": logs() });
   const entries = (id: string): AssetManifestEntry[] => ["test-results.json", "check-run-data.json", "logs.txt"].map((name) => {
     const type: AssetType = name === "logs.txt" ? "log" : name === "check-run-data.json" ? "file" : "report";
     const source: Record<string, unknown> = variant.dropSourceIds
@@ -416,6 +420,34 @@ test("archive descriptors admit the official free-form content type and reject m
   assert.ok(extraKey.multistep?.problems.includes("MULTISTEP_ASSET_TYPE_INVALID"));
   const { bundle: noIds } = await scheduledBundle({ dropSourceIds: true });
   assert.ok(noIds.multistep?.problems.includes("MULTISTEP_ASSET_TYPE_INVALID"));
+});
+
+test("a redundant assertion copy on the book fetch record admits real serializations and rejects contradictions", async () => {
+  // The real Checkly 9.5.0 runner keeps the binding assertion on the expect
+  // step's checklyData; a fetch-record copy varies in serialization (received
+  // `undefined` drops out of JSON, nulls and duplicated expectedData/actualData
+  // pairs appear). Copies that agree — or carry nothing assertable — admit;
+  // only a genuine contradiction of the stale assertion rejects.
+  for (const [label, extra] of [
+    ["expected true, actual null", { expected: true, actual: null }],
+    ["expected true only", { expected: true }],
+    ["duplicated pair form", { expected: true, expectedData: true, actual: null, actualData: null }],
+    ["received undefined marker", { expected: true, actual: "undefined" }],
+  ] as Array<[string, Json]>) {
+    const { bundle } = await scheduledBundle({ bookFetchAssertion: extra });
+    assert.deepEqual(bundle.multistep?.problems ?? [], [], `${label} must admit`);
+    assert.equal(bundle.multistep?.failureAssertion?.line, SOURCE_LINE, label);
+  }
+  for (const [label, extra] of [
+    ["expected false", { expected: false }],
+    ["expected zero", { expected: 0 }],
+    ["expected stringified", { expected: "true" }],
+    ["claims passed", { expected: true, actual: true }],
+  ] as Array<[string, Json]>) {
+    const { bundle } = await scheduledBundle({ bookFetchAssertion: extra });
+    assert.ok(bundle.multistep?.problems.includes("MULTISTEP_FAILURE_STEP_UNBOUND"), `${label} must reject as FAILURE_STEP_UNBOUND`);
+    assert.equal(bundle.scenes.length, 0, label);
+  }
 });
 
 test("source-controlled frequencyOffset requires exact equality; omitted source accepts only provider metadata", () => {

@@ -17,7 +17,7 @@ export function readBoundedBundleFile(root: string, relative: string, limit: num
   // The bundle root itself must not be a symlink. OS-level symlinks in the
   // parent chain (macOS /var → /private/var) resolve to the real tree: work
   // from the resolved root so a legitimate temp bundle is not rejected.
-  if (lstatSync(base).isSymbolicLink()) throw new Error("MULTIPLE_BUNDLE_PATH_UNSAFE");
+  if (lstatSync(base).isSymbolicLink()) throw new Error("MULTISTEP_BUNDLE_PATH_UNSAFE");
   base = realpathSync(base);
   let dir = base;
   for (const segment of parts.slice(0, -1)) {

@@ -32,6 +32,13 @@ const KNOWN_PROBLEMS = new Set([
   "MULTISTEP_SOURCE_PATH_UNSAFE", "MULTISTEP_SOURCE_CLOSURE_BOUND", "MULTISTEP_CAPTURE_BINDING_INVALID",
   "MULTISTEP_MECHANICS_ONLY", "MULTISTEP_ASSET_TYPE_INVALID", "MULTISTEP_BYPASS_BINDING_INVALID", "MULTISTEP_RAW_SCHEMA_INVALID", "MULTISTEP_CONSTRUCT_IDENTITY_INVALID", "MULTISTEP_DEPLOYED_SOURCE_MISMATCH",
 ]);
+/** True only for the exact fixed problem names above. Used by the taxonomy
+ * test to prove every emitter spells a real category (no typo can masquerade
+ * as an unknown problem and collapse into the EVIDENCE_INVALID fallback). */
+export function isKnownMultiStepProblem(problem: string): boolean {
+  return KNOWN_PROBLEMS.has(problem);
+}
+
 export function multistepProblemCategory(problem: string): string {
   if (KNOWN_PROBLEMS.has(problem)) return problem;
   if (/token relationship/i.test(problem)) return "MULTISTEP_TOKEN_RELATIONSHIP_INVALID";

@@ -716,7 +716,7 @@ function writeMultiStepBundleFiles(outDir: string, files: Array<{ file: string; 
       // /private/tmp): the resolved parent must be a real directory. The
       // outDir itself and its contents stay lstat-checked (no-follow) below.
       const target = stat.isSymbolicLink() ? statOrNull(realpathSync(ancestor)) : stat;
-      if (!target || !target.isDirectory()) throw new Error("MULTIPLE_OUTPUT_PATH_UNSAFE");
+      if (!target || !target.isDirectory()) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
     }
     if (ancestor === dirname(ancestor)) break;
     ancestor = dirname(ancestor);

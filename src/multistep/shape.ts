@@ -128,7 +128,7 @@ export function multiStepShapeProblems(capture: Pick<MultiStepCapture, "kind" | 
     // when absent, the step-level assertion evidence above is the binding proof.
     if (i === 3 && failing && (req.expected !== null || req.actual !== null)
       && (req.expected !== true || req.actual === true)) {
-      problems.push("MULTIPLE_FAILURE_STEP_UNBOUND");
+      problems.push("MULTISTEP_FAILURE_STEP_UNBOUND");
     }
     if (i === 3 && !failing && !step.assertions.some((a) => a.expected === true
       && a.actual === true && a.passed !== false)) {

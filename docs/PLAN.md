@@ -224,10 +224,11 @@ runs belong to Phase 6, not Phase 7. A local fixture labeled `PASS` proves only
 the verifier's mechanics under explicit synthetic assumptions; it is not a
 Checkly capture, browser session, deployed revision, Vercel readiness or cloud
 proof. The current pre-commit Phase 7 checkpoint on Node v24.21.0
-(lockfile installs with `--ignore-scripts`) passed **166/166** focused
-Multistep/CLI/scene tests, **259/259** focused workflow/bundle/API tests,
-and **1/1** packed external-consumer test (zero skips in each). The **464-test
-full suite: 457 pass, exactly seven known `test/verify.spec.ts` failures,
+(lockfile installs with `--ignore-scripts`) passed **197/197** focused
+Multistep/CLI/scene/sandbox tests and **242/242** focused
+workflow/bundle/API/executor/candidate/package tests (the last includes the
+packed external-consumer run), all zero-skip. The **477-test
+full suite: 470 pass, exactly seven known `test/verify.spec.ts` failures,
 zero skips** has the same seven failures as the preceding checkpoint. These
 are the legacy real-app DSL assertions against the now-nested app response,
 not new Phase 7 failures; an eighth failure or a skip is unacceptable. Root
@@ -235,6 +236,34 @@ and example typechecks/builds, four helper syntax checks, workflow Bash syntax
 checks, and the synthetic local in-memory collision check (5/5) passed. The
 committed-HEAD recheck and exact hashes belong in the final review report.
 Real checkpoints above remain open.
+
+**Checkly 9.5.0 artifact parity corrections (2026-10-01, synthetic validation
+only).** Confirmed against the official Checkly 9.5.0 documentation and the
+published `checkly@9.5.0` package before implementation: (1) the result asset
+manifest binds each entry with a result-scoped `source` object and a *free-form*
+`contentType` — the real scheduled archive ships `application/octet-stream` — so
+the normal automatic remote-download path now verifies archive zip-ness from the
+downloaded bytes; non-string, absent-required, oversized (>512 chars) or
+foreign-scoped descriptors still fail closed (`MULTISTEP_ASSET_TYPE_INVALID`).
+(2) The provider spreads scheduled runs by `frequencyOffset` seconds that the
+construct never sets: a source-controlled offset (object form or
+`new Frequency(minutes, seconds)`) still requires exact equality, while an
+omitted source offset narrowly accepts only provider-generated metadata
+(integer seconds, 0 or within the documented spread for the frequency); any
+other value fails closed (`MULTISTEP_DEPLOYED_CONFIG_MISMATCH`).
+(3) The scheduled runner reports failing expects in transpiled/VM-wrapped
+coordinates (`132:44` for source line 142 of the same deployed script): a
+bounded fallback re-binds the canonical stale assertion only when the reported
+line matches no source assertion and exactly one unnegated
+`expect(body.confirmed).toBe(true)` in the failed step explains the failure;
+every other case fails closed, and stored recordings carry the re-based source
+line. (4) Real `pw:api` records also carry `queryParams`, now admitted by the
+raw reporter schema. The existing scheduled result then validates on the
+automatic remote-download path with zero multistep problems and warnings
+(nonempty scenes, failure at `book 09:30`, four ordered HTTP-200 requests, no
+confirmation step) in `test/multistep/scheduled-result.spec.ts` — a synthetic
+fixture of the real artifact shapes; no new Checkly run was triggered and no
+real evidence or parity is claimed.
 
 ## Phase 8 — CLI setup and copied live learning project
 

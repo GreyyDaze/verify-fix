@@ -45,6 +45,9 @@ const DATA_KEYS = new Set([
   "requestTitle", "title", "fetchUid", "method", "url", "uri", "requestHeaders", "headers", "requestBody",
   "status", "statusCode", "statusText", "responseHeaders", "body", "responseBody", "expected", "actual",
   "expectedData", "actualData", "timings", "request", "response",
+  // Verified real Checkly 9.5.0 runner record: every pw:api entry carries the
+  // parsed query parameters alongside `timings` (empty for canonical routes).
+  "queryParams",
 ]);
 const REQUEST_KEYS = new Set(["method", "url", "uri", "headers", "body", "data"]);
 const RESPONSE_KEYS = new Set(["status", "statusCode", "statusText", "headers", "body", "data"]);

@@ -359,7 +359,7 @@ test("automatic real-shape archive download binds a bundle with scenes and the b
   assert.equal(recording.binding.failureAssertion?.repairedSubject, "body.booking.confirmed");
 });
 
-test("archive entries must use the verified application/zip content type", async () => {
+test("official free-form archive content type is admitted; a non-string one is not", async () => {
   const spec = readFileSync(`${web}checks/multistep-booking.spec.ts`, "utf8");
   const projectDir = mkdtempSync(join(tmpdir(), "checkly950-ct-project-"));
   mkdirSync(join(projectDir, "checks"));
@@ -371,29 +371,61 @@ test("archive entries must use the verified application/zip content type", async
     hasFailures: true, hasErrors: false, runLocation: "eu-west-1", startedAt: "2026-09-25T22:18:13.000Z",
     stoppedAt: "2026-09-25T22:18:18.000Z", resultType: "FINAL", attempts: 1, errorGroupIds: [],
   };
-  const zip = writeZip({ "test-results.json": realShapeFailing() });
-  const client = {
+  const zip = writeZip({ "test-results.json": realShapeFailing(), "check-run-data.json": realShapeCheckRunData(), "logs.txt": realShapeLogs() });
+  const client = (contentType?: unknown) => ({
     calls: [],
     async getCheck() {
       return {
         id: "synthetic-check", name: fail.name, checkType: "MULTI_STEP", activated: true, muted: false,
         frequency: 5, runParallel: true, locations: ["us-east-1", "eu-west-1"], privateLocations: [],
         tags: ["slots-booking", "verify-fix-example", "multistep"], retryStrategy: null, doubleCheck: false, runtimeId: null,
-        script: spec, scriptPath: "multistep-booking.spec.ts", environmentVariables: [],
+        groupId: null, script: spec, scriptPath: "checks/multistep-booking.spec.ts",
+        environmentVariables: [
+          { key: "ENVIRONMENT_URL", value: "synthetic-origin", secret: false },
+          { key: "MULTISTEP_USER_US_EAST_1", value: "synthetic-east", secret: true },
+          { key: "MULTISTEP_USER_EU_WEST_1", value: "synthetic-west", secret: true },
+          { key: "VERCEL_AUTOMATION_BYPASS_SECRET", value: "synthetic-bypass", secret: true },
+        ],
       };
     },
     async listResults() { return { entries: [fail], nextId: null }; },
     async getResult() { return fail; },
     async getAssets() {
-      return { assets: [{ name: "test-results.json", type: "report", source: { type: "check-result" }, contentType: "application/octet-stream", url: "https://signed.invalid/a.zip", archive: { entryName: "test-results.json" } }] };
+      const entry: Record<string, unknown> = {
+        name: "test-results.json", type: "report", contentType, url: "https://signed.invalid/a.zip",
+        source: { type: "check-result", checkId: "synthetic-check", checkName: fail.name, checkType: "MULTI_STEP", resultId: fail.id },
+        archive: { entryName: "test-results.json" },
+      };
+      if (contentType === undefined) delete entry.contentType;
+      return { assets: [entry] };
     },
     async download() { return zip; },
-  } as unknown as ChecklyClient;
-  const outDir = mkdtempSync(join(tmpdir(), "checkly950-ct-bundle-"));
-  await buildBundle({ checkId: "synthetic-check", outDir, projectDir, log: () => {} },
-    { client, accountId: "synthetic", now: () => new Date("2026-09-27T00:00:00.000Z") });
-  const bundle = loadBundle(outDir).bundle;
-  assert.ok(bundle.multistep?.problems.includes("MULTISTEP_ASSET_TYPE_INVALID"), "a non-zip content type is rejected");
+  } as unknown as ChecklyClient);
+  const build = async (client: ChecklyClient) => {
+    const outDir = mkdtempSync(join(tmpdir(), "checkly950-ct-bundle-"));
+    await buildBundle({ checkId: "synthetic-check", outDir, projectDir, log: () => {} },
+      { client, accountId: "synthetic", now: () => new Date("2026-09-27T00:00:00.000Z") });
+    return JSON.parse(readFileSync(join(outDir, "manifest.json"), "utf8")) as {
+      recordings: { multistepFailing: string | null };
+      multistep: { failing: { problems: string[] } | null };
+    };
+  };
+  // Checkly 9.5.0 packs every entry of a result into one zip whose descriptor
+  // content type is free-form (the real scheduled run shipped
+  // application/octet-stream): zip-ness is verified from the downloaded bytes,
+  // so the archive still binds, while zip-adjacent metadata like the entry
+  // names stays descriptor-checked.
+  const octet = await build(client("application/octet-stream"));
+  assert.ok(octet.recordings.multistepFailing, "free-form content type admits the archive");
+  assert.ok(!octet.multistep?.failing?.problems.includes("MULTISTEP_ASSET_TYPE_INVALID"));
+  const absent = await build(client(undefined));
+  assert.ok(absent.recordings.multistepFailing, "an absent contentType is the documented optional shape");
+  const numeric = await build(client(513));
+  assert.equal(numeric.recordings.multistepFailing, null);
+  assert.ok(numeric.multistep?.failing?.problems.includes("MULTISTEP_ASSET_TYPE_INVALID"));
+  const long = await build(client("x".repeat(513)));
+  assert.equal(long.recordings.multistepFailing, null, "a free-form content type still has a length bound");
+  assert.ok(long.multistep?.failing?.problems.includes("MULTISTEP_ASSET_TYPE_INVALID"));
 });
 
 test("canonical no-retry deployed config is exactly doubleCheck:false plus retryStrategy:null", () => {

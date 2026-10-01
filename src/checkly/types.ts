@@ -152,6 +152,8 @@ export type AssetType = "log" | "trace" | "video" | "screenshot" | "pcap" | "rep
  * response (official API reference): `source` is an object identifying the
  * result scope that produced the entry — NOT a string. The CLI's older
  * `source: string` typing does not match the live 9.5.0 response.
+ * `contentType` is an optional free-form string: the API documents no fixed
+ * value, so archive zip-ness is verified from the downloaded bytes instead.
  */
 export interface AssetManifestSource {
   type: "check-result" | "test-session-result";

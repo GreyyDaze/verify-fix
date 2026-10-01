@@ -446,23 +446,29 @@ async function fetchResultWithTrace(
         let remoteUrl: URL;
         try { remoteUrl = new URL(asset.url); }
         catch { invalid = "MULTISTEP_ASSET_MANIFEST_INVALID"; break; }
-        // Verified Checkly 9.5.0 manifest shape (official API reference):
-        // `source` is a result-scope OBJECT, not a string; archive entries
-        // download as `application/zip` (the CLI's own archive content type).
+        // Verified Checkly 9.5.0 manifest shape (official API reference and
+        // the CLI's own asset-manifests types): `source` is a result-scope
+        // OBJECT, not a string, and `contentType` is an OPTIONAL free-form
+        // string — the API documents no fixed value for archive entries (the
+        // CLI labels only its own collapsed zip download `application/zip`).
+        // Archive zip-ness is therefore enforced on the DOWNLOADED BYTES by
+        // the bounded ZIP reader below, never by a metadata equality.
         const source = asset.source;
         const sourceRecord = source && typeof source === "object" && !Array.isArray(source) ? source as unknown as Record<string, unknown> : null;
         const sourceKeys = sourceRecord ? Object.keys(sourceRecord) : [];
         const sourceId = (key: string): string | null =>
           typeof sourceRecord?.[key] === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(sourceRecord[key] as string) ? sourceRecord[key] as string : null;
+        const contentTypeValid = asset.contentType === undefined
+          || (typeof asset.contentType === "string" && asset.contentType.length <= 512);
         if ((asset.type !== "report" && asset.type !== "file" && !(name === "logs.txt" && asset.type === "log"))
           || !sourceRecord || sourceRecord.type !== "check-result"
           || sourceKeys.some((key) => !["type", "checkId", "checkName", "checkType", "resultId", "testSessionId"].includes(key))
           || sourceKeys.length > 6
           || sourceId("checkId") !== checkId || sourceId("resultId") !== summary.id
+          || !contentTypeValid
           || (asset.archive
-            ? (asset.contentType !== "application/zip"
-              || Object.keys(asset.archive).length !== 1 || asset.archive.entryName.length > 256)
-            : (asset.contentType !== undefined && (typeof asset.contentType !== "string" || asset.contentType.length > 512)))
+            ? (Object.keys(asset.archive).length !== 1 || asset.archive.entryName.length > 256)
+            : false)
           || remoteUrl.protocol !== "https:" || remoteUrl.username || remoteUrl.password
           || asset.url.length > 4096 || Object.keys(asset).some((key) => !["name", "type", "url", "contentType", "source", "archive"].includes(key))) {
           invalid = "MULTISTEP_ASSET_TYPE_INVALID";

@@ -52,9 +52,25 @@ interface DeployedProblem {
  * contradictory retry information is never equivalent to it: doubleCheck:true,
  * any retry strategy, or an absent doubleCheck/retryStrategy field is rejected.
  */
+/**
+ * Official Checkly 9.5.0 `frequencyOffset` semantics (Public API check schema
+ * and the constructs' Frequency class): SECONDS. frequency 0 (sub-minute) is
+ * driven by an offset of exactly 10, 20 or 30; a minute frequency may carry a
+ * provider-generated spread of 1..floor(frequency*10) up to 60 minutes and
+ * 1..ceil(frequency/60) above that; 0 means disabled. When the construct
+ * omits the offset, the backend may still generate one — that metadata alone
+ * is admitted, never an arbitrary or out-of-range value.
+ */
+function providerGeneratedFrequencyOffset(offset: unknown, frequency: number | null): boolean {
+  if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset <= 0) return false;
+  if (frequency === null || !Number.isSafeInteger(frequency) || frequency < 0) return false;
+  if (frequency === 0) return offset === 10 || offset === 20 || offset === 30;
+  return offset <= (frequency <= 60 ? Math.floor(frequency * 10) : Math.ceil(frequency / 60));
+}
+
 export function deployedProblem(check: ChecklyCheck, model: MultiStepSourceModel | null,
   sourceText: string | null): DeployedProblem {
-  if (canonicalMultiStepIdentityProblem(model)) return { problem: "MULTISTEP_CONSTRUCT_IDENTITY_INVALID", fields: [] };
+  if (!model || model.construct === null || canonicalMultiStepIdentityProblem(model)) return { problem: "MULTISTEP_CONSTRUCT_IDENTITY_INVALID", fields: [] };
   if (check.checkType !== "MULTI_STEP" || check.name !== MULTISTEP_CHECK_NAME || !check.id
     || typeof check.script !== "string" || !sourceText || check.script !== sourceText
     || (check.scriptPath !== MULTISTEP_ENTRYPOINT && check.scriptPath !== "multistep-booking.spec.ts")) {
@@ -74,7 +90,14 @@ export function deployedProblem(check: ChecklyCheck, model: MultiStepSourceModel
   if (check.playwrightConfig != null) fields.push("playwrightConfig");
   if (check.testOnly === true) fields.push("testOnly");
   if (check.shouldFail === true) fields.push("shouldFail");
-  if (check.frequencyOffset != null && check.frequencyOffset !== 0) fields.push("frequencyOffset");
+  // Source-controlled offset: the deployed check must equal it exactly.
+  // Omitted from source: only the provider-generated metadata above passes.
+  if (model.construct !== null && model.construct.frequencyOffsetSeconds !== null) {
+    if (check.frequencyOffset !== model.construct.frequencyOffsetSeconds) fields.push("frequencyOffset");
+  } else if (check.frequencyOffset != null && check.frequencyOffset !== 0
+    && !providerGeneratedFrequencyOffset(check.frequencyOffset, check.frequency)) {
+    fields.push("frequencyOffset");
+  }
   if (check.doubleCheck !== false) fields.push("doubleCheck");
   if (check.retryStrategy !== null) fields.push("retryStrategy");
   if (check.intent != null) fields.push("intent");

@@ -29,11 +29,34 @@ export function boundFailureAssertion(steps: MultiStepRecording["steps"],
     || (reporterOnly && book.assertions.length === 0 ? false
       : !book.assertions.some((a) => a.expected === true && a.actual !== true && a.passed !== true))) return null;
   const onLine = source.script.assertions.filter((a) => a.sourceLine === book.failureLine && a.stepTitle === book.title);
+  // Exact source-coordinate match first — the local reporter always reports
+  // the source line, and a stored recording was already re-based to it.
   const assertion = onLine[0];
-  if (onLine.length !== 1 || !assertion || assertion.subject !== "body.confirmed" || assertion.matcher !== "toBe"
-    || assertion.target !== "true" || assertion.negated
-    || assertion.id !== assertionId("body.confirmed", "toBe", "true")) return null;
-  return { step: "book 09:30", line: assertion.sourceLine, id: assertion.id, subject: "body.confirmed",
+  if (onLine.length === 1 && assertion) {
+    if (assertion.subject !== "body.confirmed" || assertion.matcher !== "toBe"
+      || assertion.target !== "true" || assertion.negated
+      || assertion.id !== assertionId("body.confirmed", "toBe", "true")) return null;
+    return { step: "book 09:30", line: assertion.sourceLine, id: assertion.id, subject: "body.confirmed",
+      repairedSubject: "body.booking.confirmed", matcher: "toBe", target: "true", negated: false };
+  }
+  if (onLine.length > 0 || reporterOnly) return null;
+  // Checkly 9.5.0 runtime coordinates: the scheduled runner reports the
+  // failing expect in its own transpiled/VM-wrapped file (verified against a
+  // real scheduled result: reported 132 for source line 142 of the SAME
+  // byte-identical deployed script), so the reported line can match no
+  // source assertion. The binding then falls back to the step's UNIQUE
+  // source assertion with the exact failing expectation: exactly one
+  // unnegated toBe(true) in the failing step, corroborated by the
+  // reporter's own expected=true / not-true / definitely-failed evidence.
+  // Any reported line that lands on a different source assertion is still
+  // rejected above; nothing here loosens the stale-assertion identity.
+  if (!book.assertions.some((a) => a.expected === true && a.actual !== true && a.passed === false)) return null;
+  const candidates = source.script.assertions.filter((a) => a.stepTitle === book.title
+    && a.matcher === "toBe" && a.target === "true" && !a.negated);
+  const stale = candidates[0];
+  if (candidates.length !== 1 || !stale || stale.subject !== "body.confirmed"
+    || stale.id !== assertionId("body.confirmed", "toBe", "true")) return null;
+  return { step: "book 09:30", line: stale.sourceLine, id: stale.id, subject: "body.confirmed",
     repairedSubject: "body.booking.confirmed", matcher: "toBe", target: "true", negated: false };
 }
 
@@ -95,6 +118,12 @@ export function finalizeRemoteMultiStepRecording(draft: MultiStepRecordingDraft,
     || !Number.isSafeInteger(asset.bytes) || asset.bytes < 1) return null;
   const failure = side === "failing" ? boundFailureAssertion(draft.steps, ctx.sourceModel, ctx.sourceFile) : null;
   if (side === "failing" && !failure) return null;
+  // A reported runtime line that matched no source assertion was re-based by
+  // the fallback above: stored steps carry SOURCE coordinates so the offline
+  // binding check replays the exact-line rule unchanged.
+  const steps = side === "failing" && failure !== null && draft.steps[3]?.failureLine !== failure.line
+    ? draft.steps.map((step, index) => index === 3 ? { ...step, failureLine: failure.line } : step)
+    : draft.steps;
   const recording: MultiStepRecording = {
     schemaVersion: MULTISTEP_RECORDING_SCHEMA,
     binding: {
@@ -104,7 +133,7 @@ export function finalizeRemoteMultiStepRecording(draft: MultiStepRecordingDraft,
       testResultsBytes: asset.bytes, assetManifestSha256: asset.manifestEntrySha256!, assetType: asset.assetType,
       reporter: "playwright-json-nested", bridge: "required-at-local-execution", failureAssertion: failure,
     },
-    kind: draft.kind, stats: draft.stats, reporterStatus: draft.reporterStatus, reporterErrors: draft.reporterErrors, steps: draft.steps, checkRunData: draft.checkRunData,
+    kind: draft.kind, stats: draft.stats, reporterStatus: draft.reporterStatus, reporterErrors: draft.reporterErrors, steps, checkRunData: draft.checkRunData,
     logs: draft.logs, recurrence: draft.recurrence, transaction: draft.transaction,
     problems: draft.problems, evidenceNote: draft.evidenceNote,
   };

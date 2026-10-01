@@ -238,7 +238,7 @@ test("canonical deployed Multistep admission binds source identity and every mod
     ["playwright config", (c) => { c.playwrightConfig = { timeout: 300000 }; }],
     ["testOnly", (c) => { c.testOnly = true; }],
     ["shouldFail", (c) => { c.shouldFail = true; }],
-    ["frequency offset", (c) => { c.frequencyOffset = 1; }],
+    ["frequency offset", (c) => { c.frequencyOffset = 999; }],
     ["double check", (c) => { c.doubleCheck = true; }],
     ["unknown double-check default", (c) => { c.doubleCheck = undefined; }],
     ["retry strategy", (c) => { c.retryStrategy = { type: "FIXED", maxRetries: 1, baseBackoffSeconds: 0, maxDurationSeconds: 60, sameRegion: false }; }],

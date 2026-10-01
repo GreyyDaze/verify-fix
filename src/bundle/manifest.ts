@@ -443,9 +443,16 @@ export function detectMultiStepFailurePoint(
       // If a line was reported, it must agree with the *same step* and its
       // expected assertion value. Without a line, a UNIQUE tuple inside this
       // failed step may be attributed; ambiguity is deliberately left null.
-      const matches = inStep.filter((a) =>
-        (failedStep.failureLine == null || a.sourceLine === failedStep.failureLine)
-        && expectedText.size > 0 && expectedText.has(a.target));
+      // Checkly 9.5.0 scheduled runners report the failing expect in their own
+      // transpiled/VM-wrapped coordinates (verified against a real scheduled
+      // result: reported 132 for source line 142 of the SAME deployed script),
+      // so a reported line that matches NO assertion of this step cannot
+      // filter; the unique exact-expected tuple inside the failed step is the
+      // only remaining source-bound attribution — ambiguity stays null.
+      const inStepByLine = failedStep.failureLine == null
+        ? [] : inStep.filter((a) => a.sourceLine === failedStep.failureLine);
+      const matches = (inStepByLine.length > 0 ? inStepByLine : inStep).filter((a) =>
+        expectedText.size > 0 && expectedText.has(a.target));
       if (matches.length === 1) {
         assertion = { file: mainSource, line: matches[0]!.sourceLine, column: null, assertionId: matches[0]!.id };
       }

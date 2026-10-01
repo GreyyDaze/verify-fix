@@ -31,6 +31,9 @@ export interface MultiStepConstructModel {
   /** entrypoint script path resolved against the construct file (normalized) */
   entrypoint: string | null;
   frequencyMinutes: number | null;
+  /** Source-controlled sub-minute/spread offset in seconds (official API
+   * semantics); null when the construct omits it. */
+  frequencyOffsetSeconds: number | null;
   locations: string[];
   runParallel: boolean | null;
   doubleCheck: boolean | null;
@@ -149,18 +152,93 @@ function stringArrayLiteral(node: ts.Expression | null | undefined): string[] | 
   return out;
 }
 
-/** Frequency.EVERY_5M → 5; a plain numeric literal → that number. */
-function frequencyMinutes(node: ts.Expression | null | undefined): number | null {
-  if (!node) return null;
-  if (ts.isNumericLiteral(node)) return Number(node.text) > 0 ? Number(node.text) : null;
-  if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "Frequency") {
-    const m = /^EVERY_(\d+)([MH])$/.exec(node.name.text);
-    if (m) {
-      const n = Number(m[1]);
-      return n > 0 ? (m[2] === "H" ? n * 60 : n) : null;
-    }
+/**
+ * Official Checkly 9.5.0 scheduling semantics (constructs' Frequency class and
+ * the Public API check schema): `frequency` is minutes (0 = sub-minute) and
+ * `frequencyOffset` is SECONDS — required 10|20|30 when frequency is 0, and a
+ * spread of 1..floor(frequency*10) for frequency 1..60, 1..ceil(frequency/60)
+ * above that; 0 means disabled. `CheckProps` has NO top-level frequencyOffset:
+ * the offset is source-controlled only through the frequency-object form, a
+ * `new Frequency(minutes, seconds)` expression, or the sub-minute constants.
+ */
+const SUB_MINUTE_OFFSETS = new Set([10, 20, 30]);
+
+function frequencyOffsetBound(minutes: number): number {
+  return minutes <= 0 ? 30 : minutes <= 60 ? Math.floor(minutes * 10) : Math.ceil(minutes / 60);
+}
+
+function offsetIsValid(minutes: number, offset: number): boolean {
+  if (!Number.isSafeInteger(offset) || offset < 0) return false;
+  return minutes === 0 ? SUB_MINUTE_OFFSETS.has(offset) : offset <= frequencyOffsetBound(minutes);
+}
+
+interface FrequencyValue {
+  minutes: number | null;
+  /** null = not source-controlled (the provider may generate its own). */
+  offsetSeconds: number | null;
+}
+
+/** Numeric literal → {minutes, no offset}; `Frequency.EVERY_<N>M/H` → minutes;
+ * `Frequency.EVERY_<N>S` → sub-minute {0, N}; `new Frequency(m[, s])` and the
+ * `{frequency, frequencyOffset}` object form carry an explicit offset. */
+function frequencyValue(node: ts.Expression | null | undefined, errors: string[]): FrequencyValue {
+  const rejected = (): FrequencyValue => {
+    errors.push("MultiStepCheck frequency does not resolve to a supported static schedule (UNCERTAIN)");
+    return { minutes: null, offsetSeconds: null };
+  };
+  if (!node) return rejected();
+  if (ts.isNumericLiteral(node)) {
+    const minutes = Number(node.text);
+    return minutes > 0 ? { minutes, offsetSeconds: null } : rejected();
   }
-  return null;
+  if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "Frequency") {
+    const m = /^EVERY_(\d+)([MHS])$/.exec(node.name.text);
+    if (!m) return rejected();
+    const n = Number(m[1]);
+    if (!(n > 0)) return rejected();
+    if (m[2] === "S") {
+      if (!SUB_MINUTE_OFFSETS.has(n)) return rejected();
+      return { minutes: 0, offsetSeconds: n };
+    }
+    return { minutes: m[2] === "H" ? n * 60 : n, offsetSeconds: null };
+  }
+  if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "Frequency") {
+    const minutesArg = node.arguments?.[0];
+    const offsetArg = node.arguments?.[1];
+    if (!minutesArg || !ts.isNumericLiteral(minutesArg) || node.arguments!.length > 2
+      || (offsetArg && !ts.isNumericLiteral(offsetArg))) return rejected();
+    const minutes = Number(minutesArg.text);
+    if (!(minutes >= 0) || (offsetArg === undefined && minutes === 0)) return rejected();
+    const offset = offsetArg ? Number(offsetArg.text) : null;
+    if (offset !== null && !offsetIsValid(minutes, offset)) return rejected();
+    if (offset === 0) return { minutes, offsetSeconds: null };
+    return { minutes, offsetSeconds: offset };
+  }
+  if (ts.isObjectLiteralExpression(node)) {
+    let found = 0;
+    let minutes: number | null = null;
+    let offset: number | null = null;
+    let malformed = false;
+    for (const property of node.properties) {
+      if (!ts.isPropertyAssignment(property)) { malformed = true; continue; }
+      const name = propName(property.name);
+      if (name === "frequency") {
+        found += 1;
+        if (ts.isNumericLiteral(property.initializer)) minutes = Number(property.initializer.text);
+        else malformed = true;
+      } else if (name === "frequencyOffset") {
+        found += 1;
+        if (ts.isNumericLiteral(property.initializer)) offset = Number(property.initializer.text);
+        else malformed = true;
+      } else malformed = true;
+    }
+    if (malformed || found !== node.properties.length || minutes === null || minutes < 0
+      || (minutes === 0 && offset === null)) return rejected();
+    if (offset !== null && !offsetIsValid(minutes, offset)) return rejected();
+    if (offset === 0) return { minutes, offsetSeconds: null };
+    return { minutes, offsetSeconds: offset };
+  }
+  return rejected();
 }
 
 function staticProperties(node: ts.ObjectLiteralExpression, allowed: readonly string[], errors: string[], context: string): void {
@@ -236,7 +314,7 @@ export function parseMultiStepConstruct(files: Map<string, string>): { model: Mu
   const options = hit.node.arguments?.[1];
   if (!options || !ts.isObjectLiteralExpression(options)) {
     errors.push(`MultiStepCheck options are not a static object in ${hit.file}`);
-    return { model: { executed, logicalId, name: null, entrypoint: null, frequencyMinutes: null, locations: [], runParallel: null, doubleCheck: null, activated: null, muted: null, tags: [], environmentKeys: [], environmentDefinitions: [], errors }, constructFile: hit.file };
+    return { model: { executed, logicalId, name: null, entrypoint: null, frequencyMinutes: null, frequencyOffsetSeconds: null, locations: [], runParallel: null, doubleCheck: null, activated: null, muted: null, tags: [], environmentKeys: [], environmentDefinitions: [], errors }, constructFile: hit.file };
   }
   staticProperties(options, ["name", "activated", "muted", "frequency", "locations", "runParallel", "doubleCheck", "tags", "environmentVariables", "code"], errors, "MultiStepCheck options");
   const name = literalString(objectProperty(options, "name"));
@@ -251,7 +329,7 @@ export function parseMultiStepConstruct(files: Map<string, string>): { model: Mu
   const doubleCheck = bool("doubleCheck");
   const activated = bool("activated");
   const muted = bool("muted");
-  const frequency = frequencyMinutes(objectProperty(options, "frequency"));
+  const frequency = frequencyValue(objectProperty(options, "frequency"), errors);
   if (name === null || rawLocations === null || runParallel === null || doubleCheck === null || activated === null || muted === null || frequency === null) {
     errors.push("MultiStepCheck scheduling/identity settings do not resolve statically (UNCERTAIN)");
   }
@@ -319,7 +397,7 @@ export function parseMultiStepConstruct(files: Map<string, string>): { model: Mu
     errors.push(`MultiStepCheck has no code.entrypoint in ${hit.file}`);
   }
   return {
-    model: { executed, logicalId, name, entrypoint, frequencyMinutes: frequency, locations, runParallel, doubleCheck, activated, muted, tags, environmentKeys, environmentDefinitions, errors },
+    model: { executed, logicalId, name, entrypoint, frequencyMinutes: frequency.minutes, frequencyOffsetSeconds: frequency.offsetSeconds, locations, runParallel, doubleCheck, activated, muted, tags, environmentKeys, environmentDefinitions, errors },
     constructFile: hit.file,
   };
 }

@@ -50,7 +50,11 @@ export function boundFailureAssertion(steps: MultiStepRecording["steps"],
   // reporter's own expected=true / not-true / definitely-failed evidence.
   // Any reported line that lands on a different source assertion is still
   // rejected above; nothing here loosens the stale-assertion identity.
-  if (!book.assertions.some((a) => a.expected === true && a.actual !== true && a.passed === false)) return null;
+  // Checkly 9.5.0 may omit the received value from a failed expect. After
+  // sanitization that is represented as null, so the hard failure proof is
+  // the failed step + expected=true assertion + the unique source assertion.
+  // Do not require a serialized "actual" value to be present.
+  if (!book.assertions.some((a) => a.expected === true && a.actual !== true && a.passed !== true)) return null;
   const candidates = source.script.assertions.filter((a) => a.stepTitle === book.title
     && a.matcher === "toBe" && a.target === "true" && !a.negated);
   const stale = candidates[0];

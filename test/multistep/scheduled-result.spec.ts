@@ -336,7 +336,8 @@ test("automatic Multistep acquisition fetches the full manifest and downloads se
     assert.ok(filters.length >= 2, "failing and passing manifests were requested");
     assert.ok(filters.every((type) => type === undefined), "Multistep must not use the Browser trace asset filter");
     assert.ok(downloads.length >= 2, "remote manifest branch must call client.download()");
-    assert.ok(bundle.provenance.assets.some((asset) => asset.type === "remote-asset"));
+    const manifest = JSON.parse(readFileSync(join(outDir, "manifest.json"), "utf8")) as { provenance?: { assets?: Array<{ type?: string }> } };
+    assert.ok(manifest.provenance?.assets?.some((asset) => asset.type === "remote-asset"));
   } finally {
     rmSync(outDir, { recursive: true, force: true });
   }

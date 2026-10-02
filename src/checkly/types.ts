@@ -155,30 +155,8 @@ export type AssetType = "log" | "trace" | "video" | "screenshot" | "pcap" | "rep
  * `contentType` is optional/free-form; archive zip-ness is verified from
  * downloaded bytes instead of trusting metadata.
  */
-export interface AssetManifestSource {
-  type: "check-result" | "test-session-result";
-  checkId?: string;
-  checkName?: string;
-  checkType?: string;
-  resultId?: string;
-  testSessionId?: string;
-}
-
-export interface AssetManifestEntry {
-  type: AssetType;
-  name: string;
-  url: string;
-  contentType?: string;
-  source: AssetManifestSource | "check-result";
-  archive?: { entryName: string };
-}
-
-export interface AssetManifest {
-  assets: AssetManifestEntry[];
-  truncated?: boolean;
-  entriesReturned?: number;
-  entriesTotal?: number;
-}
+/** Checkly CLI 9.5.0 asset-manifest source. The API endpoint itself scopes the result. */
+export type AssetManifestSource = string;
 
 export interface RcaEvidence {
   artifacts: Array<{ name: string; type: string }>;

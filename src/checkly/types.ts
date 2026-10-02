@@ -148,12 +148,12 @@ export interface CheckResultsPage {
 export type AssetType = "log" | "trace" | "video" | "screenshot" | "pcap" | "report" | "file";
 
 /**
- * Verified Checkly 9.5.0 GET /v1/check-results/{checkId}/{resultId}/assets
- * response (official API reference): `source` is an object identifying the
- * result scope that produced the entry — NOT a string. The CLI's older
- * `source: string` typing does not match the live 9.5.0 response.
- * `contentType` is an optional free-form string: the API documents no fixed
- * value, so archive zip-ness is verified from the downloaded bytes instead.
+ * Checkly asset manifests have appeared with both the current structured
+ * result-source object and the CLI's string source form. The endpoint itself
+ * is already scoped to this check/result, so the string form is accepted only
+ * when it is exactly `check-result`.
+ * `contentType` is optional/free-form; archive zip-ness is verified from
+ * downloaded bytes instead of trusting metadata.
  */
 export interface AssetManifestSource {
   type: "check-result" | "test-session-result";
@@ -169,7 +169,7 @@ export interface AssetManifestEntry {
   name: string;
   url: string;
   contentType?: string;
-  source: AssetManifestSource;
+  source: AssetManifestSource | "check-result";
   archive?: { entryName: string };
 }
 

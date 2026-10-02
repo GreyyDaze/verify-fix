@@ -469,7 +469,10 @@ async function fetchResultWithTrace(
         const assetNameNormalized = normalizeMultistepName(basename(asset.name));
         const name = MULTISTEP_ASSET_NAMES.find((candidate) =>
           candidate === archivedNormalized || candidate === assetNameNormalized) ?? null;
-        if (!name) continue;
+        if (!name) {
+          rejectedCategory = rejectedCategory ?? "asset-name";
+          continue;
+        }
         if (byName.has(name)) {
           invalid = "MULTISTEP_DUPLICATE_ASSET";
           rejectedCategory = "duplicate-name";
@@ -584,6 +587,9 @@ async function fetchResultWithTrace(
         texts.found = MULTISTEP_ASSET_NAMES.filter((name) => byName.has(name));
         texts.missing = MULTISTEP_ASSET_NAMES.filter((name) => !byName.has(name));
         log("[bundle] " + label + ": multistep asset selected=" + byName.size);
+      if (entries.length > 0 && byName.size === 0) {
+        log("[bundle] " + label + ": multistep asset rejected category=" + (rejectedCategory ?? "manifest"));
+      }
       }
     }
     if (texts.testResults === null && !texts.missing.includes("test-results.json")) texts.missing.push("test-results.json");

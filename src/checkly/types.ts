@@ -156,7 +156,15 @@ export type AssetType = "log" | "trace" | "video" | "screenshot" | "pcap" | "rep
  * downloaded bytes instead of trusting metadata.
  */
 /** Checkly CLI 9.5.0 asset-manifest source. The API endpoint itself scopes the result. */
-export type AssetManifestSource = string;
+export interface AssetManifestSourceObject {
+  type: "check-result";
+  checkId?: string;
+  checkName?: string;
+  checkType?: string;
+  resultId?: string;
+  testSessionId?: string;
+}
+export type AssetManifestSource = "check-result" | AssetManifestSourceObject;
 
 export interface AssetManifestEntry {
   type: AssetType;

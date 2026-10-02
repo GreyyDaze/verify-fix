@@ -491,6 +491,14 @@ async function fetchResultWithTrace(
               const archive = await client.download(asset.url, Math.min(MAX_ASSET_ZIP_BYTES, ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalDownloaded));
               if (archive.length > MAX_ASSET_ZIP_BYTES || archive.length > ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalDownloaded) throw new Error("zip: archive exceeds byte bound");
               totalDownloaded += archive.length;
+              // The HTTP client has already enforced HTTPS-only origin rules and
+              // the streaming byte bound. Retain those validated downloaded
+              // bytes BEFORE opening/parsing the archive, so --keep-raw still
+              // recovers the exact provider artifact when ZIP validation fails.
+              if (rawDir) {
+                mkdirSync(rawDir, { recursive: true });
+                writeFileSync(join(rawDir, "archive-" + sha256(asset.url) + ".zip"), archive);
+              }
               zip = openZipBounded(archive, ASSET_ZIP_BOUNDS);
               archiveCache.set(asset.url, zip);
             }
@@ -501,6 +509,12 @@ async function fetchResultWithTrace(
             buf = await client.download(asset.url, Math.min(MAX_ASSET_FILE_BYTES, ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalDownloaded));
             if (buf.length > ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalDownloaded) throw new Error("asset download exceeds byte bound");
             totalDownloaded += buf.length;
+            // Direct assets are already HTTPS-origin and byte-bound validated
+            // by client.download. Retain them before any evidence parsing.
+            if (rawDir) {
+              mkdirSync(rawDir, { recursive: true });
+              writeFileSync(join(rawDir, basename(asset.name) || name), buf);
+            }
           }
           if (buf.length > MAX_ASSET_FILE_BYTES || buf.length > ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalDecoded) {
             throw new Error("asset exceeds decoded byte bound");
@@ -508,13 +522,6 @@ async function fetchResultWithTrace(
           totalDecoded += buf.length;
           assetsOut.push({ result: label, name, type: "remote-asset", resultId: summary.id, assetType: asset.type,
             manifestEntrySha256, bytes: buf.length, sha256: sha256(buf) });
-          // keep-raw recovery: the downloaded (Checkly-redacted) artifact
-          // bytes land in the SIBLING raw directory even when admission below
-          // rejects the side — a failed validation must stay diagnosable.
-          if (rawDir) {
-            mkdirSync(rawDir, { recursive: true });
-            writeFileSync(join(rawDir, basename(asset.archive?.entryName ?? asset.name) || name), buf);
-          }
           byName.set(name, buf.toString("utf8"));
         } catch (err) {
           invalid = multistepProblemCategory(err instanceof Error ? err.message : "asset invalid");

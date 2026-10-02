@@ -243,7 +243,7 @@ export class ChecklyClient {
       const res = await this.request("GET", url, signal, { accept: "*/*", authenticated: false });
       if (!res.ok) {
         await res.body?.cancel();
-        throw new Error(`asset download failed (HTTP ${res.status})`);
+        throw new ChecklyApiError(res.status, "asset", "remote asset download failed");
       }
       const length = res.headers.get("content-length");
       if (length !== null && /^\d+$/.test(length) && Number(length) > maxBytes) {

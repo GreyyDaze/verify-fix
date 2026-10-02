@@ -158,6 +158,23 @@ export type AssetType = "log" | "trace" | "video" | "screenshot" | "pcap" | "rep
 /** Checkly CLI 9.5.0 asset-manifest source. The API endpoint itself scopes the result. */
 export type AssetManifestSource = string;
 
+export interface AssetManifestEntry {
+  type: AssetType;
+  name: string;
+  url: string;
+  contentType?: string;
+  source: AssetManifestSource;
+  archive?: { entryName: string };
+}
+
+export interface AssetManifest {
+  assets: AssetManifestEntry[];
+  truncated?: boolean;
+  entriesReturned?: number;
+  entriesTotal?: number;
+}
+
+
 export interface RcaEvidence {
   artifacts: Array<{ name: string; type: string }>;
   description: string;

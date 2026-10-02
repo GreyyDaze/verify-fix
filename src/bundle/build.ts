@@ -444,8 +444,9 @@ async function fetchResultWithTrace(
         }
         const archiveEntry = asset.archive?.entryName;
         if (asset.archive != null && (!asset.archive || typeof asset.archive !== "object"
-          || typeof archiveEntry !== "string" || archiveEntry.length > 256)) {
-          invalid = "MULTISTEP_ASSET_MANIFEST_INVALID";
+          || typeof archiveEntry !== "string" || archiveEntry.length > 256
+          || Object.keys(asset.archive).some((key) => key !== "entryName"))) {
+          invalid = "MULTISTEP_ASSET_TYPE_INVALID";
           rejectedCategory = "archive-descriptor";
           break;
         }
@@ -475,9 +476,11 @@ async function fetchResultWithTrace(
         const sourceType = typeof source === "string" ? source : sourceRecord?.type;
         const sourceCheckId = typeof sourceRecord?.checkId === "string" ? sourceRecord.checkId : null;
         const sourceResultId = typeof sourceRecord?.resultId === "string" ? sourceRecord.resultId : null;
-        const sourceValid = sourceType === "check-result"
-          && (!sourceCheckId || sourceCheckId === checkId)
-          && (!sourceResultId || sourceResultId === summary.id);
+        const sourceValid = sourceRecord !== null
+          ? sourceType === "check-result"
+            && sourceCheckId === checkId
+            && sourceResultId === summary.id
+          : sourceType === "check-result";
         const contentTypeValid = asset.contentType === undefined
           || (typeof asset.contentType === "string" && asset.contentType.length <= 512);
         if (!knownAssetType.has(asset.type)

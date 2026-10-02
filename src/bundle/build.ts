@@ -462,8 +462,8 @@ async function fetchResultWithTrace(
         const objectSourceValid = sourceRecord?.type === "check-result"
           && sourceKeys.every((key) => ["type", "checkId", "checkName", "checkType", "resultId", "testSessionId"].includes(key))
           && sourceKeys.length <= 6
-          && (sourceId("checkId") === undefined || sourceId("checkId") === checkId)
-          && (sourceId("resultId") === undefined || sourceId("resultId") === summary.id);
+          && sourceId("checkId") === checkId
+          && sourceId("resultId") === summary.id;
         const contentTypeValid = asset.contentType === undefined
           || (typeof asset.contentType === "string" && asset.contentType.length <= 512);
         if ((asset.type !== "report" && asset.type !== "file" && !(name === "logs.txt" && asset.type === "log"))

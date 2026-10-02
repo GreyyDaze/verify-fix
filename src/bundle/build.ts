@@ -412,7 +412,11 @@ async function fetchResultWithTrace(
     } else {
       let entries: AssetManifestEntry[] = [];
       let invalid: string | null = null;
+      let rejectedCategory: string | null = null;
       try {
+        // MULTI_STEP must fetch the complete result manifest. In particular,
+        // never pass type="trace" here: that filter is for Browser/Playwright
+        // trace acquisition and can hide the report/file assets used below.
         const m = await client.getAssets(checkId, summary.id);
         if (!Array.isArray(m.assets)) invalid = "MULTISTEP_ASSET_MANIFEST_INVALID";
         else entries = m.assets;
@@ -420,6 +424,7 @@ async function fetchResultWithTrace(
       } catch {
         invalid = "MULTISTEP_ASSET_MANIFEST_UNAVAILABLE";
       }
+      log("[bundle] " + label + ": multistep asset manifest entries=" + entries.length);
       const byName = new Map<string, string>();
       const archiveCache = new Map<string, ReturnType<typeof openZipBounded>>();
       let totalDecoded = 0;
@@ -538,13 +543,10 @@ async function fetchResultWithTrace(
       if (invalid) {
         texts.invalid = invalid;
         assetsOut.splice(0, assetsOut.length, ...assetsOut.filter((asset) => asset.result !== label));
+        log("[bundle] " + label + ": multistep asset rejected category=" + (rejectedCategory ?? "manifest"));
         warnings.push(`${label}: remote Multistep asset capture is invalid (${invalid}) — UNCERTAIN`);
       } else {
-        texts.testResults = byName.get("test-results.json") ?? null;
-        texts.checkRunData = byName.get("check-run-data.json") ?? null;
-        texts.logs = byName.get("logs.txt") ?? null;
-        texts.found = MULTISTEP_ASSET_NAMES.filter((name) => byName.has(name));
-      }
+        log("[bundle] " + label + ": multistep asset selected=" + byName.size);
       texts.missing = MULTISTEP_ASSET_NAMES.filter((name) => !texts.found.includes(name));
     }
     if (texts.testResults === null && !texts.missing.includes("test-results.json")) texts.missing.push("test-results.json");

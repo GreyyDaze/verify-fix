@@ -560,8 +560,12 @@ async function fetchResultWithTrace(
         log("[bundle] " + label + ": multistep asset rejected category=" + (rejectedCategory ?? "manifest"));
         warnings.push(`${label}: remote Multistep asset capture is invalid (${invalid}) — UNCERTAIN`);
       } else {
+        texts.testResults = byName.get("test-results.json") ?? null;
+        texts.checkRunData = byName.get("check-run-data.json") ?? null;
+        texts.logs = byName.get("logs.txt") ?? null;
+        texts.found = MULTISTEP_ASSET_NAMES.filter((name) => byName.has(name));
+        texts.missing = MULTISTEP_ASSET_NAMES.filter((name) => !byName.has(name));
         log("[bundle] " + label + ": multistep asset selected=" + byName.size);
-        texts.missing = MULTISTEP_ASSET_NAMES.filter((name) => !texts.found.includes(name));
       }
     }
     if (texts.testResults === null && !texts.missing.includes("test-results.json")) texts.missing.push("test-results.json");

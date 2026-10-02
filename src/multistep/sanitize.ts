@@ -29,7 +29,7 @@ const KNOWN_PROBLEMS = new Set([
   "MULTISTEP_SOURCE_PROJECT_MISMATCH", "MULTISTEP_ENTRYPOINT_MISSING", "MULTISTEP_ENTRYPOINT_UNSAFE",
   "MULTISTEP_CONSTRUCT_UNRESOLVED", "MULTISTEP_DEPLOYED_CONFIG_MISMATCH",
   "MULTISTEP_RESULT_STATS_INVALID", "MULTISTEP_REQUEST_BODY_INVALID", "MULTISTEP_ASSERTION_EVIDENCE_MISSING",
-  "MULTISTEP_SOURCE_PATH_UNSAFE", "MULTISTEP_SOURCE_CLOSURE_BOUND", "MULTISTEP_CAPTURE_BINDING_INVALID",
+  "MULTISTEP_SOURCE_PATH_UNSAFE", "MULTISTEP_SOURCE_CLOSURE_BOUND", "MULTISTEP_CAPTURE_BINDING_INVALID", "MULTISTEP_ASSET_DOWNLOAD_FAILED",
   "MULTISTEP_MECHANICS_ONLY", "MULTISTEP_ASSET_TYPE_INVALID", "MULTISTEP_BYPASS_BINDING_INVALID", "MULTISTEP_RAW_SCHEMA_INVALID", "MULTISTEP_CONSTRUCT_IDENTITY_INVALID", "MULTISTEP_DEPLOYED_SOURCE_MISMATCH",
   // Rendered per-side availability names (bundle-level templates): a missing
   // or unbindable side must be reported as exactly that, never collapsed into
@@ -51,6 +51,10 @@ export function multistepProblemCategory(problem: string): string {
   if (/account relationship/i.test(problem)) return "MULTISTEP_ACCOUNT_RELATIONSHIP_INVALID";
   if (/slot relationship/i.test(problem)) return "MULTISTEP_SLOT_RELATIONSHIP_INVALID";
   if (/assets?\.zip|archive|zip:/i.test(problem)) return "MULTISTEP_ARCHIVE_INVALID";
+  // HTTP failures from a presigned remote asset are transport failures, not
+  // evidence-shape failures. Keep them distinct so the bundle cannot report
+  // a generic EVIDENCE_INVALID when the provider artifact was never obtained.
+  if (/^asset download failed \(HTTP \d{3}\)$/i.test(problem)) return "MULTISTEP_ASSET_DOWNLOAD_FAILED";
   if (/symbolic link|symlink|file byte bound|bounded regular file/i.test(problem)) return "MULTISTEP_ASSET_UNSAFE";
   if (/missing|not found|no ordered step/i.test(problem)) return "MULTISTEP_EVIDENCE_MISSING";
   // Internally contradictory stats/status evidence is a stats problem, and

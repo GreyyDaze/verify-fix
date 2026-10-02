@@ -38,9 +38,13 @@ const REAL_TARGET_ORIGIN = "https://slots-booking-verify-fix.vercel.app";
 
 const realTestResults = readFileSync(new URL("./fixtures/scheduled-failing-test-results.json", import.meta.url), "utf8");
 const realLogs = readFileSync(new URL("./fixtures/scheduled-failing-logs.txt", import.meta.url), "utf8");
-const realCheckRunData = JSON.stringify({
-  script: spec, scriptPath: "checks/multistep-booking.spec.ts", imports: [], dependencies: [], playwrightConfig: null,
-});
+// The real check-run-data.json carries the deployed script verbatim. The
+// fixture pins those exact bytes: if the repo entrypoint ever changes, the
+// byte-identity assertion below fails loudly — the deployed reality (and this
+// fixture) must then be consciously refreshed together with the spec.
+const realCheckRunData = readFileSync(new URL("./fixtures/scheduled-failing-check-run-data.json", import.meta.url), "utf8");
+assert.equal((JSON.parse(realCheckRunData) as Json).script, spec,
+  "the pinned real check-run-data.json script has drifted from the repo entrypoint");
 
 /** Re-serialize the real artifact with every reported 132 coordinate rewritten
  * to `line` (stacks, error locations and the result errorLocation), and/or an

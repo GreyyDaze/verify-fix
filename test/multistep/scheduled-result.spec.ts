@@ -196,6 +196,7 @@ interface ManifestVariant {
   frequencyOffset?: number | null;
   /** Assertion copy the real runner may also attach to the book fetch record. */
   bookFetchAssertion?: Json;
+  keepRaw?: boolean;
 }
 
 function scheduledClient(variant: ManifestVariant = {}): ChecklyClient {
@@ -262,7 +263,7 @@ async function scheduledBundle(variant: ManifestVariant = {}): Promise<{ bundle:
   writeFileSync(join(projectDir, "checks/multistep-booking.spec.ts"), spec);
   writeFileSync(join(projectDir, "checks/multistep-booking.check.ts"), construct);
   const outDir = mkdtempSync(join(tmpdir(), "scheduled-result-bundle-"));
-  await buildBundle({ checkId: "synthetic-check", outDir, projectDir, log: () => {} },
+  await buildBundle({ checkId: "synthetic-check", outDir, projectDir, keepRaw: variant.keepRaw ?? false, log: () => {} },
     { client: scheduledClient(variant), accountId: "synthetic", now: () => new Date("2026-09-30T00:00:00.000Z") });
   return { bundle: loadBundle(outDir).bundle, outDir };
 }
@@ -281,7 +282,7 @@ test("remote asset HTTP failures keep a transport-specific problem category", as
 });
 
 test("remote archive validation retains the downloaded bytes before ZIP parsing rejects them", async () => {
-  const { bundle, outDir } = await scheduledBundle({ corruptArchive: true });
+  const { bundle, outDir } = await scheduledBundle({ corruptArchive: true, keepRaw: true });
   const rawSibling = `${outDir}-raw`;
   try {
     assert.equal(bundle.scenes.length, 0);
@@ -312,8 +313,10 @@ test("history pagination finds an older real passing result without manufacturin
     { client, accountId: "synthetic", now: () => new Date("2026-09-30T00:00:00.000Z") });
   assert.deepEqual((client as unknown as { historyCalls: string[] }).historyCalls, ["first", "older-1"]);
   const bundle = loadBundle(outDir).bundle;
-  assert.equal(bundle.results.passing?.id, "synthetic-pass");
-  assert.equal(bundle.results.failing?.id, "synthetic-fail");
+  const passing = JSON.parse(readFileSync(join(outDir, "results/passing.json"), "utf8")) as { id: string };
+  const failing = JSON.parse(readFileSync(join(outDir, "results/failing.json"), "utf8")) as { id: string };
+  assert.equal(passing.id, "synthetic-pass");
+  assert.equal(failing.id, "synthetic-fail");
 });
 
 test("the existing scheduled result validates on the automatic remote-download path with no mismatch warning", async () => {

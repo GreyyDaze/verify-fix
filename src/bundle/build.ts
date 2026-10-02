@@ -429,57 +429,68 @@ async function fetchResultWithTrace(
       const archiveCache = new Map<string, ReturnType<typeof openZipBounded>>();
       let totalDecoded = 0;
       let totalDownloaded = 0;
-      if (entries.length > ASSET_ZIP_BOUNDS.maxEntries) invalid = "MULTISTEP_ASSET_COUNT_EXCEEDED";
+      if (entries.length > ASSET_ZIP_BOUNDS.maxEntries) {
+        invalid = "MULTISTEP_ASSET_COUNT_EXCEEDED";
+        rejectedCategory = "manifest-count";
+      }
+      const knownAssetType = new Set(["log", "trace", "video", "screenshot", "pcap", "report", "file"]);
       for (const asset of invalid ? [] : entries) {
-        // An API manifest is untrusted JSON, even when the HTTP status is 2xx.
-        // Reject malformed accepted descriptors as a fixed evidence category
-        // instead of throwing while inspecting a path before the ZIP bounds.
-        if (!asset || typeof asset !== "object" || typeof asset.name !== "string" || typeof asset.url !== "string"
-          || (asset.archive != null && (!asset.archive || typeof asset.archive !== "object" || typeof asset.archive.entryName !== "string"))) {
+        // The manifest is untrusted JSON. Validate only the provider contract
+        // needed to safely select and download the three known evidence names.
+        if (!asset || typeof asset !== "object" || typeof asset.name !== "string" || typeof asset.url !== "string") {
           invalid = "MULTISTEP_ASSET_MANIFEST_INVALID";
+          rejectedCategory = "manifest-shape";
           break;
         }
-        // Ignore unrelated screenshots/attachments entirely. An accepted
-        // name is fixed and cannot carry a secret path segment.
-        const archived = asset.archive?.entryName.split("/").pop() ?? "";
-        const name = MULTISTEP_ASSET_NAMES.includes(archived) ? archived : asset.name;
+        const archiveEntry = asset.archive?.entryName;
+        if (asset.archive != null && (!asset.archive || typeof asset.archive !== "object"
+          || typeof archiveEntry !== "string" || archiveEntry.length > 256)) {
+          invalid = "MULTISTEP_ASSET_MANIFEST_INVALID";
+          rejectedCategory = "archive-descriptor";
+          break;
+        }
+        // Checkly's manifest endpoint is already scoped to checkId/resultId.
+        // The evidence selector is the archive entry/name, not type=trace.
+        const archived = typeof archiveEntry === "string" ? basename(archiveEntry) : "";
+        const name = MULTISTEP_ASSET_NAMES.includes(archived) ? archived : basename(asset.name);
         if (!MULTISTEP_ASSET_NAMES.includes(name)) continue;
-        if (byName.has(name)) { invalid = "MULTISTEP_DUPLICATE_ASSET"; break; }
-        // Only result-scoped report/file descriptors can authorize evidence.
-        // The hash includes the exact signed manifest URL, but no URL or
-        // descriptor is ever written to the bundle.
+        if (byName.has(name)) {
+          invalid = "MULTISTEP_DUPLICATE_ASSET";
+          rejectedCategory = "duplicate-name";
+          break;
+        }
         let remoteUrl: URL;
         try { remoteUrl = new URL(asset.url); }
-        catch { invalid = "MULTISTEP_ASSET_MANIFEST_INVALID"; break; }
-        // Verified Checkly 9.5.0 manifest shape (official API reference and
-        // the CLI's own asset-manifests types): `source` is a result-scope
-        // OBJECT, not a string, and `contentType` is an OPTIONAL free-form
-        // string — the API documents no fixed value for archive entries (the
-        // CLI labels only its own collapsed zip download `application/zip`).
-        // Archive zip-ness is therefore enforced on the DOWNLOADED BYTES by
-        // the bounded ZIP reader below, never by a metadata equality.
+        catch {
+          invalid = "MULTISTEP_ASSET_MANIFEST_INVALID";
+          rejectedCategory = "asset-url";
+          break;
+        }
+        // Checkly CLI 9.5.0 defines source as the literal "check-result".
+        // Structured source objects are retained only for compatibility with
+        // older captured manifests; their IDs are checked when present.
         const source = asset.source;
-        const sourceRecord = source && typeof source === "object" && !Array.isArray(source) ? source as unknown as Record<string, unknown> : null;
-        const sourceKeys = sourceRecord ? Object.keys(sourceRecord) : [];
-        const sourceId = (key: string): string | null =>
-          typeof sourceRecord?.[key] === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(sourceRecord[key] as string) ? sourceRecord[key] as string : null;
-        const stringSourceValid = source === "check-result";
-        const objectSourceValid = sourceRecord?.type === "check-result"
-          && sourceKeys.every((key) => ["type", "checkId", "checkName", "checkType", "resultId", "testSessionId"].includes(key))
-          && sourceKeys.length <= 6
-          && sourceId("checkId") === checkId
-          && sourceId("resultId") === summary.id;
+        const sourceRecord = source && typeof source === "object" && !Array.isArray(source)
+          ? source as unknown as Record<string, unknown> : null;
+        const sourceType = typeof source === "string" ? source : sourceRecord?.type;
+        const sourceCheckId = typeof sourceRecord?.checkId === "string" ? sourceRecord.checkId : null;
+        const sourceResultId = typeof sourceRecord?.resultId === "string" ? sourceRecord.resultId : null;
+        const sourceValid = sourceType === "check-result"
+          && (!sourceCheckId || sourceCheckId === checkId)
+          && (!sourceResultId || sourceResultId === summary.id);
         const contentTypeValid = asset.contentType === undefined
           || (typeof asset.contentType === "string" && asset.contentType.length <= 512);
-        if ((asset.type !== "report" && asset.type !== "file" && !(name === "logs.txt" && asset.type === "log"))
-          || (!stringSourceValid && !objectSourceValid)
+        if (!knownAssetType.has(asset.type)
+          || !sourceValid
           || !contentTypeValid
-          || (asset.archive
-            ? (Object.keys(asset.archive).length !== 1 || asset.archive.entryName.length > 256)
-            : false)
           || remoteUrl.protocol !== "https:" || remoteUrl.username || remoteUrl.password
-          || asset.url.length > 4096 || Object.keys(asset).some((key) => !["name", "type", "url", "contentType", "source", "archive"].includes(key))) {
+          || asset.url.length > 4096
+          || Object.keys(asset).some((key) => !["name", "type", "url", "contentType", "source", "archive"].includes(key))) {
           invalid = "MULTISTEP_ASSET_TYPE_INVALID";
+          rejectedCategory = !knownAssetType.has(asset.type) ? "asset-type"
+            : !sourceValid ? "source"
+            : !contentTypeValid ? "content-type"
+            : "manifest-descriptor";
           break;
         }
         const manifestEntrySha256 = sha256(Buffer.from(JSON.stringify({

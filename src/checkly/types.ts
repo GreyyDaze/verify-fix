@@ -171,6 +171,8 @@ export interface AssetManifestEntry {
   name: string;
   url: string;
   contentType?: string;
+  /** Live Checkly result assets may include the transfer encoding metadata. */
+  contentEncoding?: string;
   source: AssetManifestSource;
   archive?: { entryName: string };
 }

@@ -457,8 +457,19 @@ async function fetchResultWithTrace(
         // Checkly's manifest endpoint is already scoped to checkId/resultId.
         // The evidence selector is the archive entry/name, not type=trace.
         const archived = typeof archiveEntry === "string" ? basename(archiveEntry) : "";
-        const name = MULTISTEP_ASSET_NAMES.includes(archived) ? archived : basename(asset.name);
-        if (!MULTISTEP_ASSET_NAMES.includes(name)) continue;
+        // Checkly's asset selector is case-insensitive and matches the archive
+        // entry name or the asset name. Normalize only the filename extension
+        // used by the Multistep evidence contract so provider-side naming
+        // variants such as "test-results" still bind to the same fixed asset.
+        const normalizeMultistepName = (value: string): string => {
+          const lower = value.toLowerCase();
+          return lower.endsWith(".json") ? lower : lower === "test-results" || lower === "check-run-data" ? lower + ".json" : lower;
+        };
+        const archivedNormalized = normalizeMultistepName(archived);
+        const assetNameNormalized = normalizeMultistepName(basename(asset.name));
+        const name = MULTISTEP_ASSET_NAMES.find((candidate) =>
+          candidate === archivedNormalized || candidate === assetNameNormalized) ?? null;
+        if (!name) continue;
         if (byName.has(name)) {
           invalid = "MULTISTEP_DUPLICATE_ASSET";
           rejectedCategory = "duplicate-name";

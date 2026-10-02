@@ -69,8 +69,8 @@ export interface BuildOutcome {
 
 const RESULT_FIELDS = ["id", "checkId", "name", "hasFailures", "hasErrors", "isDegraded", "runLocation", "startedAt", "stoppedAt", "responseTime", "attempts", "resultType", "sequenceId", "errorGroupIds"];
 
-function sha256(buf: Buffer): string {
-  return createHash("sha256").update(buf).digest("hex");
+function sha256(value: string | Buffer): string {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 function isOk(r: CheckResultSummary): boolean {
@@ -827,7 +827,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     });
     const entries = Array.isArray(page.entries) ? page.entries : [];
     history.push(...entries.slice(0, remaining));
-    const previousNextId = nextId;
+    const previousNextId: string | null = nextId;
     nextId = typeof page.nextId === "string" && page.nextId.length > 0 ? page.nextId : null;
     if (!entries.length || nextId === previousNextId) break;
     // Once both sides exist, older pages cannot improve the selected passing

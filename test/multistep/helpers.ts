@@ -20,6 +20,10 @@ function step(title: string, children: Json[], error?: Json): Json {
   return { title, category: "test.step", startTime: 1, duration: 5, ...(error ? { error } : {}), steps: children };
 }
 
+function assertion(expected: unknown, actual: unknown): Json {
+  return { title: "expect.toBe", category: "expect", checklyData: [{ expected, actual }] };
+}
+
 function loginStep(): Json {
   return step("login", [
     requestStep("POST /api/login", [
@@ -37,6 +41,7 @@ function loginStep(): Json {
         timings: { startTime: 1, endTime: 2 },
       },
     ]),
+    assertion(true, true),
   ]);
 }
 
@@ -57,6 +62,7 @@ function sessionStep(): Json {
         timings: { startTime: 3, endTime: 4 },
       },
     ]),
+    assertion(true, true),
   ]);
 }
 
@@ -77,6 +83,7 @@ function slotsStep(): Json {
         timings: { startTime: 5, endTime: 6 },
       },
     ]),
+    assertion("09:30", "09:30"),
   ]);
 }
 
@@ -98,6 +105,7 @@ function bookStepFlat(): Json {
         timings: { startTime: 7, endTime: 8 },
       },
     ]),
+    assertion(true, true),
   ]);
 }
 
@@ -125,7 +133,7 @@ function bookStepNestedFailing(): Json {
     title: "expect.toBe",
     category: "expect",
     error: {
-      message: "Error: expect(received).toBe(expected)\nReceived:    undefined\n    at book 09:30 (multistep-booking.spec.ts:144:24)",
+      message: "Error: expect(received).toBe(expected)\nReceived:    undefined\n    at book 09:30 (multistep-booking.spec.ts:142:24)",
       stack: "Error: expect(received).toBe(expected)",
     },
   };

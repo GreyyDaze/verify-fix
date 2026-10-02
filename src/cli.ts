@@ -7,7 +7,7 @@
 //   verify-fix measure --bundle <dir> --target <url> --project <dir> [--runs 20] [--env-file <file>]
 // Exit codes: 0 PASS/ok · 1 FAILED · 2 UNCERTAIN / usage / could not run.
 
-import { readFileSync, existsSync, writeFileSync } from "node:fs";
+import { readFileSync, existsSync, lstatSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadBundle } from "./bundle.ts";
 import { verify } from "./verify.ts";
@@ -74,21 +74,70 @@ interface Args {
   reports: string | null;
 }
 
+/** No option value, extra positional argument or misspelled flag is ever
+ * silently ignored. In particular a token-looking argument is never echoed. */
+const FLAG_OPTIONS = new Set(["--help", "-h", "--dry-run", "--json", "--verbose", "--cloud-approved",
+  "--allow-fork-cloud", "--trigger-rca", "--keep-raw"]);
+const VALUE_OPTIONS = new Set(["--patch", "--candidate-project", "--pr", "--base", "--project-path", "--bundle",
+  "--executor", "--target", "--target-revision", "--target-metadata", "--report-json", "--report-markdown",
+  "--env-file", "--env-name", "--check", "--result", "--out", "--project", "--assets", "--measure",
+  "--measure-overlap", "--target-url", "--bodies", "--history", "--runs", "--reports"]);
+
+/** A target identifies one origin, never a credentialed URL, app path,
+ * query, fragment, or host chosen by command-line ambiguity. */
+export function safeTargetOrigin(raw: string): boolean {
+  if (raw.length === 0 || raw.length > 2048 || /[\x00-\x20\x7f\\]/.test(raw)) return false;
+  try {
+    const target = new URL(raw);
+    return (target.protocol === "https:" || target.protocol === "http:")
+      && target.hostname !== "" && target.username === "" && target.password === ""
+      && target.search === "" && target.hash === "" && (raw === target.origin || raw === `${target.origin}/`);
+  } catch { return false; }
+}
+
+/** Private CLI input only, never put into a bundle or report. Reject partial,
+ * duplicate and world-readable env files before a candidate can run. */
+function readEnvInputs(file: string | null): Record<string, string> {
+  if (!file) return {};
+  const stat = lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 64 * 1024
+    || (stat.mode & 0o077) !== 0) throw new Error("PRIVATE_ENV_FILE_INVALID");
+  const text = readFileSync(file, "utf8");
+  const keys = new Set<string>();
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim() || line.trimStart().startsWith("#")) continue;
+    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line.trim());
+    if (!match || keys.has(match[1]!)) throw new Error("PRIVATE_ENV_FILE_INVALID");
+    keys.add(match[1]!);
+  }
+  return parseEnvFile(text);
+}
+
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: null, patch: null, candidateProject: null, pr: null, base: null, projectPath: ".", bundle: null, executor: "scene", target: null, targetRevision: null, targetMetadata: null, cloudApproved: false, allowForkCloud: false, reportJson: null, reportMarkdown: null, envFile: null, envName: null, dryRun: false, json: false, verbose: false,
     check: null, result: null, out: null, project: null, assets: null, measure: 0, measureOverlap: 0, targetUrl: null,
     triggerRca: false, bodies: "api", keepRaw: false, history: 100, runs: 20, reports: null,
   };
+  const seen = new Set<string>();
   const value = (i: number, a: string): string => {
     const eq = a.indexOf("=");
-    if (eq !== -1) return a.slice(eq + 1);
-    return argv[i + 1];
+    const next = eq !== -1 ? a.slice(eq + 1) : argv[i + 1];
+    if (!next || (eq === -1 && next.startsWith("-"))) throw new Error("CLI_ARGUMENT_INVALID");
+    return next;
   };
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
+    const a = argv[i]!;
     const key = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
     const takes = !a.includes("=");
+    if (!key.startsWith("-")) {
+      if (args.command) throw new Error("CLI_ARGUMENT_INVALID");
+      args.command = key;
+      continue;
+    }
+    if ((!FLAG_OPTIONS.has(key) && !VALUE_OPTIONS.has(key)) || seen.has(key)
+      || (FLAG_OPTIONS.has(key) && !takes)) throw new Error("CLI_ARGUMENT_INVALID");
+    seen.add(key);
     switch (key) {
       case "--patch": args.patch = value(i, a); if (takes) i++; break;
       case "--candidate-project": args.candidateProject = value(i, a); if (takes) i++; break;
@@ -98,7 +147,7 @@ function parseArgs(argv: string[]): Args {
       case "--bundle": args.bundle = value(i, a); if (takes) i++; break;
       case "--executor": {
         const v = value(i, a);
-        args.executor = v === "synthetic" ? "scene" : (v as Args["executor"]);
+        args.executor = v as Args["executor"];
         if (takes) i++;
         break;
       }
@@ -129,10 +178,21 @@ function parseArgs(argv: string[]): Args {
       case "--runs": args.runs = Number(value(i, a)); if (takes) i++; break;
       case "--reports": args.reports = value(i, a); if (takes) i++; break;
       case "--help": case "-h": args.command = "help"; break;
-      default:
-        if (!args.command && !a.startsWith("-")) args.command = a;
+      default: throw new Error("CLI_ARGUMENT_INVALID");
     }
   }
+  const perCommand: Record<string, ReadonlySet<string>> = {
+    bundle: new Set(["--check", "--result", "--out", "--project", "--assets", "--measure", "--measure-overlap",
+      "--target-url", "--trigger-rca", "--bodies", "--keep-raw", "--history", "--json", "--verbose"]),
+    verify: new Set(["--patch", "--candidate-project", "--pr", "--base", "--project-path", "--bundle",
+      "--executor", "--target", "--target-revision", "--target-metadata", "--cloud-approved", "--allow-fork-cloud",
+      "--report-json", "--report-markdown", "--env-file", "--env-name", "--dry-run", "--json", "--verbose", "--project"]),
+    measure: new Set(["--bundle", "--target", "--project", "--runs", "--env-file", "--env-name", "--json", "--verbose"]),
+    "cost-report": new Set(["--reports", "--json"]),
+    help: new Set(["--help", "-h"]),
+  };
+  if (args.command && perCommand[args.command] && [...seen].some((key) =>
+    !perCommand[args.command!]!.has(key))) throw new Error("CLI_ARGUMENT_INVALID");
   return args;
 }
 
@@ -186,12 +246,20 @@ async function runBundle(args: Args): Promise<ExitCode> {
     process.stderr.write("--check <checkId> is required\n\n" + usage());
     return 2;
   }
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(args.check) || args.result && !/^[A-Za-z0-9_-]{1,128}$/.test(args.result)
+    || args.targetUrl && !safeTargetOrigin(args.targetUrl)
+    || !Number.isSafeInteger(args.history) || args.history < 1 || args.history > 500
+    || !Number.isSafeInteger(args.measure) || args.measure < 0 || args.measure > 500
+    || !Number.isSafeInteger(args.measureOverlap) || args.measureOverlap < 0 || args.measureOverlap > 500) {
+    process.stderr.write("bundle identifier, target origin or measurement bound is invalid\n");
+    return 2;
+  }
   if (!["api", "all", "none"].includes(args.bodies)) {
     process.stderr.write("--bodies must be api, all or none\n");
     return 2;
   }
   const creds = resolveCredentials();
-  if (!creds) {
+  if (!creds || !/^[A-Za-z0-9_-]{1,128}$/.test(creds.accountId)) {
     process.stderr.write(CREDENTIALS_HELP + "\n");
     return 2;
   }
@@ -201,8 +269,8 @@ async function runBundle(args: Args): Promise<ExitCode> {
     if (args.verbose) process.stderr.write(line + "\n");
   };
   log(`[bundle] credentials from ${creds.source}`);
-  const client = new ChecklyClient(creds, { userAgent: `verify-fix-bundle/${TOOL_VERSION}` });
   try {
+    const client = new ChecklyClient(creds, { userAgent: `verify-fix-bundle/${TOOL_VERSION}` });
     const outcome = await buildBundle(
       {
         checkId: args.check,
@@ -245,12 +313,18 @@ async function runBundle(args: Args): Promise<ExitCode> {
     return 0;
   } catch (err) {
     if (err instanceof ChecklyApiError) {
-      const hint = err.status === 401 || err.status === 403 ? " (check CHECKLY_API_KEY / CHECKLY_ACCOUNT_ID, or run `npx checkly login`)" : err.status === 404 ? " (is the check id right? `npx checkly checks list`)" : "";
-      process.stderr.write(`${err.message}${hint}\n`);
+      process.stderr.write(`Checkly request failed (HTTP ${err.status})\n`);
       return 2;
     }
-    process.stderr.write(`bundle failed: ${(err as Error).message}\n`);
-    if (args.verbose && (err as Error).stack) process.stderr.write((err as Error).stack + "\n");
+    // Expose the ACTUAL failure: fixed multistep problem names and bounded
+    // reader errors are safe verbatim; any other message is URL-redacted and
+    // bounded before display. A generic message that hides the failing gate
+    // made real scheduled evidence undiagnosable.
+    const raw = err instanceof Error ? err.message : String(err);
+    const bounded = raw.length > 300 ? `${raw.slice(0, 300)}…` : raw;
+    const shown = /^(MULTISTEP_|MULTIPLE_|zip: )/.test(bounded) ? bounded
+      : bounded.replace(/https?:\/\/[^\s)\]}>"]+/g, "<redacted-url>");
+    process.stderr.write(`bundle failed: ${shown}\n`);
     return 2;
   }
 }
@@ -260,17 +334,17 @@ async function runMeasure(args: Args): Promise<ExitCode> {
     process.stderr.write("--bundle, --target and --project are required for local measurement\n\n" + usage());
     return 2;
   }
-  if (!/^https?:\/\//.test(args.target)) {
-    process.stderr.write("--target must be an http(s) origin, e.g. https://staging.example.com\n");
+  if (!safeTargetOrigin(args.target)) {
+    process.stderr.write("--target must be a bare http(s) origin without URL credentials\n");
     return 2;
   }
   if (!Number.isInteger(args.runs) || args.runs < 1) {
     process.stderr.write("--runs must be a positive integer\n");
     return 2;
   }
-  const { bundle } = loadBundle(args.bundle);
-  const env = args.envFile ? parseEnvFile(readFileSync(args.envFile, "utf8")) : {};
   try {
+    const { bundle } = loadBundle(args.bundle);
+    const env = readEnvInputs(args.envFile);
     const measured = await measureLocalDeterminism({
       bundle,
       target: args.target,
@@ -300,8 +374,7 @@ async function runMeasure(args: Args): Promise<ExitCode> {
     }
     return 0;
   } catch (err) {
-    process.stderr.write(`measure failed: ${(err as Error).message}\n`);
-    if (args.verbose && (err as Error).stack) process.stderr.write((err as Error).stack + "\n");
+    process.stderr.write("measure unavailable: private input, bundle or local runner rejected\n");
     return 2;
   }
 }
@@ -324,12 +397,22 @@ async function runVerify(args: Args): Promise<ExitCode> {
     process.stderr.write("--dry-run belonged to the retired direct-API executor; use --executor scene or --executor hybrid\n");
     return 2;
   }
-  if (args.target && !/^https?:\/\//.test(args.target)) {
-    process.stderr.write("--target must be an http(s) origin, e.g. https://preview.example.com\n");
+  if (args.target && !safeTargetOrigin(args.target)) {
+    process.stderr.write("--target must be a bare http(s) origin without URL credentials\n");
     return 2;
   }
   if (args.executor === "hybrid" && (!args.target || !args.targetRevision)) {
     process.stderr.write("--executor hybrid requires the exact deployment --target <url> and --target-revision <sha>\n");
+    return 2;
+  }
+  if (args.targetRevision && !/^[0-9a-f]{40}$/.test(args.targetRevision)
+    || args.targetMetadata && args.executor !== "hybrid"
+    || args.allowForkCloud && (!args.cloudApproved || !args.pr)
+    || args.cloudApproved && (!args.pr || args.executor !== "hybrid")
+    || args.executor === "hybrid" && (!args.candidateProject && !args.pr || !args.targetMetadata)
+    || args.executor === "hybrid" && (!process.env.CHECKLY_API_KEY || !process.env.CHECKLY_ACCOUNT_ID
+      || !/^[A-Za-z0-9_-]{1,128}$/.test(process.env.CHECKLY_ACCOUNT_ID))) {
+    process.stderr.write("cloud verification requires a bound candidate, 40-hex revision, approved account and deployment metadata\n");
     return 2;
   }
   if (!["scene", "hybrid"].includes(args.executor)) {
@@ -343,7 +426,7 @@ async function runVerify(args: Args): Promise<ExitCode> {
     if (args.candidateProject) revision = snapshotLocalCandidate(args.candidateProject, args.base!);
     if (args.pr) revision = snapshotPullRequestCandidate(args.pr, args.projectPath);
     const patch = revision ? loadCandidateRevision(revision, bundle) : loadPatch(args.patch!, bundle);
-    const env = args.envFile ? parseEnvFile(readFileSync(args.envFile, "utf8")) : {};
+    const env = readEnvInputs(args.envFile);
     const project = args.project ?? revision?.runtimeProjectRoot ?? null;
     if (bundle.playwright && !project) {
       process.stderr.write("Playwright verification needs --project <dir> containing already-installed dependencies\n");
@@ -399,8 +482,7 @@ async function runVerify(args: Args): Promise<ExitCode> {
     }
     return result.decision.exitCode;
   } catch (error) {
-    process.stderr.write(`verify failed: ${(error as Error).message}\n`);
-    if (args.verbose && (error as Error).stack) process.stderr.write((error as Error).stack + "\n");
+    process.stderr.write("verify unavailable: candidate, target binding or private input rejected\n");
     return 2;
   } finally {
     revision?.dispose();
@@ -418,13 +500,15 @@ function runCostReport(args: Args): ExitCode {
     else process.stdout.write(costMatrixMarkdown(matrix));
     return 0;
   } catch (error) {
-    process.stderr.write(`cost report failed: ${(error as Error).message}\n`);
+    process.stderr.write("cost report unavailable\n");
     return 2;
   }
 }
 
 async function main(): Promise<ExitCode> {
-  const args = parseArgs(process.argv.slice(2));
+  let args: Args;
+  try { args = parseArgs(process.argv.slice(2)); }
+  catch { process.stderr.write("invalid or ambiguous CLI arguments\n"); return 2; }
   if (args.command === "help" || !args.command) {
     process.stdout.write(usage());
     return 2;
@@ -433,7 +517,7 @@ async function main(): Promise<ExitCode> {
   if (args.command === "measure") return runMeasure(args);
   if (args.command === "verify") return runVerify(args);
   if (args.command === "cost-report") return runCostReport(args);
-  process.stderr.write(`unknown command: ${args.command}\n\n${usage()}`);
+  process.stderr.write("unknown command\n\n" + usage());
   return 2;
 }
 

@@ -1,4 +1,4 @@
-# Example 1 — slots-booking (browser + API checks)
+# Example 1 — slots-booking (browser + API + staged Multistep)
 
 A real, deployable app with real Checkly checks. This is the customer side of
 the verify-fix story: verify-fix does not mutate the customer project — it
@@ -13,6 +13,8 @@ examples/slots-booking/
 │   ├── tests/booking.spec.ts   the Playwright test that becomes the check
 │   ├── checks/availability.check.ts  auto-discovered ApiCheck construct
 │   ├── checks/availability.setup.ts  its setup entrypoint
+│   ├── checks/multistep-booking.check.ts  third construct (not deployed here)
+│   ├── checks/multistep-booking.spec.ts   five-step transaction entrypoint
 │   └── checkly.config.ts   defines the Checkly project and Playwright suite → `npx checkly deploy`
 └── README.md               this file
 ```
@@ -51,7 +53,7 @@ delay is the race window.
 | `GET /book` | booking page (`login-status`, `session-version`, **Book 09:30**, `book-status`, `booking-result`) |
 | `POST /api/login` | `{ account }` → `{ token, version }`, bumps the version |
 | `GET /api/slots` | `{ slots }` after `SLOT_LOAD_DELAY_MS` (default 1500) |
-| `POST /api/book` | Bearer token + `{ slot }` → `200 CONFIRMED` or `401` if superseded |
+| `POST /api/book` | Bearer token + `{ slot }` → HTTP 200 `{ booking: { confirmed, status, account, slot, sessionVersion } }` or 401 if superseded; the Multistep book assertion intentionally still expects the old *flat* field |
 | `GET /api/v1/availability` | bearer `API_TOKEN` + `?slot=` → `{ slot, status }` (the Phase 6 API contract) |
 | `GET /api/session` | diagnostic: token version vs current version |
 | `GET /api/health` | `{ ok, store: "memory" \| "upstash" }` |
@@ -78,7 +80,7 @@ judge fixes against.
 
 ## Phase 6 — the authenticated availability API (complete)
 
-The same project now holds two checks: the browser suite above and one
+Phase 6 added a second check to the browser suite: one
 **ApiCheck** (`web/checks/availability.check.ts`) on
 `GET /api/v1/availability?slot=09:30`. The route requires a bearer token from
 `API_TOKEN` — the value lives only in the environment (Vercel, GitHub
@@ -96,15 +98,39 @@ historical baseline the incident was built from. Commands, environment
 preparation, and the gate procedure live in
 [`web/README.md`](web/README.md) — this file does not repeat them.
 
-Phase 7 will add exactly one Multistep booking-workflow check to this same
-project; nothing else changes here until then.
+## Phase 7 — checked-in baseline, not yet an account-backed proof
+
+One additional `MultiStepCheck` construct is already in this same project,
+with its five ordered awaited steps: login, session, slots, book, confirm.
+The app success response is now nested under `booking`; the canonical stale
+Multistep check still reads flat `body.confirmed` at the book step on purpose.
+The two regional Multistep account **names** (`MULTISTEP_USER_US_EAST_1` and
+`MULTISTEP_USER_EU_WEST_1`) are separate from the browser `TEST_USER*` names;
+no account values or environment-specific bypass values are committed. The
+Multistep check is not deployed or green in Checkly on the basis of this repo.
+Local synthetic tests only prove verifier mechanics, not a real passing or
+failing Checkly recording, cloud run, deployment or protected PASS.
+
+The staged reusable gate resolves *two statuses for the same deployment*: an
+immutable generated verification URL from the Vercel GitHub App and a stable
+monitoring URL verified by a human status with exact marker
+`verify-fix:stable-alias-verified` (`auto_inactive: false`). It requires the
+current `main` SHA and matching deployment/status IDs **before** requesting
+production approval, verifies the generated URL, and deploys monitoring only
+to the stable alias after PASS and a final status recheck. The old immutable
+caller pin in `.github/workflows/gate.yml` is intentionally unchanged; this
+workflow is staged, not active. A separate review must supply a real sanitized
+Multistep bundle, verify the protection bypass, advance the caller pin and
+approve real parity/deployment. Do not infer any of those from synthetic PASS.
+See [`../../docs/PLAN.md`](../../docs/PLAN.md) for the stage table and deferred
+evidence checkpoints.
 
 ## Run it locally
 
 ```bash
 # app
 cd examples/slots-booking/web
-npm install
+npm ci --ignore-scripts
 npm run build && npm run start          # http://localhost:3000
 npm run collision                       # proves the rule at the API level (5 rows)
 

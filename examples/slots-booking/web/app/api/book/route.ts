@@ -7,8 +7,8 @@ export const dynamic = 'force-dynamic'
 /**
  * POST /api/book  { slot: string }   Authorization: Bearer tok-<account>-<version>
  *
- * 200 { confirmed: true, booking: "CONFIRMED", ... } when the token carries the
- *     account's CURRENT session version.
+ * 200 { booking: { confirmed: true, status: "CONFIRMED", ... } } when the
+ *     token carries the account's CURRENT session version.
  * 401 when a newer login has happened since this token was issued
  *     (this is the incident the monitoring check catches).
  */

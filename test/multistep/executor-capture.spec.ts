@@ -51,7 +51,7 @@ function makeFakeProject(): string {
     "  console.log(JSON.stringify({ stats: { expected: 0, unexpected: 1, flaky: 0 }, suites: [{ specs: [{ tests: [{ results: [{ status: 'failed', steps: [], error: { message: 'browser project filter requested' } }] }] }] }], errors: [] }))",
     "  process.exit(1)",
     "}",
-    "process.stdout.write(fs.readFileSync(process.env.FAKE_REPORT_FILE, 'utf8'))",
+    "process.stdout.write(fs.readFileSync(require('node:path').join(__dirname, '../../../fake-report.json'), 'utf8'))",
     "process.exit(0)",
   ].join("\n"));
   return project;
@@ -70,23 +70,26 @@ function writeAssetDir(): { dir: string; passingDir: string } {
   return { dir, passingDir };
 }
 
-test("executor adapter runs the transaction through the API request fixture with no browser process", async () => {
+test("executor adapter rejects a forged JSON report without independent bridge/reporter traffic", async () => {
   const project = makeFakeProject();
   const reportFile = join(project, "fake-report.json");
   writeFileSync(reportFile, passingTestResults());
-  // Definitive boundary case: an https target needs NO bridge, so the
-  // conclusive PASS/FAIL path runs directly against the https origin.
+  // Even HTTPS targets are bridged. This fake CLI prints a plausible JSON
+  // report but neither sends traffic nor writes the trusted audit pipe.
   const outcome = await runMultiStepSandbox({
     baseUrl: "https://fixture.invalid",
     projectDir: project,
     files: { "multistep-booking.spec.ts": SPEC_SOURCE },
     checkFile: "multistep-booking.spec.ts",
-    env: { FAKE_REPORT_FILE: reportFile },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-account-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-test-bypass" },
   });
-  assert.equal(outcome.inconclusive, false, outcome.reason ?? "");
-  assert.equal(outcome.passed, true);
-  assert.equal(outcome.browserProcesses, 0, "the adapter never launches a browser");
-  assert.deepEqual(outcome.proxyEvidence, [], "direct https targets produce no bridge evidence");
+  assert.equal(outcome.inconclusive, true, outcome.reason ?? "");
+  assert.equal(outcome.passed, false);
+  assert.match(outcome.reason ?? "", /zero requests/);
+  assert.equal(outcome.browserProcesses, 0, "the spawned fake run was sampled, but it did not prove traffic");
+  assert.deepEqual(outcome.proxyEvidence, [], "an HTTPS run is bridged, and zero requests cannot pass");
+  assert.deepEqual(outcome.reporterEvidence, [], "a JSON report is not the trusted audit pipe");
   assert.deepEqual(outcome.trace.map((t) => t.outcome), ["ok", "ok", "ok", "ok", "ok"]);
   assert.equal(outcome.capture?.steps.length, 5);
   // resolved from the customer's own install only
@@ -105,7 +108,8 @@ test("executor adapter: a bridged run where the bridge sees ZERO requests can ne
     projectDir: project,
     files: { "multistep-booking.spec.ts": SPEC_SOURCE },
     checkFile: "multistep-booking.spec.ts",
-    env: { FAKE_REPORT_FILE: reportFile },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-account-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-test-bypass" },
   });
   assert.equal(outcome.passed, false);
   assert.equal(outcome.inconclusive, true);
@@ -115,18 +119,19 @@ test("executor adapter: a bridged run where the bridge sees ZERO requests can ne
 
 test("executor adapter treats missing/corrupt reporter output as inconclusive", async () => {
   const project = makeFakeProject();
-  const reportFile = join(project, "empty-report.json");
+  const reportFile = join(project, "fake-report.json");
   writeFileSync(reportFile, "not json at all");
   const outcome = await runMultiStepSandbox({
     baseUrl: "http://127.0.0.1:9/",
     projectDir: project,
     files: { "multistep-booking.spec.ts": SPEC_SOURCE },
     checkFile: "multistep-booking.spec.ts",
-    env: { FAKE_REPORT_FILE: reportFile },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-account-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-test-bypass" },
   });
   assert.equal(outcome.passed, false);
   assert.equal(outcome.inconclusive, true);
-  assert.match(outcome.reason ?? "", /no admissible evidence/);
+  assert.match(outcome.reason ?? "", /no admissible JSON step evidence/);
 });
 
 test("readMultiStepAssets: flat files, per-result subdirs, and assets.zip", () => {
@@ -158,11 +163,11 @@ test("readMultiStepAssets: flat files, per-result subdirs, and assets.zip", () =
 test("buildMultiStepRecording: missing assets or broken relationships never yield a recording", () => {
   const missing = buildMultiStepRecording({ texts: { testResults: null, checkRunData: null, logs: null } });
   assert.equal(missing.ok, false);
-  assert.ok(!missing.ok && missing.problems.some((p) => p.includes("test-results.json")));
+  assert.ok(!missing.ok && missing.problems.some((p) => p === "MULTISTEP_EVIDENCE_MISSING"));
   assert.equal(MECHANICS_ONLY_NOTE.includes("mechanics only"), true);
 });
 
-test("bundle --assets capture: sanitized recording, dependency failure point, loadable bundle", async () => {
+test("bundle --assets captures hash-only mechanics, never a v3 failure point or conclusive scene", async () => {
   const project = mkdtempSync(join(tmpdir(), "verify-fix-multistep-checkly-project-"));
   mkdirSync(join(project, "checks"), { recursive: true });
   writeFileSync(join(project, "checkly.config.ts"), "export default { logicalId: 'slots-booking-multistep' }\n");
@@ -241,11 +246,13 @@ test("bundle --assets capture: sanitized recording, dependency failure point, lo
     { client, accountId: "acct", toolVersion: "0.1.0", now: () => new Date("2026-09-25T23:00:00.000Z") },
   );
 
-  // recordings written and referenced
-  assert.equal(outcome.manifest.recordings.multistepFailing, "recordings/failing.multistep.json");
-  assert.equal(outcome.manifest.recordings.multistepPassing, "recordings/passing.multistep.json");
-  assert.equal(outcome.manifest.multistep?.failing, null);
-  assert.equal(outcome.manifest.multistep?.passing, null);
+  // Local assets have no authenticated result-scoped manifest. Even valid
+  // normalization must not become a v3 recording or a conclusive scene.
+  assert.equal(outcome.manifest.recordings.multistepFailing, null);
+  assert.equal(outcome.manifest.recordings.multistepPassing, null);
+  assert.ok(outcome.manifest.multistep?.failing?.problems.includes("MULTISTEP_MECHANICS_ONLY"));
+  assert.ok(outcome.manifest.multistep?.passing?.problems.includes("MULTISTEP_MECHANICS_ONLY"));
+  assert.ok(!existsSync(join(out, "recordings", "failing.multistep.json")));
 
   // NO raw sensitive value in any written file (env values, account, token, origin)
   for (const file of outcome.files) {
@@ -277,41 +284,14 @@ test("bundle --assets capture: sanitized recording, dependency failure point, lo
   const rawHash = createHash("sha256").update(readFileSync(join(assetsDir, "test-results.json"))).digest("hex");
   assert.ok(localAssets.some((a: { name: string; sha256: string }) => a.name === "test-results.json" && a.sha256 === rawHash), "the recorded hash matches the raw bytes that were parsed");
 
-  // sanitized recording structure
-  const recording = JSON.parse(readFileSync(join(out, "recordings", "failing.multistep.json"), "utf8"));
-  assert.equal(recording.schemaVersion, "multistep-recording-v1");
-  assert.equal(recording.kind, "failing");
-  assert.deepEqual(recording.steps.map((s: { title: string }) => s.title), ["login", "session", "slots", "book 09:30"]);
-  assert.equal(recording.transaction.token.occurrences, 3);
-  assert.equal(recording.evidenceNote, MECHANICS_ONLY_NOTE);
-  assert.equal(recording.recurrence.attempts, 2, "retry attempts recorded as recurrence only");
-
-  // failure point: answered-200 request → dependency (drift), assertion bound to the stale toBe(true)
-  const fp = outcome.manifest.failurePoint;
-  assert.ok(fp, "failure point derived from the failing step");
-  assert.equal(fp!.request, null);
-  assert.equal(fp!.dependency?.method, "POST");
-  assert.equal(fp!.dependency?.path, "/api/book");
-  assert.equal(fp!.dependency?.passingStatus, 200);
-  assert.equal(fp!.assertion?.assertionId, "assert:3b894637");
-  assert.match(fp!.action!.error, /expect\(received\)\.toBe\(expected\)/);
-
-  // scenes: healthy + live reproduction (persistent) + inject detection
-  const scenes = outcome.manifest.scenes;
-  assert.deepEqual(scenes.map((s) => s.type).sort(), ["DETECTION", "HEALTHY", "REPRODUCTION"]);
-  const reproduction = scenes.find((s) => s.type === "REPRODUCTION")!;
-  assert.equal(reproduction.mode, "live");
-  const detection = scenes.find((s) => s.type === "DETECTION")!;
-  assert.equal(detection.mode, "inject:POST /api/book -> 500");
-  assert.equal(detection.verdict.mustFail, true);
-
-  // loadable as a real bundle with Multistep evidence bound
+  assert.equal(outcome.manifest.failurePoint, null);
+  assert.deepEqual(outcome.manifest.scenes, [], "neither generic result nor local assets can create scenes");
   const { bundle } = loadBundle(out);
   assert.equal(bundle.check.checkType, "MULTI_STEP");
-  assert.ok(bundle.multistep);
-  assert.equal(bundle.multistep!.kind, "failing");
-  assert.deepEqual(bundle.multistep!.steps, ["login", "session", "slots", "book 09:30"]);
-  assert.deepEqual(bundle.multistep!.problems, []);
+  assert.equal(bundle.multistep?.kind, null);
+  assert.deepEqual(bundle.multistep?.steps, []);
+  assert.ok(bundle.multistep?.problems.includes("MULTISTEP_MECHANICS_ONLY"));
+
 });
 
 test("bundle capture with missing assets records UNCERTAIN problems instead of a recording", async () => {
@@ -336,10 +316,10 @@ test("bundle capture with missing assets records UNCERTAIN problems instead of a
     { client, accountId: "acct", toolVersion: "0.1.0", now: () => new Date("2026-09-25T23:00:00.000Z") },
   );
   assert.equal(outcome.manifest.recordings.multistepFailing, null);
-  assert.ok((outcome.manifest.multistep?.failing?.problems ?? []).some((p) => p.includes("test-results.json")));
+  assert.ok((outcome.manifest.multistep?.failing?.problems ?? []).some((p) => p === "MULTISTEP_EVIDENCE_MISSING"));
   assert.ok(!existsSync(join(out, "recordings", "failing.multistep.json")));
   const { bundle } = loadBundle(out);
-  assert.ok(bundle.multistep?.problems.some((p) => p.includes("test-results.json")));
+  assert.ok(bundle.multistep?.problems.some((p) => p === "MULTISTEP_EVIDENCE_MISSING"));
 });
 
 test("report states Multistep evidence, proof distinctions, and cost fields", () => {
@@ -525,13 +505,15 @@ test("Mac evidence layout: the exact cp -R preparation yields the --assets shape
     { checkId: "multistep-check-id", outDir: out, projectDir: project, assetsDir: bundleAssets, log: () => {} },
     { client, accountId: "acct", toolVersion: "0.1.0", now: () => new Date("2026-09-25T23:00:00.000Z") },
   );
-  assert.equal(outcome.manifest.recordings.multistepFailing, "recordings/failing.multistep.json");
-  assert.equal(outcome.manifest.recordings.multistepPassing, "recordings/passing.multistep.json");
-  const failingRecording = JSON.parse(readFileSync(join(out, "recordings", "failing.multistep.json"), "utf8"));
-  const passingRecording = JSON.parse(readFileSync(join(out, "recordings", "passing.multistep.json"), "utf8"));
-  assert.deepEqual(failingRecording.steps.map((s: { title: string }) => s.title), ["login", "session", "slots", "book 09:30"]);
-  assert.deepEqual(passingRecording.steps.map((s: { title: string }) => s.title), ["login", "session", "slots", "book 09:30", "confirm transaction"]);
-  assert.equal(failingRecording.evidenceNote, MECHANICS_ONLY_NOTE);
+  assert.equal(outcome.manifest.recordings.multistepFailing, null);
+  assert.equal(outcome.manifest.recordings.multistepPassing, null);
+  assert.equal(outcome.manifest.failurePoint, null);
+  assert.ok(outcome.manifest.multistep?.failing?.problems.includes("MULTISTEP_MECHANICS_ONLY"));
+  assert.ok(outcome.manifest.multistep?.passing?.problems.includes("MULTISTEP_MECHANICS_ONLY"));
+  assert.ok(!existsSync(join(out, "recordings", "failing.multistep.json")));
+  assert.ok(!existsSync(join(out, "recordings", "passing.multistep.json")));
+  const local = outcome.manifest.provenance.assets.filter((asset) => asset.type === "local-asset");
+  assert.equal(local.length, 6, "all six files are hashed for mechanics without becoming bound recordings");
   const { bundle: reloaded } = loadBundle(out);
   assert.equal(reloaded.check.checkType, "MULTI_STEP");
 });

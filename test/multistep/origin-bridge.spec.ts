@@ -132,18 +132,19 @@ test("bridge replaces only the origin: method, path, query, body, and headers ar
     assert.equal(seen.headers["x-relevant-header"], "keep-me");
     assert.equal(seen.headers["content-type"], "application/json");
 
-    // structured evidence: order, path, query, header NAMES, status, auth presence — never values
+    // Structured evidence preserves order, status and auth presence, but
+    // unknown routes and arbitrary query-key names cannot enter the bundle.
     assert.equal(bridge.evidence.length, 1);
     const ev = bridge.evidence[0]!;
     assert.equal(ev.index, 1);
     assert.equal(ev.method, "POST");
-    assert.equal(ev.path, "/api/probe");
-    // evidence carries query parameter NAMES only — never raw query values
-    assert.deepEqual(ev.queryKeys, ["region", "q", "list"]);
+    assert.equal(ev.path, "<unknown-route>");
+    assert.deepEqual(ev.queryKeys, []);
+    assert.equal(ev.hasQuery, true);
     assert.equal(ev.status, 201);
     assert.equal(ev.authorization, true);
     assert.ok(ev.requestHeaderNames.includes("authorization"));
-    assert.ok(ev.requestHeaderNames.includes("x-relevant-header"));
+    assert.ok(!ev.requestHeaderNames.includes("x-relevant-header"), "unknown header names are not evidence");
     const serialized = JSON.stringify(bridge.evidence);
     assert.ok(!serialized.includes("tok-fixture-unit-0001"), "evidence must never contain the Authorization value");
     assert.ok(!serialized.includes("keep-me"), "evidence must never contain header values");

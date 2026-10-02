@@ -178,8 +178,8 @@ test("rev3/bridge: Connection-named headers are stripped, opaque path segments a
     assert.equal(seen.url, `/api/probe/${opaque}?token=raw-query-value`, "the upstream receives the verbatim path and query");
 
     const ev = bridge.evidence[0]!;
-    assert.equal(ev.path, "/api/probe/<redacted>", "sensitive/opaque path values never enter evidence");
-    assert.deepEqual(ev.queryKeys, ["token"], "evidence carries query key names only");
+    assert.equal(ev.path, "<unknown-route>", "only fixed transaction routes can enter evidence");
+    assert.deepEqual(ev.queryKeys, [], "even query-key names are omitted from evidence");
     const serialized = JSON.stringify(bridge.evidence);
     assert.ok(!serialized.includes("raw-query-value"), "evidence must never contain raw query values");
     assert.ok(!serialized.includes(opaque), "evidence must never contain the opaque path segment");
@@ -211,7 +211,7 @@ test("rev3/bridge: request bodies over the bound are refused once with 413; over
     } catch {
       refused = true; // client side may observe the refusal as an error too
     }
-    const ev413 = bridge.evidence.find((e) => e.path === "/api/upload");
+    const ev413 = bridge.evidence.find((e) => e.path === "<unknown-route>" && e.method === "POST");
     assert.ok(ev413, "the oversized upload is recorded exactly once");
     assert.equal(ev413!.status, 413, "the bridge refuses over-bound bodies itself");
     assert.equal(ev413!.forwardError, undefined, "a size refusal is not a forward error");
@@ -225,9 +225,9 @@ test("rev3/bridge: request bodies over the bound are refused once with 413; over
       aborted = true;
     }
     assert.equal(aborted, true, "the oversized response never completes to the client");
-    const evBig = bridge.evidence.find((e) => e.path === "/big")!;
+    const evBig = bridge.evidence.find((e) => e.path === "<unknown-route>" && e.method === "GET" && e.forwardError === true)!;
     assert.equal(evBig.forwardError, true, "an oversized response is a forward failure (→ UNCERTAIN downstream)");
-    assert.equal(bridge.evidence.filter((e) => e.path === "/big").length, 1, "single completion — one entry even on abort");
+    assert.equal(bridge.evidence.filter((e) => e.path === "<unknown-route>" && e.method === "GET" && e.forwardError === true).length, 1, "single completion — one entry even on abort");
 
     // the bridge is still healthy afterwards
     const after = await bridgeRequest(bridge.origin, ca, "GET", "/api/ok", {}, "");
@@ -242,7 +242,8 @@ test("rev3/bridge: request bodies over the bound are refused once with 413; over
 // 3. Executor: fresh HOME, env collision, bounds, no raw stderr, bridge comparison, browser proof
 // ---------------------------------------------------------------------------
 
-interface FakeEnv { HOME?: string; NODE_OPTIONS?: string; LD_LIBRARY_PATH?: string; NODE_EXTRA_CA_CERTS?: string; PATH?: string; ENVIRONMENT_URL?: string }
+interface FakeEnv { HOME?: string; NODE_OPTIONS?: string; LD_LIBRARY_PATH?: string; NODE_EXTRA_CA_CERTS?: string;
+  PATH?: string; ENVIRONMENT_URL?: string; REGION?: string; east?: string | null; west?: string | null }
 
 function makeFakeProject(): string {
   const project = mkdtempSync(join(tmpdir(), "verify-fix-rev3-project-"));
@@ -250,34 +251,36 @@ function makeFakeProject(): string {
   mkdirSync(pw, { recursive: true });
   writeFileSync(join(project, "package.json"), JSON.stringify({ name: "fake-project", private: true }));
   writeFileSync(join(pw, "package.json"), JSON.stringify({ name: "@playwright/test", version: "1.0.0", exports: { "./cli": "./cli.cjs" } }));
+  writeFileSync(join(project, "fake-cli-options.json"), JSON.stringify({}));
   writeFileSync(join(pw, "cli.cjs"), [
     "const fs = require('node:fs')",
-    // env snapshot for assertions (fresh HOME, replaced NODE_OPTIONS, no LD_LIBRARY_PATH)
-    "if (process.env.FAKE_ENV_SNAPSHOT) {",
-    "  fs.writeFileSync(process.env.FAKE_ENV_SNAPSHOT, JSON.stringify({",
-    "    HOME: process.env.HOME, NODE_OPTIONS: process.env.NODE_OPTIONS,",
-    "    LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH ?? null,",
-    "    NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS ?? null,",
-    "    PATH: process.env.PATH, ENVIRONMENT_URL: process.env.ENVIRONMENT_URL,",
-    "  }))",
-    "}",
-    "if (process.env.FAKE_STDERR_MARKER) process.stderr.write(process.env.FAKE_STDERR_MARKER)",
-    "if (process.env.FAKE_STDOUT_PAD_BYTES) {",
-    "  process.stdout.write('x'.repeat(Number(process.env.FAKE_STDOUT_PAD_BYTES)))",
-    "}",
-    // one real request through the bridge, then the (mismatching) report
+    "const path = require('node:path')",
+    "const root = path.join(__dirname, '../../..')",
+    "const options = JSON.parse(fs.readFileSync(path.join(root, 'fake-cli-options.json'), 'utf8'))",
+    "if (options.snapshot) fs.writeFileSync(options.snapshot, JSON.stringify({",
+    "  HOME: process.env.HOME, NODE_OPTIONS: process.env.NODE_OPTIONS,",
+    "  LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH ?? null,",
+    "  NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS ?? null,",
+    "  PATH: process.env.PATH, ENVIRONMENT_URL: process.env.ENVIRONMENT_URL,",
+    "  REGION: process.env.REGION, east: process.env.MULTISTEP_USER_US_EAST_1 ?? null, west: process.env.MULTISTEP_USER_EU_WEST_1 ?? null,",
+    "  injected: Object.keys(process.env).filter(k => k.startsWith('FAKE_'))",
+    "}))",
+    "if (options.stderr) process.stderr.write(options.stderr)",
     "async function main() {",
-    "  if (process.env.FAKE_FETCH_ROUNDS) {",
-    "    for (let i = 0; i < Number(process.env.FAKE_FETCH_ROUNDS); i++) {",
-    "      await fetch(process.env.ENVIRONMENT_URL + '/api/login', { method: 'POST', body: JSON.stringify({ probe: true }), headers: { 'content-type': 'application/json' } })",
-    "    }",
+    "  if (options.pad) await new Promise(resolve => process.stdout.write('x'.repeat(options.pad), resolve))",
+    "  for (let i = 0; i < (options.rounds || 0); i++) {",
+    "    await fetch(process.env.ENVIRONMENT_URL + '/api/login', { method: 'POST', body: JSON.stringify({ probe: true }), headers: { 'content-type': 'application/json' } })",
     "  }",
-    "  process.stdout.write(fs.readFileSync(process.env.FAKE_REPORT_FILE, 'utf8'))",
+    "  process.stdout.write(fs.readFileSync(path.join(root, 'fake-report.json'), 'utf8'))",
     "  process.exit(0)",
     "}",
     "main().catch((e) => { process.stderr.write(String(e)); process.exit(1) })",
   ].join("\n"));
   return project;
+}
+
+function fakeCliOptions(project: string, options: Record<string, unknown>): void {
+  writeFileSync(join(project, "fake-cli-options.json"), JSON.stringify(options));
 }
 
 function specFiles(project: string, report: string): { project: string; files: Record<string, string> } {
@@ -294,34 +297,42 @@ test("rev3/executor: the child runs with a FRESH HOME (removed afterwards), a re
     projectDir: p,
     files,
     checkFile: "multistep-booking.spec.ts",
-    env: { FAKE_REPORT_FILE: join(p, "fake-report.json"), FAKE_ENV_SNAPSHOT: snapshot, LD_LIBRARY_PATH: "/must/not/leak" },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", LD_LIBRARY_PATH: "/must/not/leak", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass-sandbox-238" },
   });
   // NOTE: LD_LIBRARY_PATH in ctx.env is a RESERVED key → rejected before running
   assert.equal(outcome.inconclusive, true, outcome.reason ?? "");
-  assert.match(outcome.reason ?? "", /reserved runner key/);
+  assert.match(outcome.reason ?? "", /minimal approved Multistep environment/);
   assert.ok(!existsSync(snapshot), "a rejected environment must never spawn the runner");
 
   // now without the collision: fresh HOME + replaced NODE_OPTIONS
   const project2 = makeFakeProject();
   const snapshot2 = join(project2, "env-snapshot.json");
   const { project: p2, files: files2 } = specFiles(project2, passingTestResults());
+  fakeCliOptions(project2, { snapshot: snapshot2 });
   const outcome2 = await runMultiStepSandbox({
     baseUrl: "https://fixture.invalid",
     projectDir: p2,
     files: files2,
     checkFile: "multistep-booking.spec.ts",
-    env: { FAKE_REPORT_FILE: join(p2, "fake-report.json"), FAKE_ENV_SNAPSHOT: snapshot2 },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass-sandbox-238" },
   });
-  assert.equal(outcome2.inconclusive, false, outcome2.reason ?? "");
-  assert.equal(outcome2.passed, true);
+  assert.equal(outcome2.inconclusive, true, "a fake JSON report without bridge/reporter traffic cannot PASS");
+  assert.equal(outcome2.passed, false);
+  assert.match(outcome2.reason ?? "", /zero requests/);
   assert.equal(outcome2.browserProcesses, 0, "measured browser processes during the run: zero");
   const env = JSON.parse(readFileSync(snapshot2, "utf8")) as FakeEnv;
   assert.ok(env.HOME && env.HOME.includes("sandbox-home"), `HOME must be the fresh sandbox home, got ${env.HOME}`);
   assert.ok(env.HOME !== process.env.HOME, "HOME must not be the parent's home");
   assert.match(env.NODE_OPTIONS ?? "", /^--import=.*verify-fix-seed\.mjs$/, "NODE_OPTIONS is fully replaced with the seed import");
   assert.equal(env.LD_LIBRARY_PATH, null, "LD_LIBRARY_PATH is never inherited");
-  assert.equal(env.NODE_EXTRA_CA_CERTS, null, "https direct targets get no CA override");
-  assert.equal(env.ENVIRONMENT_URL, "https://fixture.invalid");
+  assert.equal(env.REGION, "us-east-1");
+  assert.equal(env.east, "synthetic-east", "the selected account is passed through without leaking its peer");
+  assert.equal(env.west, null, "unrelated regional account is never inherited by the child");
+  assert.deepEqual((env as FakeEnv & { injected: string[] }).injected, [], "fake controls never enter the child environment");
+  assert.ok(env.NODE_EXTRA_CA_CERTS?.includes("ca.pem"), "HTTPS targets also get a per-run bridge CA");
+  assert.match(env.ENVIRONMENT_URL ?? "", /^https:\/\/127\.0\.0\.1:\d+$/, "every ENVIRONMENT_URL is a trusted bridge origin");
   assert.ok(env.PATH, "PATH remains available");
   assert.ok(!existsSync(env.HOME!), "the fresh HOME is removed after the run");
 });
@@ -329,37 +340,33 @@ test("rev3/executor: the child runs with a FRESH HOME (removed afterwards), a re
 test("rev3/executor: reporter stdout over the bound yields no admissible evidence (UNCERTAIN)", async () => {
   const project = makeFakeProject();
   const { project: p, files } = specFiles(project, passingTestResults());
+  fakeCliOptions(project, { pad: 17 * 1024 * 1024 });
   const outcome = await runMultiStepSandbox({
-    baseUrl: "https://fixture.invalid",
-    projectDir: p,
-    files,
+    baseUrl: "https://fixture.invalid", projectDir: p, files,
     checkFile: "multistep-booking.spec.ts",
-    env: {
-      FAKE_REPORT_FILE: join(p, "fake-report.json"),
-      FAKE_STDOUT_PAD_BYTES: String(17 * 1024 * 1024), // over the 16 MiB bound
-    },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass-sandbox-238" },
   });
   assert.equal(outcome.passed, false);
   assert.equal(outcome.inconclusive, true);
-  assert.match(outcome.reason ?? "", /no admissible evidence/);
+  assert.match(outcome.reason ?? "", /output exceeded a safe bound/);
 });
 
 test("rev3/executor: raw stderr content is never retained or used as evidence", async () => {
   const project = makeFakeProject();
   const { project: p, files } = specFiles(project, passingTestResults());
   const marker = '{"path":"/api/login","evidence-from":"stderr"}';
+  fakeCliOptions(project, { stderr: marker });
   const outcome = await runMultiStepSandbox({
     baseUrl: "https://fixture.invalid",
     projectDir: p,
     files,
     checkFile: "multistep-booking.spec.ts",
-    env: {
-      FAKE_REPORT_FILE: join(p, "fake-report.json"),
-      FAKE_STDERR_MARKER: marker,
-    },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass-sandbox-238" },
   });
-  assert.equal(outcome.inconclusive, false, outcome.reason ?? "");
-  assert.equal(outcome.passed, true);
+  assert.equal(outcome.inconclusive, true, "stderr cannot supply missing bridge/reporter observations");
+  assert.equal(outcome.passed, false);
   assert.ok(outcome.diagnostics.stderrBytes >= marker.length, "stderr is only counted");
   assert.ok(!("stderr" in outcome.diagnostics), "raw stderr content must not exist on the outcome");
   assert.ok(!JSON.stringify(outcome.diagnostics).includes("evidence-from"), "stderr content never surfaces anywhere");
@@ -373,19 +380,18 @@ test("rev3/executor: bridge/reporter mismatch — bridge traffic that does not m
   try {
     const project = makeFakeProject();
     const { project: p, files } = specFiles(project, passingTestResults());
+    fakeCliOptions(project, { rounds: 1 });
     const outcome = await runMultiStepSandbox({
       baseUrl: upstream.url,
       projectDir: p,
       files,
       checkFile: "multistep-booking.spec.ts",
-      env: {
-        FAKE_REPORT_FILE: join(p, "fake-report.json"),
-        FAKE_FETCH_ROUNDS: "1",
-      },
+      env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass-sandbox-238" },
     });
     assert.equal(outcome.passed, false);
     assert.equal(outcome.inconclusive, true);
-    assert.match(outcome.reason ?? "", /bridge\/reporter request-count mismatch/);
+    assert.match(outcome.reason ?? "", /transaction is not the exact executed four-request sequence|dedicated request audit missing/);
     assert.equal(outcome.proxyEvidence.length, 1, "the bridge saw the single real request");
   } finally {
     await upstream.close();
@@ -395,20 +401,26 @@ test("rev3/executor: bridge/reporter mismatch — bridge traffic that does not m
 test("rev3/executor: bridgeReporterMismatch — zero bridge requests never PASS; exact matches stand", () => {
   const capture = normalizeMultiStepCapture({ testResults: passingTestResults() });
   const bridgeEvs = [
-    { index: 1, method: "POST", path: "/api/login", queryKeys: [], requestHeaderNames: [], status: 200, authorization: false },
-    { index: 2, method: "GET", path: "/api/session", queryKeys: [], requestHeaderNames: [], status: 200, authorization: true },
-    { index: 3, method: "GET", path: "/api/slots", queryKeys: [], requestHeaderNames: [], status: 200, authorization: false },
-    { index: 4, method: "POST", path: "/api/book", queryKeys: [], requestHeaderNames: [], status: 200, authorization: true },
+    { index: 1, method: "POST", path: "/api/login", queryKeys: [], requestHeaderNames: ["x-vercel-protection-bypass"], status: 200, authorization: false },
+    { index: 2, method: "GET", path: "/api/session", queryKeys: [], requestHeaderNames: ["x-vercel-protection-bypass"], status: 200, authorization: true },
+    { index: 3, method: "GET", path: "/api/slots", queryKeys: [], requestHeaderNames: ["x-vercel-protection-bypass"], status: 200, authorization: false },
+    { index: 4, method: "POST", path: "/api/book", queryKeys: [], requestHeaderNames: ["x-vercel-protection-bypass"], status: 200, authorization: true },
   ];
-  assert.match(bridgeReporterMismatch([], capture) ?? "", /zero requests/);
-  assert.equal(bridgeReporterMismatch(bridgeEvs, capture), null, "four matching requests stand");
+  const auditOf = (items: typeof bridgeEvs) => items.map(({ index, method, path, status, authorization }) => ({
+    index, step: ["login", "session", "slots", "book 09:30"][index - 1]!,
+    method: method as "GET" | "POST" | "OTHER",
+    path, status, authorization, hasQuery: false, originMatches: true,
+  }));
+  assert.match(bridgeReporterMismatch([], capture, []) ?? "", /zero requests/);
+  assert.match(bridgeReporterMismatch(bridgeEvs, capture, null) ?? "", /dedicated request audit missing/);
+  assert.equal(bridgeReporterMismatch(bridgeEvs, capture, auditOf(bridgeEvs)), null, "four independently audited matching requests stand");
   const methodMismatch = [...bridgeEvs];
   methodMismatch[0] = { ...methodMismatch[0]!, method: "GET" };
-  assert.match(bridgeReporterMismatch(methodMismatch, capture) ?? "", /method mismatch/);
+  assert.match(bridgeReporterMismatch(methodMismatch, capture, auditOf(bridgeEvs)) ?? "", /method mismatch/);
   const statusMismatch = [...bridgeEvs];
   statusMismatch[1] = { ...statusMismatch[1]!, status: 500 };
-  assert.match(bridgeReporterMismatch(statusMismatch, capture) ?? "", /status mismatch/);
-  assert.equal(bridgeReporterMismatch(bridgeEvs.slice(0, 1), capture) !== null, true, "count mismatch detected");
+  assert.match(bridgeReporterMismatch(statusMismatch, capture, auditOf(bridgeEvs)) ?? "", /status mismatch/);
+  assert.equal(bridgeReporterMismatch(bridgeEvs.slice(0, 1), capture, auditOf(bridgeEvs.slice(0, 1))) !== null, true, "count mismatch detected");
 });
 
 test("rev3/executor: the canonical API-only spec is statically browser-free; a browser-touching script never runs", async () => {
@@ -432,7 +444,8 @@ test("rev3/executor: the canonical API-only spec is statically browser-free; a b
     projectDir: project,
     files: { "bad.spec.ts": bad },
     checkFile: "bad.spec.ts",
-    env: { FAKE_REPORT_FILE: join(project, "fake-report.json") },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass-sandbox-238" },
   });
   assert.equal(outcome.passed, false);
   assert.equal(outcome.inconclusive, true);
@@ -510,7 +523,7 @@ test("rev3/sanitize: account-inside-token overlap is replaced longest-first and 
 test("rev3/sanitize: strict allow-list — unknown keys are dropped, check-run metadata removed, logs content redacted", () => {
   const raw = rawPassing();
   const login = resultSteps(raw).find((s) => s.title === "login")!;
-  login.steps[0].checklyData[0].timings = { startTime: 1, endTime: 2, rawAuthorizationHeader: `Bearer ${FAKE_TOKEN}` };
+  login.steps[0].checklyData[0].timings = { startTime: 1, endTime: 2, rawAuthorizationHeader: "untrusted-timing-extra" };
   const capture = normalizeMultiStepCapture({ testResults: requery(raw), checkRunData: JSON.stringify({
     dependencies: { "@playwright/test": "1.50.0" },
     imports: [{ path: "x" }],
@@ -528,16 +541,12 @@ test("rev3/sanitize: strict allow-list — unknown keys are dropped, check-run m
   assert.deepEqual(Object.keys(request).sort(), [
     "actual", "expected", "fetchUid", "method", "path", "queryKeys", "requestBody", "requestHeaders", "responseBody", "responseHeaders", "status", "statusText", "timings", "title", "url",
   ].sort(), "request evidence is an explicit allow-list — no captured keys survive");
-  assert.deepEqual(request.timings, { startTime: 1, endTime: 2 }, "unknown timing keys are dropped, not inspected");
-  assert.equal(out.checkRunData!.dependencies, null, "check-run metadata removed");
-  assert.equal(out.checkRunData!.imports, null, "check-run metadata removed");
-  assert.equal(out.checkRunData!.playwrightConfig, null, "check-run metadata removed");
-  assert.equal(out.checkRunData!.script, null, "script content removed from the recording");
-  assert.equal(out.checkRunData!.scriptPath, "checks/multistep-booking.spec.ts");
-  assert.equal(out.logs![0]!.msg, "<redacted>", "log content never survives");
+  assert.equal(request.timings, null, "timings and arbitrary trace metadata are not stored");
+  assert.equal(out.checkRunData, null, "check-run metadata and script paths are removed wholesale");
+  assert.equal(out.logs, null, "log levels and contents are removed wholesale");
   assert.equal(out.steps[0]!.title, "login");
   const stepKeys = Object.keys(out.steps[0]!).sort();
-  assert.deepEqual(stepKeys, ["assertions", "error", "requests", "status", "title"]);
+  assert.deepEqual(stepKeys, ["assertions", "error", "failureLine", "requests", "status", "title"]);
   const serialized = JSON.stringify(out);
   assert.ok(!serialized.includes(FAKE_ACCOUNT) && !serialized.includes(FAKE_TOKEN) && !serialized.includes(FAKE_ORIGIN), "final leak check: no original sensitive value survives serialization");
 });
@@ -612,12 +621,12 @@ test("rev3/zip: duplicate entry names and oversized direct files are rejected as
   const nameLen2 = zip.readUInt16LE(p + 28);
   assert.equal(nameLen2, nameLen1, "the patch assumes equal-length names");
   zip.write(first, p + 46, nameLen2, "utf8");
-  assert.throws(() => openZipBounded(zip), /duplicate entry name/);
+  assert.throws(() => openZipBounded(zip), /duplicate entry name|local and central headers disagree/);
 
   const dir = mkdtempSync(join(tmpdir(), "verify-fix-rev3-dupzip-"));
   writeFileSync(join(dir, "assets.zip"), zip);
   const read = readMultiStepAssets(dir);
-  assert.match(read.failing!.invalid ?? "", /duplicate|invalid/);
+  assert.match(read.failing!.invalid ?? "", /duplicate|invalid|local and central headers disagree/);
 
   // direct oversized file bound
   const dir2 = mkdtempSync(join(tmpdir(), "verify-fix-rev3-bigfile-"));
@@ -674,7 +683,7 @@ test("rev3/source: every request URL must provably derive from process.env.ENVIR
     "  await test.step('login', async () => { await request.get(`${origin}/api/x`) })",
     "})",
   ].join("\n"));
-  assert.deepEqual(derived.errors, []);
+  assert.deepEqual(derived.errors, ["request URL is not exactly an approved environment origin followed by one fixed route — UNCERTAIN before execution"]);
   assert.equal(derived.requests.length, 1);
   assert.equal(derived.requests[0]!.urlTemplate, "`${origin}/api/x`");
 

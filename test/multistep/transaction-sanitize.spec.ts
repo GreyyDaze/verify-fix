@@ -95,7 +95,7 @@ test("token relationship missing or inconsistent = UNCERTAIN (sanitize refuses)"
   assert.ok(tx.problems.some((p) => p.includes("token relationship missing")));
   const result = sanitizeMultiStepCapture(capture, tx);
   assert.equal(result.ok, false);
-  assert.ok(!result.ok && /token relationship/.test(result.reason));
+  assert.ok(!result.ok && result.reason === "MULTISTEP_TOKEN_RELATIONSHIP_INVALID");
 
   // inconsistent: a different token in one header
   const tampered = passingCapture();

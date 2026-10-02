@@ -18,7 +18,7 @@ function json(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-test("cli over http: bundle of the example check against a local Checkly stand-in", async () => {
+test("cli rejects an HTTP Checkly stand-in before making an authenticated request", async () => {
   const seen: Array<{ url: string; auth: boolean }> = [];
   const failingZip = fakeTraceZip({
     baseURL: BASE,
@@ -83,28 +83,10 @@ test("cli over http: bundle of the example check against a local Checkly stand-i
       child.stderr.on("data", (d) => (stderr += String(d)));
       child.on("close", (status) => resolve({ status, stdout, stderr }));
     });
-    assert.equal(r.status, 0, r.stderr);
-    const summary = JSON.parse(r.stdout);
-    assert.equal(summary.status, "captured");
-    assert.equal(summary.reproduction, "both", "no RCA and no rule match on the error message → both modes");
-    assert.deepEqual(summary.scenes.map((s: { id: string; mode: string }) => [s.id, s.mode]), [
-      ["healthy-live", "live"],
-      ["reproduction", "live-concurrent:2"],
-      ["detection", "inject:POST /api/book -> 401"],
-    ]);
-    assert.equal(summary.failurePoint.request.path, "/api/book");
-    assert.ok(summary.warnings.some((w: string) => /no Rocky RCA/.test(w)));
-    assert.ok(existsSync(join(out, "bundle/recordings/failing.har")));
-    const manifest = JSON.parse(readFileSync(join(out, "bundle/manifest.json"), "utf8"));
-    assert.equal(manifest.check.file, "tests/booking.spec.ts");
-    assert.equal(manifest.check.logicalId, "slots-booking-monitoring");
-    assert.equal(manifest.target.resolution, "code");
-    assert.match(manifest.check.projectCommit ?? "", /^[0-9a-f]{40}$/);
-    assert.ok(seen.every((s) => s.url.startsWith("asset:") || s.auth), "every API call was authenticated");
-    assert.equal(seen.filter((s) => s.url.startsWith("asset:")).length, 2, "both traces were downloaded from the asset origin");
-    assert.match(r.stderr, /credentials from env/);
-    const har = readFileSync(join(out, "bundle/recordings/failing.har"), "utf8");
-    assert.equal(har.includes("tok-demo-9"), false);
+    assert.notEqual(r.status, 0, "plain HTTP is no longer an admissible Checkly API origin");
+    assert.match(r.stderr, /HTTPS|https/i);
+    assert.equal(seen.length, 0, "credentials must not be sent to the HTTP API or asset stand-in");
+    assert.equal(existsSync(join(out, "bundle/manifest.json")), false, "a rejected origin produces no bundle");
   } finally {
     server.close();
     assetServer.close();

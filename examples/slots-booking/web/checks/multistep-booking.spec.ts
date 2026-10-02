@@ -45,12 +45,12 @@ const MONITORING_ACCOUNTS_BY_REGION: Record<string, string | undefined> = {
   'us-east-1': process.env.MULTISTEP_USER_US_EAST_1,
   'eu-west-1': process.env.MULTISTEP_USER_EU_WEST_1,
 }
+const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
 const region = process.env.REGION
 const account = region === undefined ? undefined : MONITORING_ACCOUNTS_BY_REGION[region]
 if (!account) throw new Error(`No multistep monitoring account is configured for region ${region ?? 'unset'}`)
-
 const SELECTED_SLOT = '09:30'
-
+if (!bypass) throw new Error('protected target bypass is required')
 // ---------------------------------------------------------------------------
 // The ordered transaction: login -> session -> slots -> book -> confirm.
 // ---------------------------------------------------------------------------
@@ -71,7 +71,7 @@ test('slots booking multistep transaction', async ({ request }) => {
 
   await test.step('login', async () => {
     const response = await request.post(`${origin}/api/login`, {
-      data: { account },
+      headers: { 'x-vercel-protection-bypass': bypass }, data: { account },
     })
     expect(response.status()).toBe(200)
     const body = (await response.json()) as {
@@ -95,7 +95,7 @@ test('slots booking multistep transaction', async ({ request }) => {
 
   await test.step('session', async () => {
     const response = await request.get(`${origin}/api/session`, {
-      headers: { Authorization: `Bearer ${bearerToken}` },
+      headers: { Authorization: `Bearer ${bearerToken}`, 'x-vercel-protection-bypass': bypass },
     })
     expect(response.status()).toBe(200)
     const body = (await response.json()) as {
@@ -115,7 +115,7 @@ test('slots booking multistep transaction', async ({ request }) => {
   })
 
   await test.step('slots', async () => {
-    const response = await request.get(`${origin}/api/slots`)
+    const response = await request.get(`${origin}/api/slots`, { headers: { 'x-vercel-protection-bypass': bypass } })
     expect(response.status()).toBe(200)
     const body = (await response.json()) as { slots?: unknown; delayMs?: unknown }
     expect(typeof body).toBe('object')
@@ -128,7 +128,7 @@ test('slots booking multistep transaction', async ({ request }) => {
 
   await test.step('book 09:30', async () => {
     const response = await request.post(`${origin}/api/book`, {
-      headers: { Authorization: `Bearer ${bearerToken}` },
+      headers: { Authorization: `Bearer ${bearerToken}`, 'x-vercel-protection-bypass': bypass },
       data: { slot: SELECTED_SLOT },
     })
     expect(response.status()).toBe(200)

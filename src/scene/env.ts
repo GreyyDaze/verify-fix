@@ -81,13 +81,16 @@ export interface EnvCheck {
   undeclared: string[];
 }
 
-export function checkEnv(source: string, provided: Record<string, string>, declared: string[]): EnvCheck {
+export function checkEnv(source: string, provided: Record<string, string>, declared: string[], runtimeKeys: readonly string[] = []): EnvCheck {
   const refs = referencedEnvVars(source);
-  const runtime = new Set<string>(CHECKLY_ENV);
+  // REGION is a Multistep runtime variable, not a generally declared check
+  // variable. Only the Multistep scene executor supplies it, from a trusted
+  // location mapping. Do not exempt it for browser/API checks.
+  const runtime = new Set<string>([...CHECKLY_ENV, ...runtimeKeys]);
   const has = (n: string) => runtime.has(n) || (provided[n] !== undefined && provided[n] !== "");
   const missing = refs.filter((r) => !has(r.name) && !r.hasFallback);
   const defaulted = refs.filter((r) => !has(r.name) && r.hasFallback);
-  const known = new Set<string>([...CHECKLY_ENV, ...declared]);
+  const known = new Set<string>([...CHECKLY_ENV, ...declared, ...runtimeKeys]);
   const undeclared = [...new Set(refs.map((r) => r.name))].filter((n) => !known.has(n));
   return { missing, defaulted, undeclared };
 }

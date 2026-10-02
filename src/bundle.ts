@@ -4,12 +4,20 @@
 // Nothing in a bundle drives the target by itself: the scene layer reads each
 // scene's `mode` and shapes traffic at the proxy (src/scene/proxy.ts).
 
-import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import type { ApiRecording, Bundle, BundleConfig, Scene } from "./types.ts";
 import type { ManifestV3 } from "./bundle/types.ts";
 import { parseCheckConfig } from "./scene/config-diff.ts";
-import { parseMode } from "./scene/modes.ts";
+import { MULTISTEP_DETECTION_MODE, parseMode } from "./scene/modes.ts";
+import { recordedNestedBookingConfirmed } from "./multistep/shape.ts";
+import { validMultiStepStoredRecording } from "./multistep/recording-schema.ts";
+import { multistepProblemCategory } from "./multistep/sanitize.ts";
+import { readBoundedBundleFile, multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_FILE_BYTES, MULTISTEP_MAX_SOURCE_FILES } from "./multistep/files.ts";
+import { parseMultiStepProject } from "./multistep/source.ts";
+import { storedMultiStepIdentityProblem } from "./multistep/identity.ts";
+import { failurePointFromRecording, matchesRemoteMultiStepBinding } from "./multistep/binding.ts";
+import type { MultiStepRecording } from "./multistep/capture.ts";
 
 export interface LoadedBundle {
   bundle: Bundle;
@@ -31,6 +39,38 @@ function readTree(dir: string): Record<string, string> {
   return out;
 }
 
+function readMultiStepTree(dir: string): Record<string, string> {
+  const files = new Map<string, string>();
+  if (!existsSync(dir)) return {};
+  const root = lstatSync(dir);
+  if (!root.isDirectory() || root.isSymbolicLink()) throw new Error("MULTISTEP_SOURCE_PATH_UNSAFE");
+  const visit = (directory: string): void => {
+    for (const name of readdirSync(directory)) {
+      const full = join(directory, name);
+      const stat = lstatSync(full);
+      if (stat.isSymbolicLink()) throw new Error("MULTISTEP_SOURCE_PATH_UNSAFE");
+      if (stat.isDirectory()) {
+        if (relative(dir, full).split(/[\\/]/).length > 8) throw new Error("MULTISTEP_SOURCE_CLOSURE_BOUND");
+        visit(full);
+      } else {
+        const path = relative(dir, full).replaceAll("\\", "/");
+        if (!stat.isFile() || !multiStepSourcePath(path)) throw new Error("MULTISTEP_SOURCE_PATH_UNSAFE");
+        if (stat.size > MULTISTEP_MAX_SOURCE_FILE_BYTES || files.size >= MULTISTEP_MAX_SOURCE_FILES) {
+          throw new Error("MULTISTEP_SOURCE_CLOSURE_BOUND");
+        }
+        // The shared descriptor reader also rejects escaping parent links,
+        // hardlinks and growth during the read. The relative path came only
+        // from this checked directory walk, not a manifest pointer.
+        files.set(path, readBoundedBundleFile(dir, path, MULTISTEP_MAX_SOURCE_FILE_BYTES));
+        const problem = multiStepSourceClosureProblem(files);
+        if (problem) throw new Error(problem);
+      }
+    }
+  };
+  visit(dir);
+  return Object.fromEntries(files);
+}
+
 function validateScenes(scenes: Scene[], where: string): void {
   for (const s of scenes) {
     const m = parseMode(s.mode);
@@ -42,20 +82,30 @@ export function loadBundle(dirIn: string): LoadedBundle {
   const dir = resolve(dirIn);
   const manifestPath = join(dir, "manifest.json");
   if (!existsSync(manifestPath)) throw new Error(`bundle manifest not found: ${manifestPath}`);
-  const raw = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
-  const files = readTree(join(dir, "check"));
+  // Descriptor- and root-checked before parsing any untrusted metadata. No
+  // manifest-controlled pointer or symlink may escape the bundle directory.
+  const raw = JSON.parse(readBoundedBundleFile(dir, "manifest.json", 4 * 1024 * 1024)) as Record<string, unknown>;
+  const isMultiStep = (raw.schemaVersion === "v3" || raw.schemaVersion === "v2")
+    && (raw.check as Record<string, unknown> | undefined)?.checkType === "MULTI_STEP";
+  const files = isMultiStep ? readMultiStepTree(join(dir, "check")) : readTree(join(dir, "check"));
   const configFile = files[CONFIG_FILE] !== undefined ? CONFIG_FILE : null;
 
   if (raw.schemaVersion === "v3") return { bundle: fromV3(raw as unknown as ManifestV3, dir, files, configFile) };
   if (raw.schemaVersion !== "v2") throw new Error(`unsupported bundle schemaVersion: ${String(raw.schemaVersion)}`);
 
   const bundle = raw as unknown as Bundle;
+  if (isMultiStep && (multiStepSourcePath(bundle.check.file) !== bundle.check.file
+    || !Object.hasOwn(files, bundle.check.file))) throw new Error("MULTISTEP_SOURCE_PATH_UNSAFE");
   const checkPath = join(dir, "check", bundle.check.file);
   if (!existsSync(checkPath)) throw new Error(`check source for "${bundle.check.file}" not found at ${checkPath}`);
-  bundle.checkSource = readFileSync(checkPath, "utf8");
+  bundle.checkSource = isMultiStep ? files[bundle.check.file]! : readFileSync(checkPath, "utf8");
   bundle.files = files;
   bundle.configFile = configFile;
   bundle.config = (raw.config as BundleConfig | undefined) ?? (configFile ? configFromSource(files[configFile]) : null);
+  // A v2 manifest has no result/source/reporter/bridge binding schema. Its
+  // self-declared Multistep outcome is not a recording and must never be used
+  // as proof by the verifier, even when its check/ files are otherwise safe.
+  if (isMultiStep) bundle.multistep = { kind: null, steps: [], problems: ["MULTISTEP_LEGACY_BUNDLE_UNBOUND"] };
   bundle.recordedOrigin = (raw.recordedOrigin as string | undefined) ?? null;
   bundle.dir = dir;
   bundle.playwright = null;
@@ -85,7 +135,10 @@ function readApiRecording(dir: string, file: string | null | undefined): ApiReco
 function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, configFile: string | null): Bundle {
   const file = m.check.file ?? m.check.files[0] ?? null;
   if (!file) throw new Error(`${dir}: v3 manifest names no check file`);
-  const checkSource = files[file];
+  if (m.check.checkType === "MULTI_STEP" && multiStepSourcePath(file) !== file) {
+    throw new Error("MULTISTEP_SOURCE_PATH_UNSAFE");
+  }
+  const checkSource = Object.hasOwn(files, file) ? files[file] : undefined;
   if (checkSource === undefined) throw new Error(`${dir}: check source "${file}" missing under check/`);
   const scenes: Scene[] = m.scenes.map((s) => ({
     sceneId: s.sceneId,
@@ -157,23 +210,112 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
   bundle.multistep = null;
   if (m.check.checkType === "MULTI_STEP") {
     const problems: string[] = [];
-    problems.push(...(m.multistep?.failing?.problems ?? []));
-    problems.push(...(m.multistep?.passing?.problems ?? []));
-    let kind: string | null = null;
-    let steps: string[] = [];
-    const recordingFile = m.recordings.multistepFailing ?? m.recordings.multistepPassing ?? null;
-    if (recordingFile && existsSync(join(dir, recordingFile))) {
-      try {
-        const recording = JSON.parse(readFileSync(join(dir, recordingFile), "utf8")) as { kind?: string; steps?: Array<{ title?: string }> };
-        kind = typeof recording.kind === "string" ? recording.kind : null;
-        steps = Array.isArray(recording.steps) ? recording.steps.map((s) => String(s?.title ?? "")).filter(Boolean) : [];
-      } catch (err) {
-        problems.push(`multistep recording ${recordingFile} is unreadable: ${(err as Error).message}`);
-      }
-    } else if (problems.length === 0) {
-      problems.push("multistep recording missing — execution evidence is unavailable");
+    const paths = Object.keys(files).sort();
+    if (!Array.isArray(m.check.files) || JSON.stringify([...m.check.files].sort()) !== JSON.stringify(paths)
+      || m.check.file !== file || !multiStepSourcePath(file)
+      || multiStepSourceClosureProblem(new Map(Object.entries(files)))) {
+      problems.push("MULTISTEP_SOURCE_CLOSURE_BOUND");
     }
-    bundle.multistep = { kind, steps, problems };
+    for (const scene of m.scenes) {
+      const expectedId = scene.type === "HEALTHY" ? "healthy-live"
+        : scene.type === "REPRODUCTION" ? "reproduction" : scene.type === "DETECTION" ? "detection" : null;
+      if (!expectedId || scene.sceneId !== expectedId
+        || (scene.type === "HEALTHY" && scene.mode !== "live")
+        || (scene.type === "REPRODUCTION" && scene.mode !== "live" && scene.mode !== "live-concurrent:2")
+        || (scene.type === "DETECTION" && scene.verdict.provenance.kind !== "recorded")) {
+        problems.push("MULTISTEP_SCENE_PROVENANCE_INVALID");
+      }
+      if (scene.verdict.provenance.kind !== "recorded") continue;
+      const artifact = scene.verdict.provenance.artifactId;
+      const side = artifact === "recordings/failing.multistep.json" ? "failing"
+        : artifact === "recordings/passing.multistep.json" ? "passing" : null;
+      const expectedSide = scene.type === "HEALTHY" ? "passing"
+        : scene.type === "REPRODUCTION" || scene.type === "DETECTION" ? "failing" : null;
+      if (!side || side !== expectedSide || scene.verdict.provenance.runId !== m.results[side]?.id) {
+        problems.push("MULTISTEP_SCENE_PROVENANCE_INVALID");
+      }
+    }
+    const recordings: Partial<Record<"failing" | "passing", { kind: string; steps: string[] }>> = {};
+    const recorded: Partial<Record<"failing" | "passing", MultiStepRecording>> = {};
+    const sourceModel = parseMultiStepProject(new Map(Object.entries(files)), file);
+    if (!sourceModel?.script || sourceModel.errors.length || sourceModel.script.file !== file) {
+      problems.push("MULTISTEP_SOURCE_CLOSURE_BOUND");
+    }
+    const identityProblem = storedMultiStepIdentityProblem(m, sourceModel);
+    if (identityProblem) problems.push(identityProblem);
+    if (m.provenance.assets.some((asset) => !["test-results.json", "logs.txt", "check-run-data.json"].includes(asset.name)
+      || (asset.type !== "remote-asset" && asset.type !== "local-asset"
+        || asset.type === "remote-asset" && (asset.assetType !== "report" && asset.assetType !== "file"
+          && !(asset.name === "logs.txt" && asset.assetType === "log")
+          || !/^[a-f0-9]{64}$/.test(asset.manifestEntrySha256 ?? ""))))) {
+      problems.push("MULTISTEP_ASSET_TYPE_INVALID");
+    }
+    let failureAssertion: NonNullable<NonNullable<Bundle["multistep"]>["failureAssertion"]> | null = null;
+    for (const side of ["failing", "passing"] as const) {
+      const result = m.results[side];
+      const expected = `recordings/${side}.multistep.json`;
+      const pointer = side === "failing" ? m.recordings?.multistepFailing : m.recordings?.multistepPassing;
+      if (!result) {
+        if (pointer) problems.push(`MULTISTEP_${side.toUpperCase()}_RESULT_MISSING`);
+        continue;
+      }
+      for (const issue of m.multistep?.[side]?.problems ?? []) problems.push(multistepProblemCategory(issue));
+      if (pointer !== expected) { problems.push(`MULTISTEP_${side.toUpperCase()}_RECORDING_MISSING`); continue; }
+      try {
+        // Both the pointer and the path are literal; no parent symlink,
+        // hardlink, or file growth is admitted while reopening the bytes.
+        const value: unknown = JSON.parse(readBoundedBundleFile(dir, expected, 2 * 1024 * 1024));
+        if (!validMultiStepStoredRecording(value, side)) throw new Error("invalid values-free recording schema");
+        const assets = m.provenance.assets.filter((entry) => entry.result === side && entry.name === "test-results.json");
+        if (assets.length !== 1 || !files[file] || !matchesRemoteMultiStepBinding(value, {
+          side, checkId: m.check.id, result, sourceFile: file, sourceText: files[file], sourceModel,
+          asset: assets[0]!,
+        })) throw new Error("remote result/source/asset/reporter binding mismatch");
+        // Offline result metadata is part of the binding, too. A manifest
+        // edit cannot silently borrow a different result's id or timestamps.
+        const stored: unknown = JSON.parse(readBoundedBundleFile(dir, `results/${side}.json`, 1024 * 1024));
+        if (!stored || typeof stored !== "object" || Array.isArray(stored)
+          || JSON.stringify(Object.keys(stored).sort()) !== JSON.stringify([
+            "attempts", "errorCategory", "hasErrors", "hasFailures", "id", "resultType", "runLocation", "startedAt", "stoppedAt",
+          ])
+          || (stored as Record<string, unknown>).id !== result.id
+          || (stored as Record<string, unknown>).runLocation !== result.runLocation
+          || (stored as Record<string, unknown>).startedAt !== result.startedAt
+          || (stored as Record<string, unknown>).stoppedAt !== result.stoppedAt
+          || (stored as Record<string, unknown>).attempts !== result.attempts
+          || value.recurrence.attempts !== result.attempts
+          || result.resultType !== "FINAL" || (stored as Record<string, unknown>).resultType !== "FINAL"
+          || (stored as Record<string, unknown>).hasFailures !== (side === "failing")
+          || (stored as Record<string, unknown>).hasErrors !== false
+          || (stored as Record<string, unknown>).errorCategory !== (side === "failing"
+            ? "MULTISTEP_RUN_FAILED" : "MULTISTEP_RUN_PASSED")) throw new Error("result metadata mismatch");
+        recordings[side] = { kind: side, steps: value.steps.map((step) => step.title) };
+        recorded[side] = value;
+      } catch {
+        problems.push(`MULTISTEP_${side.toUpperCase()}_RECORDING_INVALID`);
+      }
+    }
+    // No generic manifest failure point, code provenance, borrowed passing
+    // step, HTTP-error request, or manufactured timing can prove detection.
+    const expectedPoint = recorded.failing ? failurePointFromRecording(recorded.failing, file) : null;
+    if (JSON.stringify(m.failurePoint) !== JSON.stringify(expectedPoint)) problems.push("MULTISTEP_FAILURE_STEP_UNBOUND");
+    const bound = recorded.failing?.binding.failureAssertion;
+    if (bound && expectedPoint) failureAssertion = { file, line: bound.line, id: bound.id, step: bound.step };
+    const detection = m.scenes.filter((scene) => scene.type === "DETECTION");
+    if (recorded.failing && (detection.length !== 1 || !recordedNestedBookingConfirmed(recorded.failing.steps)
+      || detection[0]!.mode !== MULTISTEP_DETECTION_MODE
+      || detection[0]!.verdict.provenance.kind !== "recorded"
+      || detection[0]!.verdict.provenance.runId !== recorded.failing.binding.resultId
+      || detection[0]!.verdict.provenance.artifactId !== "recordings/failing.multistep.json"
+      || detection[0]!.verdict.mustFail !== true
+      || !detection[0]!.assertionsInvolved.includes(bound?.id ?? "<unknown>"))) {
+      problems.push("MULTISTEP_FAILURE_STEP_UNBOUND");
+    }
+    if (!recorded.failing && detection.length) problems.push("MULTISTEP_SCENE_PROVENANCE_INVALID");
+    // Never substitute a passing run for the missing failing run.
+    const selected = m.results.failing ? recordings.failing : recordings.passing;
+    bundle.multistep = { kind: selected?.kind ?? null, steps: selected?.steps ?? [],
+      problems: [...new Set(problems)], failureAssertion: problems.length ? null : failureAssertion };
   }
   return bundle;
 }

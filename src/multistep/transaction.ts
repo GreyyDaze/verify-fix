@@ -9,6 +9,7 @@
 // with a reason — the decision layer maps that to UNCERTAIN.
 
 import type { MultiStepCapture, MultiStepRequestEvidence, MultiStepStepEvidence } from "./normalize.ts";
+import { rawTokenOccurrences } from "./raw-evidence.ts";
 
 export interface TransactionRequest {
   method: string;
@@ -52,10 +53,23 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** Every string in a JSON value (depth-first, leaves only). */
-function stringsOf(value: unknown, out: string[] = []): string[] {
-  if (typeof value === "string") out.push(value);
-  else if (Array.isArray(value)) for (const item of value) stringsOf(item, out);
-  else if (isPlainObject(value)) for (const item of Object.values(value)) stringsOf(item, out);
+function stringsOf(value: unknown, problems: string[]): string[] {
+  const out: string[] = [];
+  const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+  let nodes = 0;
+  while (pending.length) {
+    const current = pending.pop()!;
+    if (++nodes > 30_000 || current.depth > 32) {
+      problems.push("MULTISTEP_RAW_SCHEMA_INVALID");
+      return [];
+    }
+    if (typeof current.value === "string") out.push(current.value);
+    else if (Array.isArray(current.value)) {
+      for (const item of current.value) pending.push({ value: item, depth: current.depth + 1 });
+    } else if (isPlainObject(current.value)) {
+      for (const item of Object.values(current.value)) pending.push({ value: item, depth: current.depth + 1 });
+    }
+  }
   return out;
 }
 
@@ -83,18 +97,28 @@ export function extractTransaction(capture: MultiStepCapture): MultiStepTransact
   // ---- account: ONE unique value reused through the transaction ----
   const login = findStep(capture, "login");
   const loginBody = login?.requests[0]?.responseBody ?? null;
-  const accountFromLogin = stringsOf(loginBody).length ? (isPlainObject(loginBody) ? (typeof loginBody.account === "string" ? loginBody.account : null) : null) : null;
+  const accountFromLogin = stringsOf(loginBody, problems).length ? (isPlainObject(loginBody) ? (typeof loginBody.account === "string" ? loginBody.account : null) : null) : null;
   const accountSites: string[] = [];
   let account: MultiStepTransaction["account"] = null;
   // Every value stored under an `account` key anywhere in the capture must
   // be the SAME value — a second distinct value is a broken identity.
   const accountValues = new Set<string>();
   const collectAccountValues = (value: unknown): void => {
-    if (Array.isArray(value)) for (const item of value) collectAccountValues(item);
-    else if (isPlainObject(value)) {
-      for (const [key, item] of Object.entries(value)) {
-        if (key === "account" && typeof item === "string" && item !== "") accountValues.add(item);
-        else collectAccountValues(item);
+    const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+    let nodes = 0;
+    while (pending.length) {
+      const current = pending.pop()!;
+      if (++nodes > 30_000 || current.depth > 32) {
+        problems.push("MULTISTEP_RAW_SCHEMA_INVALID");
+        return;
+      }
+      if (Array.isArray(current.value)) {
+        for (const item of current.value) pending.push({ value: item, depth: current.depth + 1 });
+      } else if (isPlainObject(current.value)) {
+        for (const [key, item] of Object.entries(current.value)) {
+          if (key === "account" && typeof item === "string" && item !== "") accountValues.add(item);
+          else pending.push({ value: item, depth: current.depth + 1 });
+        }
       }
     }
   };
@@ -120,14 +144,14 @@ export function extractTransaction(capture: MultiStepCapture): MultiStepTransact
         if (typeof reqBody === "string") {
           // serialized JSON body
           try {
-            if (stringsOf(JSON.parse(reqBody)).includes(accountFromLogin)) accountSites.push(`${step.title}[${i}].request.body.account`);
+            if (stringsOf(JSON.parse(reqBody), problems).includes(accountFromLogin)) accountSites.push(`${step.title}[${i}].request.body.account`);
           } catch {
             /* text body — substring handled by the sanitizer */
           }
-        } else if (stringsOf(reqBody).includes(accountFromLogin)) {
+        } else if (stringsOf(reqBody, problems).includes(accountFromLogin)) {
           accountSites.push(`${step.title}[${i}].request.body.account`);
         }
-        if (stringsOf(request.responseBody).includes(accountFromLogin) && !(step.title === "login" && i === 0)) {
+        if (stringsOf(request.responseBody, problems).includes(accountFromLogin) && !(step.title === "login" && i === 0)) {
           accountSites.push(`${step.title}[${i}].response.body.account`);
         }
       }
@@ -205,6 +229,10 @@ export function extractTransaction(capture: MultiStepCapture): MultiStepTransact
     }
   }
   if (tokenFromLogin !== null) {
+    const rawOccurrences = rawTokenOccurrences(capture, tokenFromLogin);
+    if (rawOccurrences !== null && rawOccurrences !== 3) {
+      problems.push("MULTISTEP_TOKEN_RELATIONSHIP_INVALID");
+    }
     tokenSites.unshift("login.response.body.token");
     if (bearerCount === 0) {
       problems.push("token relationship missing: the login token never appears in an Authorization header");
@@ -235,13 +263,13 @@ export function extractTransaction(capture: MultiStepCapture): MultiStepTransact
         if (isPlainObject(parsed) && typeof parsed.slot === "string") slotFromRequest = parsed.slot;
       } catch { /* non-JSON body */ }
     }
-    const responseStrings = stringsOf(request?.responseBody ?? null);
+    const responseStrings = stringsOf(request?.responseBody ?? null, problems);
     const slotFromResponse = responseStrings.find((s) => /^\d{2}:\d{2}$/.test(s)) ?? null;
     const sites: string[] = [];
     if (slotFromRequest) sites.push(`${book.title}.request.body.slot`);
     if (slotFromResponse) sites.push(`${book.title}.response.body.slot`);
     if (slotFromRequest && slotFromResponse && slotFromRequest !== slotFromResponse) {
-      problems.push(`slot relationship inconsistent: request slot ${slotFromRequest} vs response slot ${slotFromResponse}`);
+      problems.push("slot relationship inconsistent: request and response values differ");
     } else if (slotFromRequest || slotFromResponse) {
       slot = { value: (slotFromRequest ?? slotFromResponse)!, sites };
     }

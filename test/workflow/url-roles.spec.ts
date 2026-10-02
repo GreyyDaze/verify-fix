@@ -544,6 +544,36 @@ test("history: list order is irrelevant — same rows reversed give the same res
   assert.equal(forward.monitoringUrl, reversed.monitoringUrl);
 });
 
+test("two generated or two manually verified URL candidates are ambiguous even if newest succeeded", () => {
+  const generated = resolve(inputs({ statuses: [
+    status({ id: 10, environment_url: "https://older.vercel.app" }),
+    status({ id: 11 }), manualStatus({ id: 100 }),
+  ] }));
+  assert.equal(generated.state, "invalid");
+  assert.equal(generated.reason, "ambiguous-verification-url");
+
+  const stable = resolve(inputs({ statuses: [status(),
+    manualStatus({ id: 100, environment_url: "https://old-alias.example.org" }),
+    manualStatus({ id: 101 }),
+  ] }));
+  assert.equal(stable.state, "invalid");
+  assert.equal(stable.reason, "ambiguous-monitoring-url");
+});
+
+test("an explicit REST parent from a different deployment or repository is never this deployment's status", () => {
+  for (const url of [
+    "https://api.github.com/repos/GreyyDaze/verify-fix/deployments/42",
+    "https://api.github.com/repos/another/repo/deployments/41",
+    "https://user:pass@api.github.com/repos/GreyyDaze/verify-fix/deployments/41",
+  ]) {
+    const resolution = resolve(inputs({ expectedRepository: "GreyyDaze/verify-fix", statuses: [
+      status({ deployment_url: url }), manualStatus(),
+    ] }));
+    assert.equal(resolution.state, "invalid", url);
+    assert.equal(resolution.reason, "status-deployment-mismatch", url);
+  }
+});
+
 test("history: duplicate id with conflicting data is invalid", () => {
   const resolution = resolve(inputs({
     statuses: [

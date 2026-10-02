@@ -27,6 +27,7 @@ interface ReceivedRequest {
   method: string;
   url: string;
   authorization: string | null;
+  bypass: string | null;
   body: Record<string, unknown> | null;
   statusSent: number;
 }
@@ -39,7 +40,7 @@ interface SyntheticApp {
 
 /** Minimal local app: 'flat' answers the old contract (check passes),
  *  'nested' answers the incident contract (check fails inside 'book 09:30'). */
-function startSyntheticApp(mode: "flat" | "nested"): Promise<SyntheticApp> {
+function startSyntheticApp(mode: "flat" | "nested", errorAt?: { position: number; status: 401 | 500 }): Promise<SyntheticApp> {
   const received: ReceivedRequest[] = [];
   const handler = (req: IncomingMessage, res: ServerResponse): void => {
     const chunks: Buffer[] = [];
@@ -79,7 +80,10 @@ function startSyntheticApp(mode: "flat" | "nested"): Promise<SyntheticApp> {
         status = 404;
         payload = { error: "not found" };
       }
-      received.push({ method: req.method ?? "", url, authorization, body, statusSent: status });
+      if (errorAt && received.length === errorAt.position) status = errorAt.status;
+      received.push({ method: req.method ?? "", url, authorization,
+        bypass: typeof req.headers["x-vercel-protection-bypass"] === "string"
+          ? req.headers["x-vercel-protection-bypass"] : null, body, statusSent: status });
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(payload));
     });
@@ -98,7 +102,12 @@ function startSyntheticApp(mode: "flat" | "nested"): Promise<SyntheticApp> {
   });
 }
 
-/** Samples the process table during a run; any browser-family process fails. */
+/** Samples the process table during a run; any browser-family process fails.
+ * The match is EXACT: a prefix match counted unrelated system processes such
+ * as `chrome-devtools-mcp` (an MCP server, not a browser) as browsers. Real
+ * browser executables report their exact name in `comm` (chrome, chromium,
+ * headless_shell, firefox, webkit, electron); anything with a suffix is not
+ * a browser process the verifier started. */
 function watchBrowserProcesses(): { stop: () => number } {
   let max = 0;
   const timer = setInterval(() => {
@@ -107,7 +116,7 @@ function watchBrowserProcesses(): { stop: () => number } {
       let hits = 0;
       for (const line of table.split("\n")) {
         const name = line.trim();
-        if (/^(chrome|chromium|headless_shell|firefox|webkit|electron)/i.test(name)) hits += 1;
+        if (/^(chrome|chromium|headless_shell|firefox|webkit|electron)$/i.test(name)) hits += 1;
       }
       if (hits > max) max = hits;
     } catch {
@@ -128,7 +137,8 @@ function runCanonical(appUrl: string, timeoutMs = 150_000) {
     projectDir: WEB,
     files: { "multistep-booking.spec.ts": CANONICAL_SPEC },
     checkFile: "multistep-booking.spec.ts",
-    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: ACCOUNT },
+    env: { REGION: "us-east-1", MULTISTEP_USER_US_EAST_1: ACCOUNT, MULTISTEP_USER_EU_WEST_1: "fixture-west-distinct",
+      CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass-sandbox-376" },
     timeoutMs,
   });
 }
@@ -178,6 +188,11 @@ test("canonical spec through the adapter (passing flat app): HTTPS origin kept, 
     assert.equal(app.received[1]?.authorization, `Bearer ${TOKEN}`);
     assert.equal(app.received[3]?.authorization, `Bearer ${TOKEN}`);
     assert.deepEqual(app.received[3]?.body, { slot: "09:30" });
+    assert.ok(app.received.every((request) => request.bypass === "synthetic-bypass-sandbox-376"),
+      "every canonical request forwards the approved bypass header to the protected target");
+    assert.ok(!JSON.stringify(out.proxyEvidence).includes("synthetic-bypass-sandbox-376"),
+      "bounded bridge evidence retains header NAMES, never bypass values");
+    assert.ok(!JSON.stringify(out.trace).includes("synthetic-bypass-sandbox-376"));
   } finally {
     watcher.stop();
     await app.close();
@@ -222,5 +237,24 @@ test("canonical spec through the adapter (failing nested app): four requests com
   } finally {
     watcher.stop();
     await app.close();
+  }
+});
+
+// A failed status assertion, even on the fourth booking request, is NOT the
+// source-bound stale-body assertion. A prefix or transport error cannot be
+// promoted into a conclusive negative observation.
+test("live mocked bridge rejects HTTP 401 and 500 at EACH canonical request position as UNCERTAIN", { timeout: 180_000 }, async () => {
+  for (const status of [401, 500] as const) {
+    for (let position = 0; position < 4; position++) {
+      const app = await startSyntheticApp("nested", { position, status });
+      try {
+        const out = await runCanonical(app.url);
+        assert.equal(out.inconclusive, true, `request ${position + 1}, HTTP ${status}: ${out.reason}`);
+        assert.equal(out.passed, false);
+        assert.equal(out.proxyEvidence.length, position + 1, "never claim later steps executed");
+        assert.equal(out.proxyEvidence.at(-1)?.status, status);
+        assert.ok(out.reason && !out.reason.includes(ACCOUNT) && !out.reason.includes(TOKEN));
+      } finally { await app.close(); }
+    }
   }
 });

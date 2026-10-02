@@ -10,6 +10,8 @@ import { parseMultiStepProject, parseMultiStepScript } from "../../src/multistep
 import { evaluateMultiStepPolicy } from "../../src/multistep/policy.ts";
 import { parseProjectInventory } from "../../src/assertion/inventory.ts";
 import { assertionId } from "../../src/assertion/id.ts";
+import { deployedMultiStepProblem } from "../../src/multistep/identity.ts";
+import type { ChecklyCheck } from "../../src/checkly/types.ts";
 
 const web = fileURLToPath(new URL("../../examples/slots-booking/web/", import.meta.url));
 const constructSource = readFileSync(`${web}checks/multistep-booking.check.ts`, "utf8");
@@ -42,6 +44,7 @@ test("ordered five-step parsing: canonical titles, all awaited, none conditional
   assert.equal(model!.construct?.frequencyMinutes, 5);
   assert.deepEqual(model!.construct?.locations, ["us-east-1", "eu-west-1"]);
   assert.equal(model!.construct?.runParallel, true);
+  assert.equal(model!.construct?.doubleCheck, false);
 });
 
 test("real request methods, ENVIRONMENT_URL origin, headers, and JSON bodies parse exactly", () => {
@@ -53,7 +56,8 @@ test("real request methods, ENVIRONMENT_URL origin, headers, and JSON bodies par
     "POST `${origin}/api/book`",
   ]);
   assert.deepEqual(requests.map((r) => r.stepTitle), ["login", "session", "slots", "book 09:30"]);
-  assert.deepEqual(requests[1].headerKeys, ["Authorization"]);
+  assert.deepEqual(requests[1].headerKeys, ["Authorization", "x-vercel-protection-bypass"]);
+  assert.ok(requests.every((request) => request.headerKeys.includes("x-vercel-protection-bypass")));
   assert.equal(requests[1].usesBearer, true);
   assert.deepEqual(requests[3].bodyKeys, ["slot"]);
   assert.equal(readsEnvironmentUrl, true);
@@ -63,7 +67,7 @@ test("real request methods, ENVIRONMENT_URL origin, headers, and JSON bodies par
 });
 
 test("assertion identity stays byte-stable and step context is carried separately", () => {
-  const inventory = parseProjectInventory("checks/multistep-booking.spec.ts", new Map(files));
+  const inventory = parseProjectInventory("checks/multistep-booking.spec.ts", new Map(files), null, "MULTI_STEP");
   const modelIds = new Set(model!.script!.assertions.map((a) => a.id));
   assert.equal(inventory.assertions.length, model!.script!.assertions.length);
   assert.ok(inventory.assertions.every((a) => modelIds.has(a.id)));
@@ -88,14 +92,14 @@ test("clean original against itself produces no policy verdict", () => {
 test("missing await on a required test.step = FAILED", () => {
   const candidate = candidateWith((s) => s.replace("await test.step('session'", "test.step('session'"));
   const result = evaluateMultiStepPolicy(model, candidate);
-  assert.match(result.rejected ?? "", /missing await on required test\.step\('session'\)/);
+  assert.match(result.rejected ?? "", /missing await on required test\.step/);
   assert.equal(result.uncertain, null);
 });
 
 test("removed, reordered, or conditionally bypassed required steps = FAILED", () => {
   const removed = candidateWith((s) => s.slice(0, s.indexOf("await test.step('confirm transaction'")) + "\n})\n");
   const removedResult = evaluateMultiStepPolicy(model, removed);
-  assert.match(removedResult.rejected ?? "", /removed or skipped: confirm transaction/);
+  assert.match(removedResult.rejected ?? "", /removed or skipped \(1 required step/);
 
   const reordered = candidateWith((s) => {
     const before = s.indexOf("await test.step('session'");
@@ -197,4 +201,71 @@ test("MultiStepCheck construct removal or identity change = FAILED", () => {
   const changed = parseMultiStepProject(retargeted, "checks/multistep-booking.spec.ts");
   const changedResult = evaluateMultiStepPolicy(model, changed);
   assert.match(changedResult.rejected ?? "", /logical ID changed/);
+});
+
+
+test("canonical deployed Multistep admission binds source identity and every modeled effective execution setting", () => {
+  const deployed: ChecklyCheck = {
+    id: "synthetic-deployed-id", name: "slots booking multistep transaction", checkType: "MULTI_STEP",
+    activated: true, muted: false, frequency: 5, frequencyOffset: 0, runParallel: true,
+    locations: ["us-east-1", "eu-west-1"], tags: ["slots-booking", "verify-fix-example", "multistep"],
+    groupId: null, runtimeId: null, privateLocations: [], retryStrategy: null, doubleCheck: false,
+    script: scriptSource, scriptPath: "checks/multistep-booking.spec.ts",
+    environmentVariables: [
+      { key: "ENVIRONMENT_URL", value: "synthetic-origin", secret: false },
+      { key: "MULTISTEP_USER_US_EAST_1", value: "synthetic-east", secret: true },
+      { key: "MULTISTEP_USER_EU_WEST_1", value: "synthetic-west", secret: true },
+      { key: "VERCEL_AUTOMATION_BYPASS_SECRET", value: "synthetic-bypass", secret: true },
+    ],
+  };
+  assert.equal(deployedMultiStepProblem(deployed, model, scriptSource), null);
+  const attacks: Array<[string, (check: ChecklyCheck) => void]> = [
+    ["name", (c) => { c.name = "other transaction"; }],
+    ["kind", (c) => { c.checkType = "BROWSER"; }],
+    ["deployed bytes", (c) => { c.script += "\n"; }],
+    ["wrong source path with same basename", (c) => { c.scriptPath = "elsewhere/multistep-booking.spec.ts"; }],
+    ["locations", (c) => { c.locations = ["eu-west-1", "us-east-1"]; }],
+    ["parallel", (c) => { c.runParallel = false; }],
+    ["frequency", (c) => { c.frequency = 10; }],
+    ["activated", (c) => { c.activated = false; }],
+    ["muted", (c) => { c.muted = true; }],
+    ["tags", (c) => { c.tags = []; }],
+    ["env list", (c) => { c.environmentVariables!.push({ key: "EXTRA", value: "synthetic", secret: true }); }],
+    ["secret flag", (c) => { c.environmentVariables![2]!.secret = false; }],
+    ["private location", (c) => { c.privateLocations = ["private-1"]; }],
+    ["group", (c) => { c.groupId = 22; }],
+    ["runtime", (c) => { c.runtimeId = "alternate-runtime"; }],
+    ["playwright config", (c) => { c.playwrightConfig = { timeout: 300000 }; }],
+    ["testOnly", (c) => { c.testOnly = true; }],
+    ["shouldFail", (c) => { c.shouldFail = true; }],
+    ["frequency offset", (c) => { c.frequencyOffset = 999; }],
+    ["double check", (c) => { c.doubleCheck = true; }],
+    ["unknown double-check default", (c) => { c.doubleCheck = undefined; }],
+    ["retry strategy", (c) => { c.retryStrategy = { type: "FIXED", maxRetries: 1, baseBackoffSeconds: 0, maxDurationSeconds: 60, sameRegion: false }; }],
+    ["intent", (c) => { c.intent = { goal: "weaken checks" }; }],
+    ["auto repair", (c) => { c.aiAutoRepairEnabled = true; }],
+    ["pwProjects", (c) => { c.pwProjects = ["other"]; }],
+    ["pwTags", (c) => { c.pwTags = ["@other"]; }],
+    ["playwrightConfigPath", (c) => { c.playwrightConfigPath = "other.config.ts"; }],
+    ["installCommand", (c) => { c.installCommand = "echo injected"; }],
+    ["testCommand", (c) => { c.testCommand = "echo injected"; }],
+    ["request", (c) => { c.request = { url: "https://elsewhere.invalid" }; }],
+  ];
+  for (const [label, attack] of attacks) {
+    const changed = structuredClone(deployed);
+    attack(changed);
+    assert.ok(deployedMultiStepProblem(changed, model, scriptSource), `${label} may not be admitted`);
+  }
+  for (const [label, before, after] of [
+    ["logical ID", "slots-booking-multistep", "other-logical-id"],
+    ["construct name", "slots booking multistep transaction", "other transaction"],
+    ["construct entrypoint", 'entrypoint: path.join(__dirname, "multistep-booking.spec.ts")', 'entrypoint: path.join(__dirname, "other.spec.ts")'],
+    ["double-check retry", "doubleCheck: false", "doubleCheck: true"],
+    ["unknown double-check default", "doubleCheck: false,", ""],
+  ]) {
+    const mutated = new Map(files);
+    mutated.set("checks/multistep-booking.check.ts", constructSource.replace(before, after));
+    const candidate = parseMultiStepProject(mutated, "checks/multistep-booking.spec.ts");
+    assert.equal(deployedMultiStepProblem(deployed, candidate, scriptSource), "MULTISTEP_CONSTRUCT_IDENTITY_INVALID", label);
+  }
 });

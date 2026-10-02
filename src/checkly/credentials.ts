@@ -15,7 +15,7 @@ import { join } from "node:path";
 export interface ChecklyCredentials {
   apiKey: string;
   accountId: string;
-  source: "env" | "checkly-cli-login" | "mixed";
+  source: "env" | "checkly-cli-login";
 }
 
 export function checklyCliConfigDir(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
@@ -42,7 +42,11 @@ export function resolveCredentials(
 ): ChecklyCredentials | null {
   const envKey = env.CHECKLY_API_KEY?.trim() || "";
   const envAccount = env.CHECKLY_ACCOUNT_ID?.trim() || "";
-  if (envKey && envAccount) return { apiKey: envKey, accountId: envAccount, source: "env" };
+  if (envKey || envAccount) {
+    // A partial protected environment must never borrow the other half from
+    // a cached login that may belong to a different account.
+    return envKey && envAccount ? { apiKey: envKey, accountId: envAccount, source: "env" } : null;
+  }
 
   const dir = checklyCliConfigDir(env, platform);
   const auth = readJsonSafe(join(dir, "auth.json"));
@@ -50,11 +54,8 @@ export function resolveCredentials(
   const fileKey = typeof auth?.apiKey === "string" ? (auth.apiKey as string) : "";
   const fileAccount = typeof data?.accountId === "string" ? (data.accountId as string) : "";
 
-  const apiKey = envKey || fileKey;
-  const accountId = envAccount || fileAccount;
-  if (!apiKey || !accountId) return null;
-  const source = envKey || envAccount ? "mixed" : "checkly-cli-login";
-  return { apiKey, accountId, source };
+  if (!fileKey || !fileAccount) return null;
+  return { apiKey: fileKey, accountId: fileAccount, source: "checkly-cli-login" };
 }
 
 export const CREDENTIALS_HELP =

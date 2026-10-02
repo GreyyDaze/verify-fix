@@ -166,6 +166,7 @@ test("per-region accounts come from environment names only, isolated from browse
     "ENVIRONMENT_URL",
     "MULTISTEP_USER_EU_WEST_1",
     "MULTISTEP_USER_US_EAST_1",
+    "VERCEL_AUTOMATION_BYPASS_SECRET",
   ]);
   // Values are environment reads with an empty-string default only — never
   // committed account values.
@@ -173,9 +174,11 @@ test("per-region accounts come from environment names only, isolated from browse
   const pairs = [...flattened.matchAll(
     /key: "([A-Z0-9_]+)", value: process\.env\.([A-Z0-9_]+) \?\? ""/g,
   )].map((m) => [m[1], m[2]]);
-  assert.equal(pairs.length, 3, "every env var is wired to its own process.env read");
+  assert.equal(pairs.length, 4, "the three ordinary env vars and approved bypass are bound by name");
   for (const [key, envName] of pairs) {
-    assert.equal(key, envName, `key ${key} must read process.env.${envName}`);
+    assert.equal(envName, key === "VERCEL_AUTOMATION_BYPASS_SECRET"
+      ? "CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET" : key,
+    `key ${key} must read its single approved process.env input`);
   }
 });
 
@@ -277,6 +280,7 @@ test("construct configuration: project, locations, frequency, tags, activation, 
   assert.match(construct, /muted: false/);
   assert.match(construct, /tags: \["slots-booking", "verify-fix-example", "multistep"\]/);
   assert.match(construct, /runParallel: true/);
+  assert.match(construct, /doubleCheck: false/, "retry-on-failure must be explicitly disabled");
   assert.ok(!construct.includes("shouldFail"));
   assert.ok(!construct.includes("retryStrategy"));
   assert.ok(!construct.includes("testOnly"));

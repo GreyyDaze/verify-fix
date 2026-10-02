@@ -156,7 +156,11 @@ export interface Bundle {
   /** Sanitized request/response records for an API incident. */
   api?: { failing: ApiRecording | null; passing: ApiRecording | null } | null;
   /** Normalized Multistep evidence summary (from the sanitized recording). */
-  multistep?: { kind: string | null; steps: string[]; problems: string[] } | null;
+  multistep?: { kind: string | null; steps: string[]; problems: string[];
+    /** Only a source-line/target-bound assertion in a validated failing
+     * recording may identify the stale response field being repaired. */
+    failureAssertion?: { file: string; line: number; id: string; step: string } | null;
+  } | null;
   scenes: Scene[];
   envAssumptions: EnvAssumption[];
   determinism: DeterminismEvidence;
@@ -173,6 +177,8 @@ export interface Assertion {
   subject: string;
   matcher: string;
   target: string;
+  /** Multistep polarity; absent for legacy/API/browser inventories. Not hashed into the ID. */
+  negated?: boolean;
   kind: AssertionKind;
   onCriticalPath: boolean;
   sourceLine: number;
@@ -289,6 +295,8 @@ export interface SceneCost {
   checkRuns: number;
   wallTimeMs: number;
   phase: "candidate" | "mutation";
+  /** Per-sandbox descendant browser-process sample maxima (null = unavailable). */
+  multiStepBrowserCounts?: Array<number | null>;
 }
 
 export interface ExecutionCost {
@@ -302,6 +310,8 @@ export interface ExecutionCost {
   localRuns: number;
   /** Browser processes started by local Playwright executions. */
   browserProcesses: number;
+  /** Measured per-run maxima for the Multistep adapter; absent = no adapter runs. */
+  multiStepBrowserCounts?: Array<number | null>;
   /** Completed API requests, including deterministic response replays. */
   httpRequests?: number;
   mutationRuns: number;

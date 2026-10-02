@@ -6,7 +6,7 @@ import type { SceneType } from "../types.ts";
 import type { AssertionInventory } from "../types.ts";
 import type { ReproductionMode } from "./rca-mode.ts";
 
-export type SceneMode = "live" | "live-concurrent:2" | "replay:failing.har" | "replay:passing.har" | "replay:failing.api.json" | "replay:passing.api.json" | `inject:${string}`;
+export type SceneMode = "live" | "live-concurrent:2" | "replay:failing.har" | "replay:passing.har" | "replay:failing.api.json" | "replay:passing.api.json" | `inject:${string}` | "detect:POST /api/book -> 200:booking.confirmed=false";
 
 export interface SceneV3 {
   sceneId: string;
@@ -50,11 +50,14 @@ export interface FailurePoint {
   assertion: { file: string | null; line: number; column: number | null; assertionId: string | null } | null;
   /**
    * When no request failed (drift: the app answered everything, the check
-   * went stale), the request the failing assertion depends on: the last API
-   * call before the same step in the PASSING run. Breaking it is the detection
-   * scene — a repaired check must still fail when that call fails.
+   * went stale), the request the failing assertion depends on. Browser
+   * checks measure the last API call before the same step in the PASSING run;
+   * Multistep binds the failing run's HTTP-200 booking request to source and
+   * leaves unavailable passing-run status and interval null. Its separate
+   * trusted local detection flips only the validated nested confirmation
+   * boolean at HTTP 200; a repaired hard assertion must still fail.
    */
-  dependency: { method: string; url: string; path: string; passingStatus: number; msBeforeStep: number; stepLine: number | null; stepTitle: string } | null;
+  dependency: { method: string; url: string; path: string; passingStatus: number | null; msBeforeStep: number | null; stepLine: number | null; stepTitle: string } | null;
 }
 
 /** Another run of the same check whose time window intersects the failing run's. */
@@ -198,7 +201,11 @@ export interface ManifestV3 {
     passingResultId: string | null;
     errorGroupId: string | null;
     rcaId: string | null;
-    assets: Array<{ result: "failing" | "passing"; name: string; type: string; bytes: number; sha256: string }>;
+    assets: Array<{ result: "failing" | "passing"; name: string; type: string; bytes: number; sha256: string;
+      /** Remote-only manifest binding; absent for other check types and local mechanics. */
+      resultId?: string; assetType?: "report" | "file" | "log";
+      manifestEntrySha256?: string;
+    }>;
     apiCalls: Array<{ method: string; url: string; status: number }>;
   };
   notes: string[];

@@ -147,7 +147,7 @@ export class ChecklyClient {
   }
 
   private async request(method: string, url: string, signal: AbortSignal,
-    init: { body?: unknown; accept?: string; authenticated?: boolean } = {}): Promise<Response> {
+    init: { body?: unknown; accept?: string; authenticated?: boolean; allowAssetRedirect?: boolean } = {}): Promise<Response> {
     const apiOrigin = new URL(this.baseUrl).origin;
     const authenticated = init.authenticated !== false;
     let destination = httpsUrl(new URL(url, this.baseUrl).toString());
@@ -178,7 +178,15 @@ export class ChecklyClient {
           throw new Error("Checkly redirect is missing, exceeds the bound or would replay a write");
         }
         const next = httpsUrl(new URL(location, destination).toString());
-        if (authenticated && (next.origin !== apiOrigin || operationOf(next, true) !== operation)) {
+        if (authenticated && next.origin !== apiOrigin) {
+          if (!init.allowAssetRedirect || operation !== "list-assets") {
+            throw new Error("Checkly API redirect changed its authorized origin or operation");
+          }
+          // Checkly asset manifests can point at API-origin redirect URLs that
+          // hand off the actual archive to a presigned object-store URL.
+          // Follow that handoff without forwarding Checkly credentials.
+          authenticated = false;
+        } else if (authenticated && operationOf(next, true) !== operation) {
           throw new Error("Checkly API redirect changed its authorized origin or operation");
         }
         destination = next;
@@ -243,7 +251,7 @@ export class ChecklyClient {
       const destination = new URL(url);
       const apiOrigin = new URL(this.baseUrl).origin;
       const authenticated = destination.origin === apiOrigin;
-      const res = await this.request("GET", url, signal, { accept: "*/*", authenticated });
+      const res = await this.request("GET", url, signal, { accept: "*/*", authenticated, allowAssetRedirect: true });
       if (!res.ok) {
         await res.body?.cancel();
         throw new ChecklyApiError(res.status, "asset", "remote asset download failed");

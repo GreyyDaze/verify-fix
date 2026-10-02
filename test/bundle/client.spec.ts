@@ -42,6 +42,21 @@ test("client: API calls carry bearer + account headers; presigned downloads carr
   assert.deepEqual(c.calls.map((x) => x.url), ["get-check", "asset"]);
 });
 
+test("client: same-origin asset downloads carry Checkly auth; presigned downloads do not", async () => {
+  const { fetch, calls } = fakeFetch((url) => {
+    if (url.includes("/v1/check-results/chk/result/assets/redirect/archive.zip")) {
+      return new Response(new Uint8Array([4, 5, 6]), { status: 200 });
+    }
+    return new Response("nope", { status: 404 });
+  });
+  const c = new ChecklyClient(creds, { fetchImpl: fetch, baseUrl: "https://api.checklyhq.com" });
+  const buf = await c.download("https://api.checklyhq.com/v1/check-results/chk/result/assets/redirect/archive.zip?signature=HIDDEN");
+  assert.deepEqual([...buf], [4, 5, 6]);
+  const headers = calls[0].init.headers as Record<string, string>;
+  assert.equal(headers.authorization, "Bearer cu_test_key");
+  assert.equal(headers["x-checkly-account"], "acct-123");
+});
+
 test("client: list results builds the v2 query, RCA 202 is 'pending', errors carry status", async () => {
   const seen: string[] = [];
   const { fetch } = fakeFetch((url) => {

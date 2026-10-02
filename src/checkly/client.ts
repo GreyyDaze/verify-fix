@@ -186,6 +186,8 @@ export class ChecklyClient {
           // hand off the actual archive to a presigned object-store URL.
           // Follow that handoff without forwarding Checkly credentials.
           authenticated = false;
+          delete headers.authorization;
+          delete headers["x-checkly-account"];
         } else if (authenticated && operationOf(next, true) !== operation) {
           throw new Error("Checkly API redirect changed its authorized origin or operation");
         }

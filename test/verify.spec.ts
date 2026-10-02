@@ -503,7 +503,8 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
   test("CLI: --target + --env-file, directory patch, exit code from the verdict (good patch → 0), environment column", async () => {
     const dir = mkdtempSync(join(tmpdir(), "verify-fix-env-"));
     const envFile = join(dir, ".env");
-    writeFileSync(envFile, "# the check's own variable, as `checkly test --env-file` would pass it\nACCOUNT=demo\n", { mode: 0o600 });\n    chmodSync(envFile, 0o600);
+    writeFileSync(envFile, "# the check's own variable, as `checkly test --env-file` would pass it\nACCOUNT=demo\n", { mode: 0o600 });
+    chmodSync(envFile, 0o600);
     const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
       const child = spawn(
         process.execPath,

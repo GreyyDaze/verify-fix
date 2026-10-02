@@ -202,6 +202,8 @@ interface ManifestVariant {
 function scheduledClient(variant: ManifestVariant = {}): ChecklyClient {
   const frequencyOffset = variant.frequencyOffset === undefined ? 37 : variant.frequencyOffset;
   const historyCalls: string[] = [];
+  const assetTypeFilters: Array<AssetType | undefined> = [];
+  const downloadCalls: string[] = [];
   const zipFor = (id: string): Buffer => writeZip(id === "synthetic-pass"
     ? { "test-results.json": passingReport(), "check-run-data.json": realCheckRunData, "logs.txt": realLogs }
     : { "test-results.json": failingReport(variant.reportedLine ?? RUNTIME_LINE, variant.bookFetchAssertion ?? null),
@@ -245,27 +247,34 @@ function scheduledClient(variant: ManifestVariant = {}): ChecklyClient {
       return { entries: [fail, pass], nextId: null };
     },
     async getResult(_checkId: string, id: string) { return id === fail.id ? fail : pass; },
-    async getAssets(_checkId: string, id: string) { return { assets: entries(id) }; },
+    async getAssets(_checkId: string, id: string, type?: AssetType) {
+      assetTypeFilters.push(type);
+      return { assets: entries(id) };
+    },
     async download(url: string) {
+      downloadCalls.push(url);
       if (variant.downloadFailureStatus !== undefined) throw new Error(`asset download failed (HTTP ${variant.downloadFailureStatus})`);
       if (variant.corruptArchive) return Buffer.from("not-a-zip");
       return zipFor(url.includes("synthetic-pass") ? "synthetic-pass" : "synthetic-fail");
     },
   } as unknown as ChecklyClient;
   (client as unknown as { historyCalls: string[] }).historyCalls = historyCalls;
+  (client as unknown as { assetTypeFilters: Array<AssetType | undefined> }).assetTypeFilters = assetTypeFilters;
+  (client as unknown as { downloadCalls: string[] }).downloadCalls = downloadCalls;
   return client;
 }
 
-async function scheduledBundle(variant: ManifestVariant = {}): Promise<{ bundle: ReturnType<typeof loadBundle>["bundle"]; outDir: string }> {
+async function scheduledBundle(variant: ManifestVariant = {}): Promise<{ bundle: ReturnType<typeof loadBundle>["bundle"]; outDir: string; client: ChecklyClient }> {
   const projectDir = mkdtempSync(join(tmpdir(), "scheduled-result-project-"));
   mkdirSync(join(projectDir, "checks"));
   writeFileSync(join(projectDir, "checkly.config.ts"), "export default {logicalId:'slots-booking-multistep'}\n");
   writeFileSync(join(projectDir, "checks/multistep-booking.spec.ts"), spec);
   writeFileSync(join(projectDir, "checks/multistep-booking.check.ts"), construct);
   const outDir = mkdtempSync(join(tmpdir(), "scheduled-result-bundle-"));
+  const client = scheduledClient(variant);
   await buildBundle({ checkId: "synthetic-check", outDir, projectDir, keepRaw: variant.keepRaw ?? false, log: () => {} },
-    { client: scheduledClient(variant), accountId: "synthetic", now: () => new Date("2026-09-30T00:00:00.000Z") });
-  return { bundle: loadBundle(outDir).bundle, outDir };
+    { client, accountId: "synthetic", now: () => new Date("2026-09-30T00:00:00.000Z") });
+  return { bundle: loadBundle(outDir).bundle, outDir, client };
 }
 
 test("remote asset HTTP failures keep a transport-specific problem category", async () => {
@@ -317,6 +326,20 @@ test("history pagination finds an older real passing result without manufacturin
   const failing = JSON.parse(readFileSync(join(outDir, "results/failing.json"), "utf8")) as { id: string };
   assert.equal(passing.id, "synthetic-pass");
   assert.equal(failing.id, "synthetic-fail");
+});
+
+test("automatic Multistep acquisition fetches the full manifest and downloads selected evidence", async () => {
+  const { bundle, outDir, client } = await scheduledBundle();
+  try {
+    const filters = (client as unknown as { assetTypeFilters: Array<AssetType | undefined> }).assetTypeFilters;
+    const downloads = (client as unknown as { downloadCalls: string[] }).downloadCalls;
+    assert.ok(filters.length >= 2, "failing and passing manifests were requested");
+    assert.ok(filters.every((type) => type === undefined), "Multistep must not use the Browser trace asset filter");
+    assert.ok(downloads.length >= 2, "remote manifest branch must call client.download()");
+    assert.ok(bundle.provenance.assets.some((asset) => asset.type === "remote-asset"));
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+  }
 });
 
 test("the existing scheduled result validates on the automatic remote-download path with no mismatch warning", async () => {

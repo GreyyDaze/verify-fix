@@ -496,9 +496,11 @@ async function fetchResultWithTrace(
         const manifestEntrySha256 = sha256(Buffer.from(JSON.stringify({
           type: asset.type, name: asset.name, source: {
             type: typeof source === "string" ? source : sourceRecord?.type ?? null,
-            checkId: sourceId("checkId"), checkName: sourceId("checkName"),
-            checkType: sourceId("checkType"), resultId: sourceId("resultId"),
-            testSessionId: sourceId("testSessionId"),
+            checkId: typeof sourceRecord?.checkId === "string" ? sourceRecord.checkId : null,
+            checkName: typeof sourceRecord?.checkName === "string" ? sourceRecord.checkName : null,
+            checkType: typeof sourceRecord?.checkType === "string" ? sourceRecord.checkType : null,
+            resultId: typeof sourceRecord?.resultId === "string" ? sourceRecord.resultId : null,
+            testSessionId: typeof sourceRecord?.testSessionId === "string" ? sourceRecord.testSessionId : null,
           }, url: asset.url,
           contentType: asset.contentType ?? null, archive: asset.archive?.entryName ?? null,
         }), "utf8"));

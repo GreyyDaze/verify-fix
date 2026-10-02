@@ -315,7 +315,7 @@ test("MULTI_STEP --keep-raw recovers raw artifacts beside the bundle, never insi
     assert.ok(existsSync(join(rawSibling, "failing")), "failing-side raw artifacts recovered");
     const rawNames = readdirSync(join(rawSibling, "failing")).sort();
     assert.equal(rawNames.length, 1);
-    assert.match(rawNames[0]!, /^archive-[0-9a-f]{64}\\.zip$/);
+    assert.match(rawNames[0]!, /^archive-[0-9a-f]{64}\.zip$/);
     // The sanitized bundle is untouched by raw retention (no raw/ entry in
     // the bundle tree; the recovery raw dir is a sibling).
     const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>

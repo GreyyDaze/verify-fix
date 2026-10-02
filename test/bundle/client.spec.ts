@@ -177,6 +177,31 @@ test("credentials: env wins; otherwise the Checkly CLI login files are read; val
   }
 });
 
+test("client: API-origin asset redirect hands off to presigned storage without credentials", async () => {
+  const { fetch, calls } = fakeFetch((url, init) => {
+    if (url.startsWith("https://api.checklyhq.com/v1/check-results/chk/result/assets/")) {
+      const headers = init.headers as Record<string, string>;
+      assert.equal(headers.authorization, "Bearer cu_test_key");
+      assert.equal(headers["x-checkly-account"], "acct-123");
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://s3.example/assets.zip?X-Amz-Signature=HIDDEN" },
+      });
+    }
+    if (url.startsWith("https://s3.example/assets.zip")) {
+      const headers = init.headers as Record<string, string>;
+      assert.equal(headers.authorization, undefined);
+      assert.equal(headers["x-checkly-account"], undefined);
+      return new Response(new Uint8Array([7, 8, 9]), { status: 200 });
+    }
+    return new Response("nope", { status: 404 });
+  });
+  const c = new ChecklyClient(creds, { fetchImpl: fetch, baseUrl: "https://api.checklyhq.com" });
+  const buf = await c.download("https://api.checklyhq.com/v1/check-results/chk/result/assets/redirect/archive.zip");
+  assert.deepEqual([...buf], [7, 8, 9]);
+  assert.equal(calls.length, 2);
+});
+
 test("client boundary: HTTPS origins, redirects and credential isolation hold before a second fetch", async () => {
   assert.throws(() => new ChecklyClient(creds, { baseUrl: "http://127.0.0.1:9999" }), /HTTPS/);
   assert.throws(() => new ChecklyClient(creds, { baseUrl: "https://user:pw@api.checklyhq.com" }), /HTTPS/);

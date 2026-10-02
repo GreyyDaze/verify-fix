@@ -514,17 +514,22 @@ async function fetchResultWithTrace(
           : sourceType === "check-result";
         const contentTypeValid = asset.contentType === undefined
           || (typeof asset.contentType === "string" && asset.contentType.length <= 512);
+        const unexpectedAssetKeys = Object.keys(asset).filter((key) =>
+          !["name", "type", "url", "contentType", "source", "archive"].includes(key));
         if (!knownAssetType.has(asset.type)
           || !sourceValid
           || !contentTypeValid
           || remoteUrl.protocol !== "https:" || remoteUrl.username || remoteUrl.password
           || asset.url.length > 4096
-          || Object.keys(asset).some((key) => !["name", "type", "url", "contentType", "source", "archive"].includes(key))) {
+          || unexpectedAssetKeys.length > 0) {
           invalid = "MULTISTEP_ASSET_TYPE_INVALID";
           rejectedCategory = !knownAssetType.has(asset.type) ? "asset-type"
             : !sourceValid ? "source"
             : !contentTypeValid ? "content-type"
             : "manifest-descriptor";
+          if (rejectedCategory === "manifest-descriptor") {
+            log("[bundle] " + label + ": multistep rejected descriptor keys=" + unexpectedAssetKeys.join(","));
+          }
           break;
         }
         const manifestEntrySha256 = sha256(Buffer.from(JSON.stringify({

@@ -74,7 +74,7 @@ function operationOf(url: URL, authenticated: boolean): string {
   if (!authenticated) return "asset";
   if (/^\/v1\/checks\/[^/]+$/.test(url.pathname)) return "get-check";
   if (/^\/v2\/check-results\/[^/]+$/.test(url.pathname)) return "list-results";
-  if (/^\/v1\/check-results\/[^/]+\/[^/]+\/assets$/.test(url.pathname)) return "list-assets";
+  if (/^\/v1\/check-results\/[^/]+\/[^/]+\/assets(?:\/.*)?$/.test(url.pathname)) return "list-assets";
   if (/^\/v1\/check-results\/[^/]+\/[^/]+$/.test(url.pathname)) return "get-result";
   if (/^\/v1\/error-groups\/(?:checks\/)?[^/]+$/.test(url.pathname)) return "error-group";
   if (/^\/v1\/root-cause-analyses\/(?:error-groups\/)?[^/]+$/.test(url.pathname)) return "rca";
@@ -240,7 +240,7 @@ export class ChecklyClient {
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error("invalid asset download byte bound");
     httpsUrl(url); // reject HTTP, credentials and relative URLs BEFORE any fetch
     return this.withinDeadline(async (signal) => {
-      const res = await this.request("GET", url, signal, { accept: "*/*", authenticated: false });
+      const destination = new URL(url);\n      const apiOrigin = new URL(this.baseUrl).origin;\n      const authenticated = destination.origin === apiOrigin;\n      const res = await this.request("GET", url, signal, { accept: "*/*", authenticated });
       if (!res.ok) {
         await res.body?.cancel();
         throw new ChecklyApiError(res.status, "asset", "remote asset download failed");

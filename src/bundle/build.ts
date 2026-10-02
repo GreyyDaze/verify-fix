@@ -499,8 +499,8 @@ async function fetchResultWithTrace(
               // bytes BEFORE opening/parsing the archive, so --keep-raw still
               // recovers the exact provider artifact when ZIP validation fails.
               if (rawDir) {
-                mkdirSync(join(rawDir, label), { recursive: true });
-                writeFileSync(join(rawDir, label, "archive-" + sha256(asset.url) + ".zip"), archive);
+                mkdirSync(rawDir, { recursive: true });
+                writeFileSync(join(rawDir, "archive-" + sha256(asset.url) + ".zip"), archive);
               }
               zip = openZipBounded(archive, ASSET_ZIP_BOUNDS);
               archiveCache.set(asset.url, zip);
@@ -515,8 +515,8 @@ async function fetchResultWithTrace(
             // Direct assets are already HTTPS-origin and byte-bound validated
             // by client.download. Retain them before any evidence parsing.
             if (rawDir) {
-              mkdirSync(join(rawDir, label), { recursive: true });
-              writeFileSync(join(rawDir, label, basename(asset.name) || name), buf);
+              mkdirSync(rawDir, { recursive: true });
+              writeFileSync(join(rawDir, basename(asset.name) || name), buf);
             }
           }
           if (buf.length > MAX_ASSET_FILE_BYTES || buf.length > ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalDecoded) {

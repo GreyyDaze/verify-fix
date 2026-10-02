@@ -117,7 +117,7 @@ function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: null, patch: null, candidateProject: null, pr: null, base: null, projectPath: ".", bundle: null, executor: "scene", target: null, targetRevision: null, targetMetadata: null, cloudApproved: false, allowForkCloud: false, reportJson: null, reportMarkdown: null, envFile: null, envName: null, dryRun: false, json: false, verbose: false,
     check: null, result: null, out: null, project: null, assets: null, measure: 0, measureOverlap: 0, targetUrl: null,
-    triggerRca: false, bodies: "api", keepRaw: false, history: 100, runs: 20, reports: null,
+    triggerRca: false, bodies: "api", keepRaw: false, history: 1000, runs: 20, reports: null,
   };
   const seen = new Set<string>();
   const value = (i: number, a: string): string => {

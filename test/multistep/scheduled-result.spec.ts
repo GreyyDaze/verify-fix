@@ -8,7 +8,7 @@
 // Checkly output is stored here.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -264,11 +264,22 @@ async function scheduledBundle(variant: ManifestVariant = {}): Promise<{ bundle:
 
 test("remote archive validation retains the downloaded bytes before ZIP parsing rejects them", async () => {
   const { bundle, outDir } = await scheduledBundle({ corruptArchive: true });
-  assert.equal(bundle.scenes.length, 0);
-  assert.ok(bundle.multistep?.problems.includes("MULTISTEP_ARCHIVE_INVALID")
-    || bundle.multistep?.problems.includes("MULTISTEP_CAPTURE_BINDING_INVALID"));
   const rawSibling = `${outDir}-raw`;
-  assert.ok(existsSync(rawSibling) || true);
+  try {
+    assert.equal(bundle.scenes.length, 0);
+    assert.ok(bundle.multistep?.problems.includes("MULTISTEP_ARCHIVE_INVALID")
+      || bundle.multistep?.problems.includes("MULTISTEP_CAPTURE_BINDING_INVALID"));
+    assert.ok(existsSync(rawSibling), "validated remote bytes must survive archive validation failure");
+    const sides = ["failing", "passing"];
+    for (const side of sides) {
+      assert.ok(existsSync(join(rawSibling, side)), `${side} raw directory exists`);
+      assert.ok(readdirSync(join(rawSibling, side)).some((name) => /^archive-[0-9a-f]{64}\\.zip$/.test(name)),
+        `${side} corrupt archive bytes retained`);
+    }
+  } finally {
+    rmSync(rawSibling, { recursive: true, force: true });
+    rmSync(outDir, { recursive: true, force: true });
+  }
 });
 
 test("history pagination finds an older real passing result without manufacturing evidence", async () => {

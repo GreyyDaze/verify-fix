@@ -514,11 +514,14 @@ async function fetchResultWithTrace(
           : sourceType === "check-result";
         const contentTypeValid = asset.contentType === undefined
           || (typeof asset.contentType === "string" && asset.contentType.length <= 512);
+        const contentEncodingValid = asset.contentEncoding === undefined
+          || (typeof asset.contentEncoding === "string" && asset.contentEncoding.length <= 128);
         const unexpectedAssetKeys = Object.keys(asset).filter((key) =>
-          !["name", "type", "url", "contentType", "source", "archive"].includes(key));
+          !["name", "type", "url", "contentType", "contentEncoding", "source", "archive"].includes(key));
         if (!knownAssetType.has(asset.type)
           || !sourceValid
           || !contentTypeValid
+          || !contentEncodingValid
           || remoteUrl.protocol !== "https:" || remoteUrl.username || remoteUrl.password
           || asset.url.length > 4096
           || unexpectedAssetKeys.length > 0) {
@@ -526,6 +529,7 @@ async function fetchResultWithTrace(
           rejectedCategory = !knownAssetType.has(asset.type) ? "asset-type"
             : !sourceValid ? "source"
             : !contentTypeValid ? "content-type"
+            : !contentEncodingValid ? "content-encoding"
             : "manifest-descriptor";
           if (rejectedCategory === "manifest-descriptor") {
             log("[bundle] " + label + ": multistep rejected descriptor keys=" + unexpectedAssetKeys.join(","));
@@ -541,7 +545,8 @@ async function fetchResultWithTrace(
             resultId: typeof sourceRecord?.resultId === "string" ? sourceRecord.resultId : null,
             testSessionId: typeof sourceRecord?.testSessionId === "string" ? sourceRecord.testSessionId : null,
           }, url: asset.url,
-          contentType: asset.contentType ?? null, archive: asset.archive?.entryName ?? null,
+          contentType: asset.contentType ?? null, contentEncoding: asset.contentEncoding ?? null,
+          archive: asset.archive?.entryName ?? null,
         }), "utf8"));
         try {
           let buf: Buffer;

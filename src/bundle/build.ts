@@ -425,6 +425,17 @@ async function fetchResultWithTrace(
         invalid = "MULTISTEP_ASSET_MANIFEST_UNAVAILABLE";
       }
       log("[bundle] " + label + ": multistep asset manifest entries=" + entries.length);
+      // Safe acquisition diagnostic: names/types only, never URLs or asset bytes.
+      if (entries.length > 0) {
+        const descriptors = entries.slice(0, ASSET_ZIP_BOUNDS.maxEntries).map((asset) => {
+          const name = asset && typeof asset.name === "string" ? basename(asset.name) : "<invalid-name>";
+          const archive = asset && asset.archive && typeof asset.archive === "object"
+            && typeof asset.archive.entryName === "string" ? basename(asset.archive.entryName) : null;
+          const type = asset && typeof asset.type === "string" ? asset.type : "<invalid-type>";
+          return archive ? `${name} [${type}; archive=${archive}]` : `${name} [${type}]`;
+        });
+        log("[bundle] " + label + ": multistep asset descriptors=" + descriptors.join(", "));
+      }
       const byName = new Map<string, string>();
       const archiveCache = new Map<string, ReturnType<typeof openZipBounded>>();
       let totalDecoded = 0;

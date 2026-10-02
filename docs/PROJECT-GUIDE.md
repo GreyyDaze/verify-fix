@@ -1332,10 +1332,10 @@ or API values. A synthetic
 `PASS` with fabricated determinism/assumptions is not a Checkly, browser,
 deployment or cloud verdict. Historic Phase 6 `158/158` is not the current
 Phase 7 suite. The current pre-commit Node v24.21.0 checkpoint passed
-197/197 focused Multistep/CLI/scene/sandbox tests and 242/242 focused
-workflow/bundle/API/executor/candidate/package tests (the last includes the
-packed external-consumer run), all with
-zero skips. The 477-test full suite had 470 pass, exactly the same seven
+170/170 focused Multistep tests and 242/242 focused
+workflow/bundle/API/executor/candidate/package/scene/sandbox tests (the last
+includes the packed external-consumer run), all with
+zero skips. The 482-test full suite had 475 pass, exactly the same seven
 known `test/verify.spec.ts` failures, zero skips. These are old DSL assertions
 against the newly nested app response, not real Checkly failures; an eighth
 failure or a skip is unacceptable. Root/example typechecks and builds,
@@ -1356,8 +1356,14 @@ source assertion; raw `pw:api` records may carry `queryParams`. With these
 corrections the existing scheduled result validates on the automatic
 remote-download path with zero multistep problems and warnings in
 `test/multistep/scheduled-result.spec.ts` — synthetic fixture of the real
-artifact shapes; no new Checkly run was triggered and no real parity is
-claimed.
+artifact bytes committed under `test/multistep/fixtures/` (Checkly already
+redacts secrets to `*********`); no new Checkly run was triggered and no real
+parity is claimed. Every multistep problem literal is now proven by a
+taxonomy test to be an exact fixed category — the `MULTIPLE_` misspellings
+that collapsed real admissions into `MULTISTEP_EVIDENCE_INVALID` are gone,
+per-side availability names are fixed categories, and contradictory-stats or
+malformed-raw evidence maps to its truthful category instead of the generic
+fallback.
 
 | Gate | Locally implemented/staged | Not yet established |
 | --- | --- | --- |

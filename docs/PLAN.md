@@ -224,11 +224,11 @@ runs belong to Phase 6, not Phase 7. A local fixture labeled `PASS` proves only
 the verifier's mechanics under explicit synthetic assumptions; it is not a
 Checkly capture, browser session, deployed revision, Vercel readiness or cloud
 proof. The current pre-commit Phase 7 checkpoint on Node v24.21.0
-(lockfile installs with `--ignore-scripts`) passed **197/197** focused
-Multistep/CLI/scene/sandbox tests and **242/242** focused
-workflow/bundle/API/executor/candidate/package tests (the last includes the
-packed external-consumer run), all zero-skip. The **477-test
-full suite: 470 pass, exactly seven known `test/verify.spec.ts` failures,
+(lockfile installs with `--ignore-scripts`) passed **170/170** focused
+Multistep tests and **242/242** focused
+workflow/bundle/API/executor/candidate/package/scene/sandbox tests (the last includes the
+packed external-consumer run), all zero-skip. The **482-test
+full suite: 475 pass, exactly seven known `test/verify.spec.ts` failures,
 zero skips** has the same seven failures as the preceding checkpoint. These
 are the legacy real-app DSL assertions against the now-nested app response,
 not new Phase 7 failures; an eighth failure or a skip is unacceptable. Root
@@ -261,9 +261,33 @@ line. (4) Real `pw:api` records also carry `queryParams`, now admitted by the
 raw reporter schema. The existing scheduled result then validates on the
 automatic remote-download path with zero multistep problems and warnings
 (nonempty scenes, failure at `book 09:30`, four ordered HTTP-200 requests, no
-confirmation step) in `test/multistep/scheduled-result.spec.ts` — a synthetic
-fixture of the real artifact shapes; no new Checkly run was triggered and no
-real evidence or parity is claimed.
+confirmation step) in `test/multistep/scheduled-result.spec.ts` against the committed real
+artifact bytes (`test/multistep/fixtures/scheduled-failing-*` — Checkly
+already redacts every secret to the opaque `*********` form); no new Checkly
+run was triggered and no real evidence or parity is claimed.
+
+**Problem-taxonomy and evidence-admission corrections (2026-10-01, later the
+same day).** Three emitters spelled problem names with a nonexistent
+`MULTIPLE_` prefix (`shape.ts`, `files.ts`, `build.ts`), so the stored failure
+collapsed into the `MULTISTEP_EVIDENCE_INVALID` fallback instead of naming the
+true gate; the taxonomy test (`test/multistep/problem-taxonomy.spec.ts`) now
+proves every emitted problem literal is an exact fixed category. The
+failing-shape law no longer demands a redundant `expected`/`actual` copy on
+the book fetch record: the real runner keeps the binding assertion on the
+expect step's `checklyData` and fetch-record copies vary in serialization, so
+only a genuine contradiction of the stale assertion rejects (still
+`MULTISTEP_FAILURE_STEP_UNBOUND`, fail-closed). Finally, the category mapper
+now names the remaining gates truthfully — the rendered per-side availability
+names (`MULTISTEP_{FAILING,PASSING}_{RESULT_MISSING,RECORDING_MISSING,RECORDING_INVALID}`)
+are fixed categories, internally contradictory stats evidence maps to
+`MULTISTEP_RESULT_STATS_INVALID`, and unparseable/malformed raw evidence maps
+to `MULTISTEP_RAW_SCHEMA_INVALID` — so no admission can ever masquerade as
+`MULTISTEP_EVIDENCE_INVALID` again. The real failing-side artifacts
+(`check-run-data.json` byte-identical script, `logs.txt`, `test-results.json`
+with the no-`actual` failing expect, full Vercel config block, `errorLocation`
+132:44) validate end-to-end at the automatic remote-download path: zero
+problems/warnings, three scenes, failure bound at `book 09:30` line 142
+(`assert:3b894637`).
 
 ## Phase 8 — CLI setup and copied live learning project
 

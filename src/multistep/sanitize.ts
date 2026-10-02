@@ -31,6 +31,12 @@ const KNOWN_PROBLEMS = new Set([
   "MULTISTEP_RESULT_STATS_INVALID", "MULTISTEP_REQUEST_BODY_INVALID", "MULTISTEP_ASSERTION_EVIDENCE_MISSING",
   "MULTISTEP_SOURCE_PATH_UNSAFE", "MULTISTEP_SOURCE_CLOSURE_BOUND", "MULTISTEP_CAPTURE_BINDING_INVALID",
   "MULTISTEP_MECHANICS_ONLY", "MULTISTEP_ASSET_TYPE_INVALID", "MULTISTEP_BYPASS_BINDING_INVALID", "MULTISTEP_RAW_SCHEMA_INVALID", "MULTISTEP_CONSTRUCT_IDENTITY_INVALID", "MULTISTEP_DEPLOYED_SOURCE_MISMATCH",
+  // Rendered per-side availability names (bundle-level templates): a missing
+  // or unbindable side must be reported as exactly that, never collapsed into
+  // the EVIDENCE_INVALID fallback.
+  "MULTISTEP_FAILING_RESULT_MISSING", "MULTISTEP_PASSING_RESULT_MISSING",
+  "MULTISTEP_FAILING_RECORDING_MISSING", "MULTISTEP_PASSING_RECORDING_MISSING",
+  "MULTISTEP_FAILING_RECORDING_INVALID", "MULTISTEP_PASSING_RECORDING_INVALID",
 ]);
 /** True only for the exact fixed problem names above. Used by the taxonomy
  * test to prove every emitter spells a real category (no typo can masquerade
@@ -47,7 +53,14 @@ export function multistepProblemCategory(problem: string): string {
   if (/assets?\.zip|archive|zip:/i.test(problem)) return "MULTISTEP_ARCHIVE_INVALID";
   if (/symbolic link|symlink|file byte bound|bounded regular file/i.test(problem)) return "MULTISTEP_ASSET_UNSAFE";
   if (/missing|not found|no ordered step/i.test(problem)) return "MULTISTEP_EVIDENCE_MISSING";
-  if (/side|kind|status mismatch/i.test(problem)) return "MULTISTEP_SIDE_MISMATCH";
+  // Internally contradictory stats/status evidence is a stats problem, and
+  // unparseable/malformed raw evidence is a raw-schema problem: name them
+  // truthfully instead of collapsing into the generic fallback. These are
+  // matched before the looser side/kind/status wording, which must not eat
+  // them (e.g. "side" inside "inside an all-passed result").
+  if (/inconsistent capture/i.test(problem)) return "MULTISTEP_RESULT_STATS_INVALID";
+  if (/corrupt|not valid JSON|not a JSON object|not a JSON array|not a genuine|genuine nested|malformed entry|exceeds supported depth|does not read as text|neither an object nor an array/i.test(problem)) return "MULTISTEP_RAW_SCHEMA_INVALID";
+  if (/\bside\b|kind|status mismatch/i.test(problem)) return "MULTISTEP_SIDE_MISMATCH";
   return "MULTISTEP_EVIDENCE_INVALID";
 }
 

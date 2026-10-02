@@ -60,6 +60,43 @@ test("every emitted multistep problem name is an exact fixed category", () => {
   }
 });
 
+test("the rendered per-side availability names are exact fixed categories", () => {
+  for (const side of ["FAILING", "PASSING"]) {
+    for (const suffix of ["RESULT_MISSING", "RECORDING_MISSING", "RECORDING_INVALID"]) {
+      const name = `MULTISTEP_${side}_${suffix}`;
+      assert.ok(isKnownMultiStepProblem(name), `${name} must be a fixed category`);
+      assert.equal(multistepProblemCategory(name), name);
+    }
+  }
+});
+
+test("every dynamic wording family maps to its truthful category, never the generic fallback", () => {
+  // Internally contradictory stats/status evidence:
+  assert.equal(multistepProblemCategory("inconsistent capture: result status is failed but stats.unexpected is 0 (corrupt or internally inconsistent evidence)"),
+    "MULTISTEP_RESULT_STATS_INVALID");
+  assert.equal(multistepProblemCategory("inconsistent capture: stats.unexpected > 0 but no failed result status and no failed step (corrupt or internally inconsistent evidence)"),
+    "MULTISTEP_RESULT_STATS_INVALID");
+  assert.equal(multistepProblemCategory("inconsistent capture: failed step(s) recorded inside an all-passed result (corrupt or internally inconsistent evidence)"),
+    "MULTISTEP_RESULT_STATS_INVALID");
+  // Unparseable/malformed raw evidence:
+  for (const wording of [
+    "logs.txt is not valid JSON (corrupt or truncated asset)",
+    "check-run-data.json is not a JSON object (corrupt asset)",
+    "test-results.json is not valid JSON (corrupt or truncated asset)",
+    "test-results.json lacks a single genuine nested Playwright suites/specs/tests/results array",
+    "test-results.json top-level step is not a genuine Playwright test.step with nested children",
+    "request checklyData is not a genuine nested Playwright array",
+    "step nesting exceeds supported depth (truncated or corrupt evidence)",
+    "headers field is neither an object nor an array (corrupt evidence)",
+    "logs.txt contains a malformed entry (corrupt asset)",
+  ]) {
+    assert.equal(multistepProblemCategory(wording), "MULTISTEP_RAW_SCHEMA_INVALID", wording);
+  }
+  // Ordered-step absence stays a missing-evidence problem (checked first):
+  assert.equal(multistepProblemCategory("test-results.json contains no ordered step evidence (missing execution evidence)"),
+    "MULTISTEP_EVIDENCE_MISSING");
+});
+
 test("the category mapper maps every deliberate wording family and never invents categories", () => {
   assert.equal(multistepProblemCategory("token relationship inconsistent: expected exactly 3 token occurrences, observed 2"),
     "MULTISTEP_TOKEN_RELATIONSHIP_INVALID");
@@ -67,7 +104,7 @@ test("the category mapper maps every deliberate wording family and never invents
     "MULTISTEP_ACCOUNT_RELATIONSHIP_INVALID");
   assert.equal(multistepProblemCategory("zip: local and central headers disagree"), "MULTISTEP_ARCHIVE_INVALID");
   assert.equal(multistepProblemCategory("logs.txt is not valid JSON (corrupt or truncated asset)"),
-    "MULTISTEP_EVIDENCE_INVALID");
+    "MULTISTEP_RAW_SCHEMA_INVALID");
   assert.equal(multistepProblemCategory("test-results.json contains no ordered step evidence (missing execution evidence)"),
     "MULTISTEP_EVIDENCE_MISSING");
   assert.equal(multistepProblemCategory("MULTIPLE_FAILURE_STEP_UNBOUND"), "MULTISTEP_EVIDENCE_INVALID",

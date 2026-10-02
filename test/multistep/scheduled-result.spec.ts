@@ -1,18 +1,17 @@
 // The EXISTING scheduled result, validated without triggering a new run.
-// Structure mirrors the real Checkly 9.5.0 scheduled artifact exactly: the
-// pw:api records carry `queryParams` + duplicated response headers + the
-// `data`-wrapped request body; the failing expect is reported in the runner's
-// own transpiled/VM-wrapped coordinates (132:44 for source line 142 of the
-// SAME deployed script); the manifest stores the three assets in one archive
-// with a free-form content type; and the deployed check carries a
-// provider-generated `frequencyOffset` spread the construct never set.
-// Every value is synthetic: no real account, token, signed URL, bypass value
-// or raw Checkly output — only the artifact's verified structure.
+// The failing side is the REAL scheduled artifact (Checkly-redacted: every
+// secret value is the opaque "*********" form), committed verbatim under
+// test/multistep/fixtures/ — the automatic remote-download path must admit
+// these exact bytes. The passing side is a synthetic historical healthy run
+// (flat book contract + confirmation step; the real passing artifacts were
+// never supplied). No real account, token, signed URL, bypass value or raw
+// Checkly output is stored here.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { buildBundle } from "../../src/bundle/build.ts";
 import { loadBundle } from "../../src/bundle.ts";
 import { assertionId } from "../../src/assertion/id.ts";
@@ -28,163 +27,127 @@ const web = fileURLToPath(new URL("../../examples/slots-booking/web/", import.me
 const spec = readFileSync(`${web}checks/multistep-booking.spec.ts`, "utf8");
 const construct = readFileSync(`${web}checks/multistep-booking.check.ts`, "utf8");
 
-import { fileURLToPath } from "node:url";
-
 type Json = Record<string, unknown>;
 
 // The real runner reports the failing expect at 132:44 inside its wrapped
 // runtime file; the deployed script (byte-identical to the repo spec) has the
 // stale assertion at source line 142.
 const RUNTIME_LINE = 132;
-const RUNTIME_COLUMN = 44;
 const SOURCE_LINE = 142;
-const CHECK_DIR = "/check/296fd6d7-e671-40e2-a4d6-191592cacb28";
-const STALE_ERROR = "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: true\nReceived: undefined";
-const STALE_STACK = `${STALE_ERROR}\n    at VM2 Wrapper.apply (/checkly/functions/src/2026-04/node_modules/vm2/lib/bridge.js:1664:11)\n    at ${CHECK_DIR}/checks/multistep-booking.spec.ts:${RUNTIME_LINE}:${RUNTIME_COLUMN}`;
-const staleLocation = (line: number = RUNTIME_LINE): Json => ({
-  file: `${CHECK_DIR}/checks/multistep-booking.spec.ts`, column: RUNTIME_COLUMN, line,
+const REAL_TARGET_ORIGIN = "https://slots-booking-verify-fix.vercel.app";
+
+const realTestResults = readFileSync(new URL("./fixtures/scheduled-failing-test-results.json", import.meta.url), "utf8");
+const realLogs = readFileSync(new URL("./fixtures/scheduled-failing-logs.txt", import.meta.url), "utf8");
+const realCheckRunData = JSON.stringify({
+  script: spec, scriptPath: "checks/multistep-booking.spec.ts", imports: [], dependencies: [], playwrightConfig: null,
 });
 
-function headers(pairs: Array<[string, string]>): Json[] {
-  return pairs.map(([name, value]) => ({ name, value }));
+/** Re-serialize the real artifact with every reported 132 coordinate rewritten
+ * to `line` (stacks, error locations and the result errorLocation), and/or an
+ * extra assertion copy merged into the book fetch record. */
+function failingReport(reportedLine: number = RUNTIME_LINE, bookFetchAssertion: Json | null = null): string {
+  if (reportedLine === RUNTIME_LINE && !bookFetchAssertion) return realTestResults;
+  const rewritten = JSON.stringify(JSON.parse(realTestResults))
+    .split(`multistep-booking.spec.ts:${RUNTIME_LINE}:`).join(`multistep-booking.spec.ts:${reportedLine}:`)
+    .split(`"line":${RUNTIME_LINE}`).join(`"line":${reportedLine}`);
+  if (!bookFetchAssertion) return rewritten;
+  const reparsed = JSON.parse(rewritten) as Json;
+  const steps = ((((reparsed.suites as Json[])[0]!.specs as Json[])[0]!.tests as Json[])[0]!.results as Json[])[0]!.steps as Json[];
+  const book = steps.find((step) => step.title === "book 09:30")!;
+  const fetchRecord = ((book.steps as Json[]).find((child) => String(child.stepId).startsWith("pw:api"))!.checklyData as Json[])[0]!;
+  Object.assign(fetchRecord, bookFetchAssertion);
+  return JSON.stringify(reparsed);
 }
 
-function pwApi(stepId: string, title: string, init: {
-  method: string; path: string; fetchUid: string;
-  requestHeaders: Array<[string, string]>; responseHeaders: Array<[string, string]>;
-  requestBody: unknown; body: unknown; extra?: Json;
-}): Json {
+// ---- synthetic historical healthy run (passing side) ----
+
+const ACCOUNT = FAKE_ACCOUNT;
+const TOKEN = FAKE_TOKEN;
+
+function bearer(token: string): Array<{ name: string; value: string }> {
+  return [{ name: "authorization", value: `Bearer ${token}` }, { name: "x-vercel-protection-bypass", value: "*********" }];
+}
+
+function passingApi(id: string, title: string, method: string, path: string, body: unknown,
+  requestBody: unknown, reqHeaders: Array<{ name: string; value: string }>): Json {
   return {
-    stepId, title, duration: 10,
+    stepId: id, title, duration: 5,
     checklyData: [{
-      fetchUid: init.fetchUid, url: `${FAKE_ORIGIN}${init.path}`, status: 200, statusText: "OK",
-      headers: headers(init.responseHeaders),
-      requestHeaders: headers(init.requestHeaders),
-      responseHeaders: headers(init.responseHeaders),
-      requestBody: init.requestBody, body: init.body, method: init.method,
-      timings: { wait: 2.4, dns: 21.3, tcp: 2.1, firstByte: 66.9, download: 1.1, total: 93.9 },
-      queryParams: [],
-      ...init.extra,
+      fetchUid: `uid-${id}`, url: `${FAKE_ORIGIN}${path}`, status: 200, statusText: "OK",
+      headers: [{ name: "content-type", value: "application/json" }],
+      requestHeaders: reqHeaders, responseHeaders: [{ name: "content-type", value: "application/json" }],
+      method, requestBody, body, timings: { wait: 1, total: 5 }, queryParams: [],
     }],
   };
 }
 
-function expectStep(stepId: string, actual: unknown, expectedData: unknown, error?: Json): Json {
-  return {
-    stepId, title: "Expect \"toBe\"", duration: 0, ...(error ? { error } : {}),
-    checklyData: [{ title: "Expect \"toBe\"", ...(actual !== undefined ? { actual } : {}), expectedData }],
-  };
+function passingOk(id: string, actual: unknown, expectedData: unknown): Json {
+  return { stepId: id, title: "Expect \"toBe\"", duration: 0, checklyData: [{ actual, title: "Expect \"toBe\"", expectedData }] };
 }
 
-function testStep(stepId: string, title: string, children: Json[], error?: Json): Json {
-  return { stepId, title, duration: 10, checklyData: null, ...(error ? { error } : {}), steps: children };
+function passingStep(id: string, title: string, children: Json[]): Json {
+  return { stepId: id, title, duration: 10, checklyData: null, steps: children };
 }
 
-function hook(stepId: string, title: string, children: Json[] = []): Json {
-  return { stepId, title, duration: 13, checklyData: null, steps: children };
-}
+const COMMON_HEADERS = [
+  { name: "user-agent", value: "Checkly/1.0 (https://www.checklyhq.com)" },
+  { name: "accept", value: "*/*" },
+];
 
-const loginBody = { ok: true, account: FAKE_ACCOUNT, version: 30, token: FAKE_TOKEN, store: "upstash" };
-const sessionBody = { valid: true, account: FAKE_ACCOUNT, tokenVersion: 30, currentVersion: 30 };
-const slotsBody = { slots: [SELECTED_SLOT, "10:00", "10:30"], delayMs: 1500 };
-const nestedBookBody = { booking: { confirmed: true, status: "CONFIRMED", account: FAKE_ACCOUNT, slot: SELECTED_SLOT, sessionVersion: 30 } };
-const flatBookBody = { confirmed: true, booking: "CONFIRMED", account: FAKE_ACCOUNT, slot: SELECTED_SLOT, version: 30 };
-
-/** The real failing scheduled run: hooks, four ordered test.steps, the stale
- * assertion failing inside "book 09:30", no confirmation step. */
-function failingSteps(reportedLine: number = RUNTIME_LINE, bookFetchAssertion: Json | null = null): Json[] {
-  const bookError = { message: STALE_ERROR, stack: STALE_STACK, isSoft: false, location: staleLocation(reportedLine) };
+function passingSteps(): Json[] {
   return [
-    hook("hook@1", "Before Hooks", [
-      { stepId: "fixture@2", title: "Fixture \"playwright\"", duration: 13, checklyData: null },
-      { stepId: "fixture@29", title: "Fixture \"request\"", duration: 5, checklyData: null, steps: [{ stepId: "pw:api@30", title: "Create request context", duration: 2, checklyData: null }] },
-    ]),
-    testStep("test.step@31", "login", [
-      pwApi("pw:api@32", "POST \"/api/login\"", {
-        method: "POST", path: "/api/login", fetchUid: "938cfd4382bca7114c0a0bab4450ec20",
-        requestHeaders: [["user-agent", "Checkly/1.0 (https://www.checklyhq.com)"], ["accept", "*/*"], ["x-vercel-protection-bypass", "*********"], ["content-type", "application/json"], ["content-length", "42"]],
-        responseHeaders: [["cache-control", "public, max-age=0, must-revalidate"], ["content-type", "application/json"]],
-        requestBody: { data: { account: FAKE_ACCOUNT }, maxRedirects: 20 },
-        body: loginBody,
-      }),
-      expectStep("expect@33", 200, 200),
-      expectStep("expect@34", true, true),
-      expectStep("expect@35", "string", "string"),
-      expectStep("expect@36", FAKE_ACCOUNT, FAKE_ACCOUNT),
-      expectStep("expect@37", "number", "number"),
+    passingStep("test.step@31", "login", [
+      passingApi("pw:api@32", "POST \"/api/login\"", "POST", "/api/login",
+        { ok: true, account: ACCOUNT, version: 30, token: TOKEN, store: "upstash" },
+        { data: { account: ACCOUNT }, maxRedirects: 20 },
+        [...COMMON_HEADERS, { name: "content-type", value: "application/json" }, { name: "x-vercel-protection-bypass", value: "*********" }]),
+      passingOk("expect@33", 200, 200), passingOk("expect@34", true, true), passingOk("expect@35", "string", "string"),
+      passingOk("expect@36", ACCOUNT, ACCOUNT), passingOk("expect@37", "number", "number"),
       { stepId: "expect@38", title: "Expect \"toBeGreaterThan\"", duration: 0, checklyData: [{ actual: 30, title: "Expect \"toBeGreaterThan\"", expectedData: 0 }] },
-      expectStep("expect@39", true, true),
-      expectStep("expect@40", "string", "string"),
+      passingOk("expect@39", true, true), passingOk("expect@40", "string", "string"),
       { stepId: "expect@41", title: "Expect \"toBeGreaterThan\"", duration: 0, checklyData: [{ actual: 35, title: "Expect \"toBeGreaterThan\"", expectedData: 0 }] },
     ]),
-    testStep("test.step@42", "session", [
-      pwApi("pw:api@43", "GET \"/api/session\"", {
-        method: "GET", path: "/api/session", fetchUid: "99964d0f6e00826caa6570923d1adb01",
-        requestHeaders: [["user-agent", "Checkly/1.0 (https://www.checklyhq.com)"], ["accept", "*/*"], ["authorization", `Bearer ${FAKE_TOKEN}`], ["x-vercel-protection-bypass", "*********"]],
-        responseHeaders: [["content-type", "application/json"]],
-        requestBody: { maxRedirects: 20 },
-        body: sessionBody,
-      }),
-      expectStep("expect@44", 200, 200),
-      expectStep("expect@45", true, true),
-      expectStep("expect@46", "string", "string"),
-      expectStep("expect@47", FAKE_ACCOUNT, FAKE_ACCOUNT),
-      expectStep("expect@48", 30, 30),
-      expectStep("expect@49", 30, 30),
+    passingStep("test.step@42", "session", [
+      passingApi("pw:api@43", "GET \"/api/session\"", "GET", "/api/session",
+        { valid: true, account: ACCOUNT, tokenVersion: 30, currentVersion: 30 },
+        { maxRedirects: 20 }, [...COMMON_HEADERS, ...bearer(TOKEN)]),
+      passingOk("expect@44", 200, 200), passingOk("expect@45", true, true), passingOk("expect@46", "string", "string"),
+      passingOk("expect@47", ACCOUNT, ACCOUNT), passingOk("expect@48", 30, 30), passingOk("expect@49", 30, 30),
     ]),
-    testStep("test.step@50", "slots", [
-      pwApi("pw:api@51", "GET \"/api/slots\"", {
-        method: "GET", path: "/api/slots", fetchUid: "1e4865506218ef7c628a73764fc30e55",
-        requestHeaders: [["user-agent", "Checkly/1.0 (https://www.checklyhq.com)"], ["accept", "*/*"], ["x-vercel-protection-bypass", "*********"]],
-        responseHeaders: [["age", "0"], ["content-type", "application/json"]],
-        requestBody: { maxRedirects: 20 },
-        body: slotsBody,
-      }),
-      expectStep("expect@52", 200, 200),
-      expectStep("expect@53", "object", "object"),
-      { stepId: "expect@54", title: "Expect \"not toBeNull\"", duration: 0, checklyData: [{ title: "Expect \"not toBeNull\"", actual: slotsBody }] },
-      expectStep("expect@55", true, true),
-      expectStep("expect@56", "number", "number"),
-      { stepId: "expect@57", title: "Expect \"toContain\"", duration: 0, checklyData: [{ actual: [SELECTED_SLOT, "10:00", "10:30"], title: "Expect \"toContain\"", expectedData: SELECTED_SLOT }] },
+    passingStep("test.step@50", "slots", [
+      passingApi("pw:api@51", "GET \"/api/slots\"", "GET", "/api/slots",
+        { slots: [SELECTED_SLOT, "10:00", "10:30"], delayMs: 1500 },
+        { maxRedirects: 20 }, [...COMMON_HEADERS, { name: "x-vercel-protection-bypass", value: "*********" }]),
+      passingOk("expect@52", 200, 200), passingOk("expect@53", "object", "object"),
+      { stepId: "expect@54", title: "Expect \"not toBeNull\"", duration: 0, checklyData: [{ actual: { slots: [SELECTED_SLOT], delayMs: 1500 }, title: "Expect \"not toBeNull\"" }] },
+      passingOk("expect@55", true, true), passingOk("expect@56", "number", "number"),
+      { stepId: "expect@57", title: "Expect \"toContain\"", duration: 0, checklyData: [{ actual: [SELECTED_SLOT, "10:00"], title: "Expect \"toContain\"", expectedData: SELECTED_SLOT }] },
     ]),
-    testStep("test.step@58", "book 09:30", [
-      pwApi("pw:api@59", "POST \"/api/book\"", {
-        method: "POST", path: "/api/book", fetchUid: "8168ba3af3a814045e5f2bc5824e20d9",
-        requestHeaders: [["user-agent", "Checkly/1.0 (https://www.checklyhq.com)"], ["accept", "*/*"], ["authorization", `Bearer ${FAKE_TOKEN}`], ["x-vercel-protection-bypass", "*********"], ["content-type", "application/json"], ["content-length", "16"]],
-        responseHeaders: [["content-type", "application/json"]],
-        requestBody: { data: { slot: SELECTED_SLOT }, maxRedirects: 20 },
-        body: nestedBookBody,
-        ...(bookFetchAssertion ? { extra: bookFetchAssertion } : {}),
-      }),
-      expectStep("expect@60", 200, 200),
-      expectStep("expect@61", undefined, true, { message: STALE_ERROR, stack: STALE_STACK, isSoft: false, location: staleLocation(reportedLine) }),
-    ], bookError),
-    hook("hook@62", "After Hooks", [
-      { stepId: "fixture@63", title: "Fixture \"request\"", duration: 2, checklyData: null },
-      { stepId: "fixture@72", title: "Fixture \"userAgent\"", duration: 0, checklyData: null },
+    passingStep("test.step@58", "book 09:30", [
+      passingApi("pw:api@59", "POST \"/api/book\"", "POST", "/api/book",
+        { confirmed: true, booking: "CONFIRMED", account: ACCOUNT, slot: SELECTED_SLOT, version: 30 },
+        { data: { slot: SELECTED_SLOT }, maxRedirects: 20 },
+        [...COMMON_HEADERS, ...bearer(TOKEN), { name: "content-type", value: "application/json" }]),
+      passingOk("expect@60", 200, 200), passingOk("expect@61", true, true), passingOk("expect@61b", "CONFIRMED", "CONFIRMED"),
+      passingOk("expect@62", "string", "string"), passingOk("expect@63", ACCOUNT, ACCOUNT),
+      passingOk("expect@64", SELECTED_SLOT, SELECTED_SLOT), passingOk("expect@65", 30, 30),
     ]),
-    hook("hook@93", "Worker Cleanup", [
-      { stepId: "fixture@99", title: "Fixture \"playwright\"", duration: 0, checklyData: null },
+    passingStep("test.step@70", "confirm transaction", [
+      passingOk("expect@71", ACCOUNT, ACCOUNT), passingOk("expect@72", ACCOUNT, ACCOUNT), passingOk("expect@73", ACCOUNT, ACCOUNT),
+      passingOk("expect@74", 30, 30), passingOk("expect@75", 30, 30), passingOk("expect@76", 30, 30),
+      { stepId: "expect@77", title: "Expect \"toContain\"", duration: 0, checklyData: [{ actual: [SELECTED_SLOT], title: "Expect \"toContain\"", expectedData: SELECTED_SLOT }] },
+      passingOk("expect@78", SELECTED_SLOT, SELECTED_SLOT), passingOk("expect@79", SELECTED_SLOT, SELECTED_SLOT),
+      passingOk("expect@80", true, true), passingOk("expect@81", "CONFIRMED", "CONFIRMED"),
     ]),
   ];
 }
 
-function reportOf(steps: Json[], stats: Json, failed: boolean): string {
-  const results = [{
-    workerIndex: 0, parallelIndex: 0, status: failed ? "failed" : "passed", duration: failed ? 1764 : 1500,
-    ...(failed ? {
-      error: { message: STALE_ERROR, stack: STALE_STACK, isSoft: false, location: staleLocation() },
-      errors: [{ location: staleLocation(), message: `${STALE_ERROR}\n    at VM2 Wrapper.apply (/checkly/functions/src/2026-04/node_modules/vm2/lib/bridge.js:1664:11)\n    at ${CHECK_DIR}/checks/multistep-booking.spec.ts:${RUNTIME_LINE}:${RUNTIME_COLUMN}` }],
-      errorLocation: staleLocation(),
-    } : {}),
-    stdout: [], stderr: [], retry: 0, steps,
-    startTime: failed ? "2026-09-29T20:33:17.870Z" : "2026-09-29T20:08:13.870Z", annotations: [], attachments: [],
-  }];
+function passingReport(): string {
   return JSON.stringify({
     config: {
-      configFile: `${CHECK_DIR}/playwright.config.js`, rootDir: CHECK_DIR, forbidOnly: false, fullyParallel: false,
+      configFile: "/check/x/playwright.config.js", rootDir: "/check/x", forbidOnly: false, fullyParallel: false,
       globalTimeout: 240000, metadata: { actualWorkers: 1 }, preserveOutput: "always",
-      projects: [{ id: "chromium", name: "chromium", testDir: CHECK_DIR, testMatch: ["**/*.@(spec|test).?(c|m)[jt]s?(x)"], timeout: 30000, retries: 0 }],
+      projects: [{ id: "chromium", name: "chromium", testDir: "/check/x", testMatch: ["**/*.@(spec|test).?(c|m)[jt]s?(x)"], timeout: 30000, retries: 0 }],
       quiet: false,
       reporter: [["json", { outputFile: "test-results.json", isMultiStepCheckType: true }]],
       runAgents: "none", version: "1.58.3-checkly.2", workers: 1, webServer: null,
@@ -192,110 +155,30 @@ function reportOf(steps: Json[], stats: Json, failed: boolean): string {
     suites: [{
       title: "script.spec.js", file: "script.spec.js", column: 0, line: 0,
       specs: [{
-        title: "slots booking multistep transaction", ok: !failed, tags: [],
+        title: "slots booking multistep transaction", ok: true, tags: [],
         tests: [{
           timeout: 30000, annotations: [], expectedStatus: "passed", projectId: "chromium", projectName: "chromium",
-          results, status: failed ? "unexpected" : "expected", secretScrubbingDurationMs: 0,
+          results: [{
+            workerIndex: 0, parallelIndex: 0, status: "passed", duration: 1500, stdout: [], stderr: [],
+            retry: 0, steps: passingSteps(), startTime: "2026-09-29T20:08:14.000Z", annotations: [], attachments: [],
+          }],
+          status: "expected", secretScrubbingDurationMs: 0,
         }],
-        id: "ff6f4949ce356f706172-2b739766abdd3a45316c",
-        file: "../../checkly/functions/src/2026-04/node_modules/vm2/lib/bridge.js", line: 1664, column: 11,
+        id: "ff6f4949ce356f706172-pass", file: "script.spec.js", line: 15, column: 0,
       }],
     }],
     errors: [],
-    stats,
+    stats: { startTime: "2026-09-29T20:08:13.334Z", duration: 3000, expected: 1, skipped: 0, unexpected: 0, flaky: 0 },
   });
-}
-
-function failingReport(reportedLine: number = RUNTIME_LINE, bookFetchAssertion: Json | null = null): string {
-  return reportOf(failingSteps(reportedLine, bookFetchAssertion), { startTime: "2026-09-29T20:33:16.334Z", duration: 3388.141, expected: 0, skipped: 0, unexpected: 1, flaky: 0 }, true)
-    .split(`multistep-booking.spec.ts:${RUNTIME_LINE}:${RUNTIME_COLUMN}`).join(`multistep-booking.spec.ts:${reportedLine}:${RUNTIME_COLUMN}`);
-}
-
-function passingSteps(): Json[] {
-  const ok = (stepId: string, actual: unknown, expectedData: unknown): Json => expectStep(stepId, actual, expectedData);
-  return [
-    hook("hook@1", "Before Hooks"),
-    testStep("test.step@31", "login", [
-      pwApi("pw:api@32", "POST \"/api/login\"", {
-        method: "POST", path: "/api/login", fetchUid: "pass-1",
-        requestHeaders: [["content-type", "application/json"], ["x-vercel-protection-bypass", "*********"]],
-        responseHeaders: [["content-type", "application/json"]],
-        requestBody: { data: { account: FAKE_ACCOUNT }, maxRedirects: 20 },
-        body: loginBody,
-      }),
-      ok("expect@33", 200, 200), ok("expect@34", true, true),
-    ]),
-    testStep("test.step@42", "session", [
-      pwApi("pw:api@43", "GET \"/api/session\"", {
-        method: "GET", path: "/api/session", fetchUid: "pass-2",
-        requestHeaders: [["authorization", `Bearer ${FAKE_TOKEN}`], ["x-vercel-protection-bypass", "*********"]],
-        responseHeaders: [["content-type", "application/json"]],
-        requestBody: { maxRedirects: 20 },
-        body: sessionBody,
-      }),
-      ok("expect@44", 200, 200), ok("expect@45", true, true),
-    ]),
-    testStep("test.step@50", "slots", [
-      pwApi("pw:api@51", "GET \"/api/slots\"", {
-        method: "GET", path: "/api/slots", fetchUid: "pass-3",
-        requestHeaders: [["x-vercel-protection-bypass", "*********"]],
-        responseHeaders: [["content-type", "application/json"]],
-        requestBody: { maxRedirects: 20 },
-        body: slotsBody,
-      }),
-      ok("expect@52", 200, 200),
-      { stepId: "expect@57", title: "Expect \"toContain\"", duration: 0, checklyData: [{ actual: [SELECTED_SLOT, "10:00", "10:30"], title: "Expect \"toContain\"", expectedData: SELECTED_SLOT }] },
-    ]),
-    testStep("test.step@58", "book 09:30", [
-      pwApi("pw:api@59", "POST \"/api/book\"", {
-        method: "POST", path: "/api/book", fetchUid: "pass-4",
-        requestHeaders: [["authorization", `Bearer ${FAKE_TOKEN}`], ["content-type", "application/json"], ["x-vercel-protection-bypass", "*********"]],
-        responseHeaders: [["content-type", "application/json"]],
-        requestBody: { data: { slot: SELECTED_SLOT }, maxRedirects: 20 },
-        body: flatBookBody,
-      }),
-      ok("expect@60", 200, 200),
-      ok("expect@61", true, true),
-    ]),
-    testStep("test.step@70", "confirm transaction", [ok("expect@71", "CONFIRMED", "CONFIRMED")]),
-    hook("hook@62", "After Hooks"),
-    hook("hook@93", "Worker Cleanup"),
-  ];
-}
-
-function passingReport(): string {
-  return reportOf(passingSteps(), { startTime: "2026-09-29T20:08:13.334Z", duration: 3000, expected: 1, skipped: 0, unexpected: 0, flaky: 0 }, false);
-}
-
-function checkRunData(): string {
-  // The real asset's script is byte-identical to the repo entrypoint; its
-  // scriptPath keeps the construct-relative form.
-  return JSON.stringify({ script: spec, scriptPath: "checks/multistep-booking.spec.ts", imports: [], dependencies: [], playwrightConfig: null });
-}
-
-function logs(): string {
-  const T = 1790713994000;
-  return JSON.stringify([
-    { time: T + 338, msg: "Starting job", level: "DEBUG" },
-    { time: T + 339, msg: "Creating runtime version 2026.04 using Node.js 24", level: "DEBUG" },
-    { time: T + 1050, msg: "Running Playwright test script", level: "DEBUG" },
-    { time: T + 2659, msg: "Running 1 test using 1 worker", level: "INFO" },
-    { time: T + 3872, msg: "[1/1] [chromium] › test.spec.js › slots booking multistep transaction", level: "INFO" },
-    { time: T + 5658, msg: "1) [chromium] › test.spec.js › slots booking multistep transaction › book 09:30 ", level: "INFO" },
-    { time: T + 5658, msg: "    Error: expect(received).toBe(expected) // Object.is equality", level: "INFO" },
-    { time: T + 5658, msg: `    Expected: true\n    Received: undefined\n        at ${CHECK_DIR}/checks/multistep-booking.spec.ts:${RUNTIME_LINE}:${RUNTIME_COLUMN}`, level: "INFO" },
-    { time: T + 5723, msg: "1 failed\n    [chromium] › ../../checkly/functions/src/2026-04/node_modules/vm2/lib/bridge.js:1664:11 › slots booking multistep transaction", level: "INFO" },
-    { time: T + 5770, msg: "Run finished", level: "DEBUG" },
-    { time: T + 5770, msg: "Uploading log file", level: "DEBUG" },
-  ]);
 }
 
 const fail: CheckResultSummary = {
   id: "synthetic-fail", checkId: "synthetic-check", name: "slots booking multistep transaction",
-  hasFailures: true, hasErrors: false, runLocation: "eu-west-1", startedAt: "2026-09-29T20:33:16.334Z",
+  hasFailures: true, hasErrors: false, runLocation: "us-east-1", startedAt: "2026-09-29T20:33:16.334Z",
   stoppedAt: "2026-09-29T20:33:20.000Z", resultType: "FINAL", attempts: 1, errorGroupIds: ["eg-1"],
 };
-const pass: CheckResultSummary = { ...fail, id: "synthetic-pass", hasFailures: false, startedAt: "2026-09-29T20:08:13.334Z", stoppedAt: "2026-09-29T20:08:16.500Z" };
+const pass: CheckResultSummary = { ...fail, id: "synthetic-pass", hasFailures: false, errorGroupIds: [],
+  startedAt: "2026-09-29T20:08:13.334Z", stoppedAt: "2026-09-29T20:08:16.500Z" };
 
 interface ManifestVariant {
   contentType?: unknown;
@@ -310,8 +193,9 @@ interface ManifestVariant {
 function scheduledClient(variant: ManifestVariant = {}): ChecklyClient {
   const frequencyOffset = variant.frequencyOffset === undefined ? 37 : variant.frequencyOffset;
   const zipFor = (id: string): Buffer => writeZip(id === "synthetic-pass"
-    ? { "test-results.json": passingReport(), "check-run-data.json": checkRunData(), "logs.txt": logs() }
-    : { "test-results.json": failingReport(variant.reportedLine ?? RUNTIME_LINE, variant.bookFetchAssertion ?? null), "check-run-data.json": checkRunData(), "logs.txt": logs() });
+    ? { "test-results.json": passingReport(), "check-run-data.json": realCheckRunData, "logs.txt": realLogs }
+    : { "test-results.json": failingReport(variant.reportedLine ?? RUNTIME_LINE, variant.bookFetchAssertion ?? null),
+        "check-run-data.json": realCheckRunData, "logs.txt": realLogs });
   const entries = (id: string): AssetManifestEntry[] => ["test-results.json", "check-run-data.json", "logs.txt"].map((name) => {
     const type: AssetType = name === "logs.txt" ? "log" : name === "check-run-data.json" ? "file" : "report";
     const source: Record<string, unknown> = variant.dropSourceIds
@@ -322,7 +206,8 @@ function scheduledClient(variant: ManifestVariant = {}): ChecklyClient {
     const entry: Record<string, unknown> = {
       name, type, source, url: `https://signed.invalid/${id}.zip`, archive,
     };
-    if (variant.contentType !== undefined) entry.contentType = variant.contentType;
+    if (variant.contentType === "absent") delete entry.contentType;
+    else if (variant.contentType !== undefined) entry.contentType = variant.contentType;
     else entry.contentType = "application/octet-stream";
     return entry as unknown as AssetManifestEntry;
   });
@@ -335,7 +220,7 @@ function scheduledClient(variant: ManifestVariant = {}): ChecklyClient {
         tags: ["slots-booking", "verify-fix-example", "multistep"], retryStrategy: null, doubleCheck: false, runtimeId: null,
         groupId: null, script: spec, scriptPath: "checks/multistep-booking.spec.ts",
         environmentVariables: [
-          { key: "ENVIRONMENT_URL", value: FAKE_ORIGIN, secret: false },
+          { key: "ENVIRONMENT_URL", value: REAL_TARGET_ORIGIN, secret: false },
           { key: "MULTISTEP_USER_US_EAST_1", value: FAKE_ACCOUNT, secret: true },
           { key: "MULTISTEP_USER_EU_WEST_1", value: "fixture-west", secret: true },
           { key: "VERCEL_AUTOMATION_BYPASS_SECRET", value: "synthetic-bypass-2910", secret: true },
@@ -347,7 +232,6 @@ function scheduledClient(variant: ManifestVariant = {}): ChecklyClient {
     async getAssets(_checkId: string, id: string) { return { assets: entries(id) }; },
     async download(url: string) { return zipFor(url.includes("synthetic-pass") ? "synthetic-pass" : "synthetic-fail"); },
   } as unknown as ChecklyClient;
-  (client as unknown as { calls: unknown[] }).calls = (client as unknown as { calls: unknown[] }).calls;
   return client;
 }
 

@@ -835,7 +835,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   // keep fetching bounded FINAL pages until we find the requested/incident
   // result and a passing control, or exhaust the caller's explicit history
   // budget. Never synthesize a passing result.
-  const historyLimit = opts.historyLimit ?? 100;
+  const historyLimit = opts.historyLimit ?? 1000;
   const history: CheckResultSummary[] = [];
   let nextId: string | null = null;
   do {

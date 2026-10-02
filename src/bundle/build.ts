@@ -524,7 +524,11 @@ async function fetchResultWithTrace(
             manifestEntrySha256, bytes: buf.length, sha256: sha256(buf) });
           byName.set(name, buf.toString("utf8"));
         } catch (err) {
-          invalid = multistepProblemCategory(err instanceof Error ? err.message : "asset invalid");
+          if (err instanceof Error && "status" in err && typeof (err as { status?: unknown }).status === "number") {
+          const status = (err as { status: number }).status;
+          log(`[bundle] remote Multistep asset download failed: HTTP ${status}`);
+        }
+        invalid = multistepProblemCategory(err instanceof Error ? err.message : "asset invalid");
           break; // partial remote capture is not admissible evidence
         }
       }

@@ -469,7 +469,7 @@ async function fetchResultWithTrace(
         // Checkly CLI 9.5.0 defines source as the literal "check-result".
         // Structured source objects are retained only for compatibility with
         // older captured manifests; their IDs are checked when present.
-        const source = asset.source;
+        const source: unknown = asset.source;
         const sourceRecord = source && typeof source === "object" && !Array.isArray(source)
           ? source as unknown as Record<string, unknown> : null;
         const sourceType = typeof source === "string" ? source : sourceRecord?.type;

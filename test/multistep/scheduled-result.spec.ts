@@ -241,7 +241,7 @@ function scheduledClient(variant: ManifestVariant = {}): ChecklyClient {
     },
     async listResults(_checkId: string, params?: { nextId?: string }) {
       historyCalls.push(params?.nextId ?? "first");
-      if (variant.paginateHistory && !params?.nextId) return { entries: [fail], nextId: "older-1" };
+      if (variant.paginateHistory) return params?.nextId ? { entries: [pass], nextId: null } : { entries: [fail], nextId: "older-1" };
       return { entries: [fail, pass], nextId: null };
     },
     async getResult(_checkId: string, id: string) { return id === fail.id ? fail : pass; },

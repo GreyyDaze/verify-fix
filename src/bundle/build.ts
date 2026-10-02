@@ -444,8 +444,12 @@ async function fetchResultWithTrace(
         }
         const archiveEntry = asset.archive?.entryName;
         if (asset.archive != null && (!asset.archive || typeof asset.archive !== "object"
-          || typeof archiveEntry !== "string" || archiveEntry.length > 256
-          || Object.keys(asset.archive).some((key) => key !== "entryName"))) {
+          || typeof archiveEntry !== "string" || archiveEntry.length > 256)) {
+          invalid = "MULTISTEP_ASSET_MANIFEST_INVALID";
+          rejectedCategory = "archive-descriptor";
+          break;
+        }
+        if (asset.archive != null && Object.keys(asset.archive).some((key) => key !== "entryName")) {
           invalid = "MULTISTEP_ASSET_TYPE_INVALID";
           rejectedCategory = "archive-descriptor";
           break;

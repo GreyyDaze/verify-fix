@@ -12,6 +12,7 @@
 // Nothing here decides a verdict. It only records what Checkly saw.
 
 import { createHash } from "node:crypto";
+import { gunzipSync } from "node:zlib";
 import { execFileSync } from "node:child_process";
 import { closeSync, constants, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -473,7 +474,8 @@ async function fetchResultWithTrace(
         // used by the Multistep evidence contract so provider-side naming
         // variants such as "test-results" still bind to the same fixed asset.
         const normalizeMultistepName = (value: string): string => {
-          const lower = value.toLowerCase();
+          let lower = value.toLowerCase();
+          if (lower.endsWith(".gz")) lower = lower.slice(0, -3);
           return lower.endsWith(".json") ? lower : lower === "test-results" || lower === "check-run-data" ? lower + ".json" : lower;
         };
         const archivedNormalized = normalizeMultistepName(archived);
@@ -567,6 +569,15 @@ async function fetchResultWithTrace(
             if (rawDir) {
               mkdirSync(rawDir, { recursive: true });
               writeFileSync(join(rawDir, basename(asset.name) || name), buf);
+            }
+          }
+          const selectedSourceName = archiveEntry || asset.name;
+          const selectedName = basename(selectedSourceName).toLowerCase();
+          if (selectedName.endsWith(".gz")) {
+            try {
+              buf = gunzipSync(buf);
+            } catch {
+              throw new Error("asset gzip decompression failed");
             }
           }
           if (buf.length > MAX_ASSET_FILE_BYTES || buf.length > ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalDecoded) {

@@ -599,11 +599,16 @@ async function fetchResultWithTrace(
           byName.set(name, buf.toString("utf8"));
         } catch (err) {
           rejectedCategory = "download-or-archive";
-          if (err instanceof Error && "status" in err && typeof (err as { status?: unknown }).status === "number") {
-          const status = (err as { status: number }).status;
-          log(`[bundle] remote Multistep asset download failed: HTTP ${status}`);
-        }
-        invalid = multistepProblemCategory(err instanceof Error ? err.message : "asset invalid");
+          if (err instanceof Error) {
+            log(`[bundle] remote Multistep asset acquisition failed: ${err.name}: ${err.message}`);
+            if ("status" in err && typeof (err as { status?: unknown }).status === "number") {
+              const status = (err as { status: number }).status;
+              log(`[bundle] remote Multistep asset download failed: HTTP ${status}`);
+            }
+          } else {
+            log("[bundle] remote Multistep asset acquisition failed: non-Error");
+          }
+          invalid = multistepProblemCategory(err instanceof Error ? err.message : "asset invalid");
           break; // partial remote capture is not admissible evidence
         }
       }

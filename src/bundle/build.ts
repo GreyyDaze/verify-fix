@@ -559,7 +559,8 @@ async function fetchResultWithTrace(
         warnings.push(`${label}: remote Multistep asset capture is invalid (${invalid}) — UNCERTAIN`);
       } else {
         log("[bundle] " + label + ": multistep asset selected=" + byName.size);
-      texts.missing = MULTISTEP_ASSET_NAMES.filter((name) => !texts.found.includes(name));
+        texts.missing = MULTISTEP_ASSET_NAMES.filter((name) => !texts.found.includes(name));
+      }
     }
     if (texts.testResults === null && !texts.missing.includes("test-results.json")) texts.missing.push("test-results.json");
     return {

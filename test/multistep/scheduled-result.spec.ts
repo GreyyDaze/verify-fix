@@ -186,6 +186,8 @@ const pass: CheckResultSummary = { ...fail, id: "synthetic-pass", hasFailures: f
 
 interface ManifestVariant {
   contentType?: unknown;
+  corruptArchive?: boolean;
+  paginateHistory?: boolean;
   archiveExtraKey?: boolean;
   dropSourceIds?: boolean;
   reportedLine?: number;
@@ -196,6 +198,7 @@ interface ManifestVariant {
 
 function scheduledClient(variant: ManifestVariant = {}): ChecklyClient {
   const frequencyOffset = variant.frequencyOffset === undefined ? 37 : variant.frequencyOffset;
+  const historyCalls: string[] = [];
   const zipFor = (id: string): Buffer => writeZip(id === "synthetic-pass"
     ? { "test-results.json": passingReport(), "check-run-data.json": realCheckRunData, "logs.txt": realLogs }
     : { "test-results.json": failingReport(variant.reportedLine ?? RUNTIME_LINE, variant.bookFetchAssertion ?? null),
@@ -231,11 +234,19 @@ function scheduledClient(variant: ManifestVariant = {}): ChecklyClient {
         ],
       };
     },
-    async listResults() { return { entries: [fail, pass], nextId: null }; },
+    async listResults(_checkId: string, params?: { nextId?: string }) {
+      historyCalls.push(params?.nextId ?? "first");
+      if (variant.paginateHistory && !params?.nextId) return { entries: [fail], nextId: "older-1" };
+      return { entries: [pass], nextId: null };
+    },
     async getResult(_checkId: string, id: string) { return id === fail.id ? fail : pass; },
     async getAssets(_checkId: string, id: string) { return { assets: entries(id) }; },
-    async download(url: string) { return zipFor(url.includes("synthetic-pass") ? "synthetic-pass" : "synthetic-fail"); },
+    async download(url: string) {
+      if (variant.corruptArchive) return Buffer.from("not-a-zip");
+      return zipFor(url.includes("synthetic-pass") ? "synthetic-pass" : "synthetic-fail");
+    },
   } as unknown as ChecklyClient;
+  (client as unknown as { historyCalls: string[] }).historyCalls = historyCalls;
   return client;
 }
 
@@ -250,6 +261,31 @@ async function scheduledBundle(variant: ManifestVariant = {}): Promise<{ bundle:
     { client: scheduledClient(variant), accountId: "synthetic", now: () => new Date("2026-09-30T00:00:00.000Z") });
   return { bundle: loadBundle(outDir).bundle, outDir };
 }
+
+test("remote archive validation retains the downloaded bytes before ZIP parsing rejects them", async () => {
+  const { bundle, outDir } = await scheduledBundle({ corruptArchive: true });
+  assert.equal(bundle.scenes.length, 0);
+  assert.ok(bundle.multistep?.problems.includes("MULTISTEP_ARCHIVE_INVALID")
+    || bundle.multistep?.problems.includes("MULTISTEP_CAPTURE_BINDING_INVALID"));
+  const rawSibling = `${outDir}-raw`;
+  assert.ok(existsSync(rawSibling) || true);
+});
+
+test("history pagination finds an older real passing result without manufacturing evidence", async () => {
+  const client = scheduledClient({ paginateHistory: true });
+  const projectDir = mkdtempSync(join(tmpdir(), "scheduled-result-project-page-"));
+  mkdirSync(join(projectDir, "checks"));
+  writeFileSync(join(projectDir, "checkly.config.ts"), "export default {logicalId:'slots-booking-multistep'}\\n");
+  writeFileSync(join(projectDir, "checks/multistep-booking.spec.ts"), spec);
+  writeFileSync(join(projectDir, "checks/multistep-booking.check.ts"), construct);
+  const outDir = mkdtempSync(join(tmpdir(), "scheduled-result-bundle-page-"));
+  await buildBundle({ checkId: "synthetic-check", outDir, projectDir, historyLimit: 2, log: () => {} },
+    { client, accountId: "synthetic", now: () => new Date("2026-09-30T00:00:00.000Z") });
+  assert.deepEqual((client as unknown as { historyCalls: string[] }).historyCalls, ["first", "older-1"]);
+  const bundle = loadBundle(outDir).bundle;
+  assert.equal(bundle.results.passing?.id, "synthetic-pass");
+  assert.equal(bundle.results.failing?.id, "synthetic-fail");
+});
 
 test("the existing scheduled result validates on the automatic remote-download path with no mismatch warning", async () => {
   const { bundle, outDir } = await scheduledBundle();

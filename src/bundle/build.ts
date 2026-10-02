@@ -458,13 +458,16 @@ async function fetchResultWithTrace(
         const sourceKeys = sourceRecord ? Object.keys(sourceRecord) : [];
         const sourceId = (key: string): string | null =>
           typeof sourceRecord?.[key] === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(sourceRecord[key] as string) ? sourceRecord[key] as string : null;
+        const stringSourceValid = source === "check-result";
+        const objectSourceValid = sourceRecord?.type === "check-result"
+          && sourceKeys.every((key) => ["type", "checkId", "checkName", "checkType", "resultId", "testSessionId"].includes(key))
+          && sourceKeys.length <= 6
+          && (sourceId("checkId") === undefined || sourceId("checkId") === checkId)
+          && (sourceId("resultId") === undefined || sourceId("resultId") === summary.id);
         const contentTypeValid = asset.contentType === undefined
           || (typeof asset.contentType === "string" && asset.contentType.length <= 512);
         if ((asset.type !== "report" && asset.type !== "file" && !(name === "logs.txt" && asset.type === "log"))
-          || !sourceRecord || sourceRecord.type !== "check-result"
-          || sourceKeys.some((key) => !["type", "checkId", "checkName", "checkType", "resultId", "testSessionId"].includes(key))
-          || sourceKeys.length > 6
-          || sourceId("checkId") !== checkId || sourceId("resultId") !== summary.id
+          || (!stringSourceValid && !objectSourceValid)
           || !contentTypeValid
           || (asset.archive
             ? (Object.keys(asset.archive).length !== 1 || asset.archive.entryName.length > 256)

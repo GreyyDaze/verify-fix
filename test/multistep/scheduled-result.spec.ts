@@ -187,6 +187,7 @@ const pass: CheckResultSummary = { ...fail, id: "synthetic-pass", hasFailures: f
 interface ManifestVariant {
   contentType?: unknown;
   corruptArchive?: boolean;
+  downloadFailureStatus?: number;
   paginateHistory?: boolean;
   archiveExtraKey?: boolean;
   dropSourceIds?: boolean;
@@ -242,6 +243,7 @@ function scheduledClient(variant: ManifestVariant = {}): ChecklyClient {
     async getResult(_checkId: string, id: string) { return id === fail.id ? fail : pass; },
     async getAssets(_checkId: string, id: string) { return { assets: entries(id) }; },
     async download(url: string) {
+      if (variant.downloadFailureStatus !== undefined) throw new Error(`asset download failed (HTTP ${variant.downloadFailureStatus})`);
       if (variant.corruptArchive) return Buffer.from("not-a-zip");
       return zipFor(url.includes("synthetic-pass") ? "synthetic-pass" : "synthetic-fail");
     },
@@ -261,6 +263,19 @@ async function scheduledBundle(variant: ManifestVariant = {}): Promise<{ bundle:
     { client: scheduledClient(variant), accountId: "synthetic", now: () => new Date("2026-09-30T00:00:00.000Z") });
   return { bundle: loadBundle(outDir).bundle, outDir };
 }
+
+test("remote asset HTTP failures keep a transport-specific problem category", async () => {
+  const { bundle, outDir } = await scheduledBundle({ downloadFailureStatus: 403 });
+  try {
+    assert.ok(bundle.multistep?.problems.includes("MULTISTEP_ASSET_DOWNLOAD_FAILED"));
+    assert.ok(!bundle.multistep?.problems.includes("MULTISTEP_EVIDENCE_INVALID"));
+    assert.equal(bundle.scenes.length, 0);
+    assert.ok(!existsSync(`${outDir}-raw`), "no raw file is retained when the download itself failed");
+  } finally {
+    rmSync(`${outDir}-raw`, { recursive: true, force: true });
+    rmSync(outDir, { recursive: true, force: true });
+  }
+});
 
 test("remote archive validation retains the downloaded bytes before ZIP parsing rejects them", async () => {
   const { bundle, outDir } = await scheduledBundle({ corruptArchive: true });

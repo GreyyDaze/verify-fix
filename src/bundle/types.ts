@@ -203,7 +203,7 @@ export interface ManifestV3 {
     rcaId: string | null;
     assets: Array<{ result: "failing" | "passing"; name: string; type: string; bytes: number; sha256: string;
       /** Remote-only manifest binding; absent for other check types and local mechanics. */
-      resultId?: string; assetType?: "report" | "file" | "log";
+      resultId?: string; assetType?: string;
       manifestEntrySha256?: string;
     }>;
     apiCalls: Array<{ method: string; url: string; status: number }>;

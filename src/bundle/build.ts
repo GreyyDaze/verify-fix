@@ -499,8 +499,8 @@ async function fetchResultWithTrace(
               // bytes BEFORE opening/parsing the archive, so --keep-raw still
               // recovers the exact provider artifact when ZIP validation fails.
               if (rawDir) {
-                mkdirSync(rawDir, { recursive: true });
-                writeFileSync(join(rawDir, "archive-" + sha256(asset.url) + ".zip"), archive);
+                mkdirSync(join(rawDir, label), { recursive: true });
+                writeFileSync(join(rawDir, label, "archive-" + sha256(asset.url) + ".zip"), archive);
               }
               zip = openZipBounded(archive, ASSET_ZIP_BOUNDS);
               archiveCache.set(asset.url, zip);
@@ -515,8 +515,8 @@ async function fetchResultWithTrace(
             // Direct assets are already HTTPS-origin and byte-bound validated
             // by client.download. Retain them before any evidence parsing.
             if (rawDir) {
-              mkdirSync(rawDir, { recursive: true });
-              writeFileSync(join(rawDir, basename(asset.name) || name), buf);
+              mkdirSync(join(rawDir, label), { recursive: true });
+              writeFileSync(join(rawDir, label, basename(asset.name) || name), buf);
             }
           }
           if (buf.length > MAX_ASSET_FILE_BYTES || buf.length > ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalDecoded) {
@@ -1006,7 +1006,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
       const problem = multistepAssets?.[side] ? "MULTISTEP_MECHANICS_ONLY" : "MULTISTEP_CAPTURE_BINDING_INVALID";
       const record = !source || unsafeSource || remote.length !== 1 ? null : finalizeRemoteMultiStepRecording(draft.recording, {
         side, checkId: check.id, result: fetched.summary, detail: fetched.detail,
-        sourceFile: source.path, sourceText: source.content, sourceModel: model, asset: remote[0]!,
+        sourceFile: model?.script?.file ?? source.path, sourceText: source.content, sourceModel: model, asset: remote[0]!,
       });
       if (!record) {
         fetched.multistep = null;

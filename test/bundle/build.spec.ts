@@ -4,6 +4,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { gzipSync } from "node:zlib";
 import { buildBundle, assertNoSecretLeak, collectProjectSources } from "../../src/bundle/build.ts";
 import { loadBundle } from "../../src/bundle.ts";
 import type { ChecklyClient } from "../../src/checkly/client.ts";
@@ -286,6 +287,59 @@ test("cli: `bundle` without credentials exits 2 with guidance; help lists both c
     assert.match(bad.stderr, /--check <checkId> is required/);
   } finally {
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("MULTI_STEP accepts the live Checkly compressed asset descriptor and reaches download", async () => {
+  const out = mkdtempSync(join(tmpdir(), "vf-multistep-content-encoding-"));
+  try {
+    const { client, downloads } = fakeClient();
+    const rawArchive = writeZip({
+      "test-results.json.gz": gzipSync(Buffer.from("{not-a-valid-report", "utf8")),
+      "logs.txt.gz": gzipSync(Buffer.from("not-a-valid-log", "utf8")),
+    });
+    client.getCheck = async () => ({ ...CHECK, checkType: "MULTI_STEP" });
+    client.getAssets = async (_checkId: string, id: string) => ({
+      assets: [
+        {
+          name: "test-results.json.gz",
+          type: "report" as const,
+          url: `https://s3.example/${id}.zip?sig=1`,
+          contentType: "application/gzip",
+          contentEncoding: "gzip",
+          source: { type: "check-result" as const, checkId: CHECK.id, resultId: id },
+          archive: { entryName: "test-results.json.gz" },
+        },
+        {
+          name: "logs.txt.gz",
+          type: "log" as const,
+          url: `https://s3.example/${id}.zip?sig=1`,
+          contentType: "application/gzip",
+          contentEncoding: "gzip",
+          source: { type: "check-result" as const, checkId: CHECK.id, resultId: id },
+          archive: { entryName: "logs.txt.gz" },
+        },
+      ],
+    });
+    client.download = async (url: string) => {
+      downloads.push(url);
+      return rawArchive;
+    };
+
+    const logs: string[] = [];
+    const outcome = await buildBundle(
+      { checkId: CHECK.id, outDir: out, log: (line) => logs.push(line) },
+      { client, accountId: "a" },
+    );
+
+    assert.equal(downloads.length, 2, "both failing and passing result archives are downloaded");
+    assert.equal(downloads[0], "https://s3.example/r-fail.zip?sig=1");
+    assert.equal(downloads[1], "https://s3.example/r-pass-2.zip?sig=1");
+    assert.ok(logs.some((line) => /failing: multistep asset selected=2/.test(line)));
+    assert.ok(logs.some((line) => /passing: multistep asset selected=2/.test(line)));
+    assert.equal(outcome.warnings.some((warning) => /MULTISTEP_ASSET_TYPE_INVALID/.test(warning)), false);
+  } finally {
+    rmSync(out, { recursive: true, force: true });
   }
 });
 

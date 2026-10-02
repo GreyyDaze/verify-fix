@@ -810,8 +810,33 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   }
 
   // 2. history
-  const page = await client.listResults(check.id, { limit: opts.historyLimit ?? 100, resultType: "FINAL", fields: RESULT_FIELDS });
-  const history = [...(page.entries ?? [])].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  // Result history is cursor-paginated. The API's first page is not a
+  // sufficient history window when a check has been failing for a while:
+  // keep fetching bounded FINAL pages until we find the requested/incident
+  // result and a passing control, or exhaust the caller's explicit history
+  // budget. Never synthesize a passing result.
+  const historyLimit = opts.historyLimit ?? 100;
+  const history: CheckResultSummary[] = [];
+  let nextId: string | null = null;
+  do {
+    const remaining = historyLimit - history.length;
+    if (remaining <= 0) break;
+    const page = await client.listResults(check.id, {
+      limit: Math.min(100, remaining), nextId: nextId ?? undefined,
+      resultType: "FINAL", fields: RESULT_FIELDS,
+    });
+    const entries = Array.isArray(page.entries) ? page.entries : [];
+    history.push(...entries.slice(0, remaining));
+    const previousNextId = nextId;
+    nextId = typeof page.nextId === "string" && page.nextId.length > 0 ? page.nextId : null;
+    if (!entries.length || nextId === previousNextId) break;
+    // Once both sides exist, older pages cannot improve the selected passing
+    // control. Stop early while preserving the explicit bound.
+    const hasFailure = history.some((r) => !isOk(r));
+    const hasPass = history.some((r) => isOk(r));
+    if (hasFailure && hasPass) break;
+  } while (nextId !== null);
+  history.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   log(`[bundle] ${history.length} recent FINAL results (${history.filter(isOk).length} passed, ${history.filter((r) => !isOk(r)).length} failed)`);
 
   let failingSummary: CheckResultSummary | null = null;

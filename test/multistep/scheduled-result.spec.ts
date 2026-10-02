@@ -191,6 +191,7 @@ interface ManifestVariant {
   paginateHistory?: boolean;
   archiveExtraKey?: boolean;
   dropSourceIds?: boolean;
+  stringSource?: boolean;
   reportedLine?: number;
   frequencyOffset?: number | null;
   /** Assertion copy the real runner may also attach to the book fetch record. */
@@ -206,9 +207,11 @@ function scheduledClient(variant: ManifestVariant = {}): ChecklyClient {
         "check-run-data.json": realCheckRunData, "logs.txt": realLogs });
   const entries = (id: string): AssetManifestEntry[] => ["test-results.json", "check-run-data.json", "logs.txt"].map((name) => {
     const type: AssetType = name === "logs.txt" ? "log" : name === "check-run-data.json" ? "file" : "report";
-    const source: Record<string, unknown> = variant.dropSourceIds
-      ? { type: "check-result" }
-      : { type: "check-result", checkId: "synthetic-check", checkName: fail.name, checkType: "MULTI_STEP", resultId: id };
+    const source: unknown = variant.stringSource
+      ? "check-result"
+      : variant.dropSourceIds
+        ? { type: "check-result" }
+        : { type: "check-result", checkId: "synthetic-check", checkName: fail.name, checkType: "MULTI_STEP", resultId: id };
     const archive: Record<string, unknown> = { entryName: name };
     if (variant.archiveExtraKey) archive.byteRange = { start: 0, end: 1 };
     const entry: Record<string, unknown> = {
@@ -357,6 +360,18 @@ test("a reported line that names a different source assertion is never laundered
     || bundle.multistep?.problems.includes("MULTISTEP_FAILURE_STEP_UNBOUND"));
   assert.equal(bundle.multistep?.failureAssertion, null);
   assert.equal(bundle.scenes.length, 0);
+});
+
+test("remote assets admit the Checkly CLI string source form", async () => {
+  const { bundle, outDir } = await scheduledBundle({ stringSource: true });
+  try {
+    assert.deepEqual(bundle.multistep?.problems ?? [], []);
+    assert.ok(bundle.scenes.length > 0);
+    assert.equal(bundle.multistep?.failureAssertion?.step, "book 09:30");
+  } finally {
+    rmSync(`${outDir}-raw`, { recursive: true, force: true });
+    rmSync(outDir, { recursive: true, force: true });
+  }
 });
 
 test("archive descriptors admit the official free-form content type and reject malformed ones", async () => {

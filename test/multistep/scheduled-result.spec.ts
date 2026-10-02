@@ -242,7 +242,7 @@ function scheduledClient(variant: ManifestVariant = {}): ChecklyClient {
     async listResults(_checkId: string, params?: { nextId?: string }) {
       historyCalls.push(params?.nextId ?? "first");
       if (variant.paginateHistory && !params?.nextId) return { entries: [fail], nextId: "older-1" };
-      return { entries: [pass], nextId: null };
+      return { entries: [fail, pass], nextId: null };
     },
     async getResult(_checkId: string, id: string) { return id === fail.id ? fail : pass; },
     async getAssets(_checkId: string, id: string) { return { assets: entries(id) }; },
@@ -292,7 +292,7 @@ test("remote archive validation retains the downloaded bytes before ZIP parsing 
     const sides = ["failing", "passing"];
     for (const side of sides) {
       assert.ok(existsSync(join(rawSibling, side)), `${side} raw directory exists`);
-      assert.ok(readdirSync(join(rawSibling, side)).some((name) => /^archive-[0-9a-f]{64}\\.zip$/.test(name)),
+      assert.ok(readdirSync(join(rawSibling, side)).some((name) => /^archive-[0-9a-f]{64}\.zip$/.test(name)),
         `${side} corrupt archive bytes retained`);
     }
   } finally {

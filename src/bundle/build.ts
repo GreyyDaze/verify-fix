@@ -39,6 +39,7 @@ import { multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURC
 export interface BuildOptions {
   checkId: string;
   resultId?: string | null;
+  passingResultId?: string | null;
   outDir: string;
   projectDir?: string | null;
   /** Directory of assets already downloaded with `checkly assets download` (MULTI_STEP only). */
@@ -946,11 +947,26 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   //   c) any passing run.
   const overlapping = findOverlappingRuns(failingSummary, history);
   const sibling = overlapping.find((o) => o.passed && o.runLocation !== failingSummary?.runLocation);
-  const passingSummary =
-    (sibling ? history.find((r) => r.id === sibling.runId) : null) ??
-    history.find((r) => isOk(r) && (!failingSummary || r.startedAt < failingSummary!.startedAt) && r.id !== failingSummary?.id) ??
-    history.find((r) => isOk(r) && r.id !== failingSummary?.id) ??
-    null;
+  let passingSummary: CheckResultSummary | null = null;
+  if (opts.passingResultId) {
+    passingSummary = history.find((r) => r.id === opts.passingResultId) ?? null;
+    if (!passingSummary) {
+      const d = await client.getResult(check.id, opts.passingResultId);
+      passingSummary = d;
+    }
+    if (!isOk(passingSummary)) {
+      throw new Error(`--passing-result ${opts.passingResultId} is not a passing result`);
+    }
+    if (failingSummary?.id === passingSummary.id) {
+      throw new Error(`--passing-result ${opts.passingResultId} must differ from the failing result`);
+    }
+  } else {
+    passingSummary =
+      (sibling ? history.find((r) => r.id === sibling.runId) : null) ??
+      history.find((r) => isOk(r) && (!failingSummary || r.startedAt < failingSummary!.startedAt) && r.id !== failingSummary?.id) ??
+      history.find((r) => isOk(r) && r.id !== failingSummary?.id) ??
+      null;
+  }
   log(`[bundle] failing=${failingSummary?.id ?? "none"} passing=${passingSummary?.id ?? "none"}${sibling ? ` (overlapping run from ${sibling.runLocation}, started ${(sibling.startDeltaMs / 1000).toFixed(1)} s before)` : ""}`);
   if (overlapping.length) log(`[bundle] ${overlapping.length} run(s) overlapped the failing run in time: ${overlapping.map((o) => `${o.runId}@${o.runLocation} ${o.passed ? "passed" : "failed"}`).join(", ")}`);
 

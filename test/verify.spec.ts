@@ -16,7 +16,7 @@
 
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -395,6 +395,24 @@ describe("decision table: uncertain observations", () => {
   });
 });
 
+test("PR-10: an inconclusive mutation cannot be a kill or a survivor, even when candidate scenes match", () => {
+  const { bundle } = loadBundle(INCIDENT_DIR);
+  const contract = buildContract(bundle, bundle.checkSource);
+  const observations = new Map(bundle.scenes.map((scene): [string, SceneObservation] => [scene.sceneId, {
+    sceneId: scene.sceneId, observed: scene.verdict.mustFail ? "fail" : "pass",
+    repetitions: 5, trace: [], source: "scene", environment: "synthetic-target",
+  }]));
+  const mutation = { name: "synthetic-inconclusive", family: "operator" as const,
+    detail: "no admitted result", survived: false, inconclusive: true };
+  const adequacy = assessAdequacy({ contract, sceneObservations: observations, mutants: [mutation] });
+  assert.equal(adequacy.strength.mutantKillRate, 0);
+  const result = decide({ contract, observations, adequacy, healthyRepetitionsMet: true,
+    nonDeterministicScenes: [], runBudgetExhausted: false });
+  assert.equal(result.verdict, "UNCERTAIN");
+  assert.equal(result.exitCode, 2);
+  assert.ok(result.reasons.some((reason) => /mutation runs lack conclusive evidence/.test(reason)));
+});
+
 // ───────────────────────── seeded suite (integration) ─────────────────────────
 
 describe("seeded slots-booking suite keeps its oracle verdicts against the real app", () => {
@@ -485,7 +503,8 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
   test("CLI: --target + --env-file, directory patch, exit code from the verdict (good patch → 0), environment column", async () => {
     const dir = mkdtempSync(join(tmpdir(), "verify-fix-env-"));
     const envFile = join(dir, ".env");
-    writeFileSync(envFile, "# the check's own variable, as `checkly test --env-file` would pass it\nACCOUNT=demo\n");
+    writeFileSync(envFile, "# the check's own variable, as `checkly test --env-file` would pass it\nACCOUNT=demo\n", { mode: 0o600 });
+    chmodSync(envFile, 0o600);
     const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
       const child = spawn(
         process.execPath,

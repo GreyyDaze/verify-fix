@@ -5,11 +5,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createServer as createHttpsServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
 const DRIFT_BUNDLE = join(REPO_ROOT, "fixtures", "bundles", "slots-booking-drift");
@@ -64,6 +64,10 @@ test("the packed CLI runs from an external customer project without repository f
   const incident = join(customer, "incidents", "booking-drift");
   mkdirSync(packed, { recursive: true });
   mkdirSync(customer, { recursive: true });
+  // macOS exposes temporary paths through `/var` while realpath canonicalizes
+  // them through `/private/var`, so report assertions compare the canonical
+  // real path of the customer directory rather than the literal join result.
+  const canonicalCustomer = realpathSync(customer);
 
   try {
     const cliPackage = pack(REPO_ROOT, packed);
@@ -126,8 +130,8 @@ test("the packed CLI runs from an external customer project without repository f
     assert.ok(existsSync(report), `the installed CLI must write its report:\n${verify.stdout}\n${verify.stderr}`);
     const outcome = JSON.parse(readFileSync(report, "utf8")) as { verdict: string; candidate?: string; candidateProject?: string };
     assert.equal(outcome.verdict, "FAILED");
-    assert.equal(outcome.candidate, customer);
-    assert.equal(outcome.candidateProject, customer);
+    assert.equal(outcome.candidate, canonicalCustomer);
+    assert.equal(outcome.candidateProject, canonicalCustomer);
 
     // Prove the installed package also runs the complete hybrid path against
     // a customer-chosen environment. Nothing here assumes Vercel.
@@ -150,19 +154,30 @@ test("the packed CLI runs from an external customer project without repository f
     ].join("\n"));
 
     const checklyBin = join(customer, "node_modules", ".bin", process.platform === "win32" ? "checkly.cmd" : "checkly");
-    writeFileSync(checklyBin, `#!/usr/bin/env node\nconst fs = require('node:fs')\nconst args = process.argv.slice(2)\nconst value = (name) => args[args.indexOf(name) + 1]\nconst location = value('--location')\nconst envText = fs.readFileSync(value('--env-file'), 'utf8')\nconst passed = envText.includes('ENVIRONMENT_NAME="customer-staging"')\nconst report = { testSessionId: 'session-' + location, numChecks: 1, runLocation: location, checks: [{ result: passed ? 'Pass' : 'Fail', name: 'slots booking flow', retries: 0, link: 'https://app.checklyhq.com/test-sessions/external/results/result-' + location }] }\nfs.writeFileSync(process.env.CHECKLY_REPORTER_JSON_OUTPUT, JSON.stringify(report))\nprocess.exitCode = passed ? 0 : 1\n`);
+    writeFileSync(checklyBin, `#!/usr/bin/env node\nconst fs = require('node:fs')\nconst args = process.argv.slice(2)\nconst value = (name) => args[args.indexOf(name) + 1]\nconst location = value('--location')\nconst envText = fs.readFileSync(value('--env-file'), 'utf8')\nconst passed = envText.includes('ENVIRONMENT_NAME="customer-staging"')\nconst session = 'session-' + location + '-' + process.pid
+const report = { testSessionId: session, numChecks: 1, runLocation: location, checks: [{ result: passed ? 'Pass' : 'Fail', name: 'slots booking flow', retries: 0, link: 'https://app.checklyhq.com/accounts/fake-account/test-sessions/' + session + '/results/result-' + process.pid }] }\nfs.writeFileSync(process.env.CHECKLY_REPORTER_JSON_OUTPUT, JSON.stringify(report))\nprocess.exitCode = passed ? 0 : 1\n`);
     chmodSync(checklyBin, 0o755);
 
+    // Synthetic loopback HTTPS. Checkly itself is still a local stub; a cloud
+    // run was not made. Cloud test targets must be bare HTTPS origins.
+    const cert = join(root, "synthetic-ca.pem");
+    const key = join(root, "synthetic-key.pem");
+    execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key,
+      "-out", cert, "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"],
+    { stdio: "ignore" });
     let targetHits = 0;
-    const target = createServer((_request, response) => {
+    const target = createHttpsServer({ key: readFileSync(key), cert: readFileSync(cert) }, (_request, response) => {
       targetHits++;
       response.writeHead(200, { "content-type": "application/json" }).end('{"ok":true}');
     });
     await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
     const address = target.address();
     if (!address || typeof address === "string") throw new Error("external target has no port");
-    const targetUrl = `http://127.0.0.1:${address.port}`;
+    const targetUrl = `https://127.0.0.1:${address.port}`;
     try {
+      const metadata = join(customer, "verify-fix-target.json");
+      writeFileSync(metadata, JSON.stringify({ provider: "synthetic-github-deployment", deploymentId: "fixture-42",
+        revision: baseRevision, url: targetUrl, environment: "customer-staging" }), { mode: 0o600 });
       const liveReport = join(customer, "verify-fix-live.json");
       const live = await runAsync(executable, [
         "verify",
@@ -171,11 +186,13 @@ test("the packed CLI runs from an external customer project without repository f
         "--base", baseRevision,
         "--project", ".",
         "--target", targetUrl,
-        "--target-revision", "customer-revision-123",
+        "--target-revision", baseRevision,
+        "--target-metadata", "verify-fix-target.json",
         "--env-name", "customer-staging",
         "--executor", "hybrid",
         "--report-json", "verify-fix-live.json",
-      ], customer, { CHECKLY_API_KEY: "fake-checkly-key", CHECKLY_ACCOUNT_ID: "fake-account" });
+      ], customer, { CHECKLY_API_KEY: "fake-checkly-key", CHECKLY_ACCOUNT_ID: "fake-account",
+        NODE_EXTRA_CA_CERTS: cert });
       assert.equal(live.status, 0, `the external customer's good repair must PASS:\n${live.stdout}\n${live.stderr}`);
       const result = JSON.parse(readFileSync(liveReport, "utf8")) as {
         verdict: string;
@@ -187,8 +204,8 @@ test("the packed CLI runs from an external customer project without repository f
       };
       assert.equal(result.verdict, "PASS");
       assert.equal(result.target, targetUrl);
-      assert.equal(result.targetRevision, "customer-revision-123");
-      assert.equal(result.candidateProject, customer);
+      assert.equal(result.targetRevision, baseRevision);
+      assert.equal(result.candidateProject, canonicalCustomer);
       assert.ok(result.checklyEvidence.testSessionIds.length > 0);
       assert.ok(result.cost.localRuns > 0);
       assert.ok(result.cost.checklyCloudRuns > 0);

@@ -5,6 +5,18 @@ name: verify-fix protected gate
 on:
   workflow_call:
     inputs:
+      verifier_ref:
+        description: >-
+          V: reviewed immutable verifier and incident bundle commit. Distinct
+          from the later protected-workflow snapshot W.
+        required: true
+        type: string
+      workflow_ref:
+        description: >-
+          W: immutable reusable-workflow snapshot containing trusted helpers;
+          later the caller's `uses:` pin. Not the verifier commit V.
+        required: true
+        type: string
       deployment_id:
         required: true
         type: string
@@ -28,7 +40,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: "24"
+  NODE_VERSION: "24.21.0"
   CANDIDATE_PROJECT_PATH: examples/slots-booking/web
   VERIFY_FIX_BUNDLE: ${{ vars.VERIFY_FIX_BUNDLE || 'incidents/slots-availability-api' }}
 
@@ -47,7 +59,7 @@ jobs:
     steps:
       - name: Validate deployment metadata and resolve its pull request
         id: pull-request
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
         env:
           DEPLOYMENT_ID: ${{ inputs.deployment_id }}
           DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
@@ -56,6 +68,22 @@ jobs:
         with:
           script: |
             const deploymentId = Number(process.env.DEPLOYMENT_ID)
+            if (!Number.isSafeInteger(deploymentId) || deploymentId <= 0 || !/^[0-9a-f]{40}$/.test(process.env.DEPLOYMENT_SHA ?? '')) {
+              core.setFailed('Preview deployment identity is invalid.')
+              return
+            }
+            let eventUrl
+            try {
+              eventUrl = new URL(process.env.DEPLOYMENT_URL)
+            } catch {
+              core.setFailed('Preview target is not a safe HTTPS origin.')
+              return
+            }
+            if (eventUrl.protocol !== 'https:' || !eventUrl.hostname || eventUrl.username || eventUrl.password ||
+                eventUrl.pathname !== '/' || eventUrl.search || eventUrl.hash || process.env.DEPLOYMENT_URL.length > 2048) {
+              core.setFailed('Preview target is not a safe HTTPS origin.')
+              return
+            }
             const { data: deployment } = await github.rest.repos.getDeployment({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -71,9 +99,14 @@ jobs:
               deployment_id: deploymentId,
               per_page: 100,
             })
-            const status = statuses.find((item) => item.state === 'success' && item.environment_url === process.env.DEPLOYMENT_URL)
-            if (!status) {
-              core.setFailed('GitHub has no successful deployment status for this exact URL.')
+            if (!Array.isArray(statuses) || statuses.length >= 100) {
+              core.setFailed('Preview deployment status history may be incomplete.')
+              return
+            }
+            const matches = statuses.filter((item) => item.environment_url === process.env.DEPLOYMENT_URL)
+            const latest = matches.sort((a, b) => b.id - a.id)[0]
+            if (!latest || latest.state !== 'success') {
+              core.setFailed('GitHub has no current successful deployment status for this exact URL.')
               return
             }
             const sha = process.env.DEPLOYMENT_SHA
@@ -83,31 +116,39 @@ jobs:
               commit_sha: sha,
             })
             const pull = pulls.find((item) => item.state === 'open' && item.head.sha === sha)
-            if (!pull) {
-              core.setFailed('No open pull request owns this exact preview revision.')
+            if (!pull || !pull.head.repo?.full_name) {
+              core.setFailed('No open pull request with a bound head repository owns this exact preview revision.')
               return
             }
             core.setOutput('url', pull.html_url)
             core.setOutput('number', String(pull.number))
-            core.setOutput('head_repository', pull.head.repo?.full_name ?? `${context.repo.owner}/${context.repo.repo}`)
-            core.setOutput('fork', String(pull.head.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`))
+            core.setOutput('head_repository', pull.head.repo.full_name)
+            core.setOutput('fork', String(pull.head.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`))
 
       - name: Check out protected verifier and incident inputs
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 9b39750e61daabc21d80fd7ea3e17d651c3b6088
+          ref: ${{ inputs.verifier_ref }}
           path: trusted
           persist-credentials: false
 
+      - name: Require the protected verifier checkout to equal the trusted pin
+        env:
+          VERIFIER_REF: ${{ inputs.verifier_ref }}
+        shell: bash
+        run: |
+          [[ "$VERIFIER_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C trusted rev-parse HEAD)" = "$VERIFIER_REF"
+
       - name: Check out the exact candidate for dependency lookup
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: ${{ steps.pull-request.outputs.head_repository }}
           ref: ${{ inputs.deployment_sha }}
           path: candidate-runtime
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -149,7 +190,7 @@ jobs:
 
       - name: Upload secret-free preflight evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: verify-fix-preflight-${{ inputs.deployment_sha }}
           path: artifacts/verify-fix-preflight.*
@@ -163,21 +204,44 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Check out protected verifier and incident inputs
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 9b39750e61daabc21d80fd7ea3e17d651c3b6088
+          ref: ${{ inputs.verifier_ref }}
           path: trusted
           persist-credentials: false
 
+      - name: Require the protected verifier checkout to equal the trusted pin
+        env:
+          VERIFIER_REF: ${{ inputs.verifier_ref }}
+        shell: bash
+        run: |
+          [[ "$VERIFIER_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C trusted rev-parse HEAD)" = "$VERIFIER_REF"
+
+      - name: Check out trusted workflow helpers at the immutable pin
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.workflow_ref }}
+          path: workflow-trusted
+          persist-credentials: false
+
+      - name: Require the helper checkout to equal the trusted pin
+        env:
+          WORKFLOW_REF: ${{ inputs.workflow_ref }}
+        shell: bash
+        run: |
+          [[ "$WORKFLOW_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C workflow-trusted rev-parse HEAD)" = "$WORKFLOW_REF"
+
       - name: Check out the exact candidate for runtime dependencies
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: ${{ needs.candidate-preflight.outputs.head_repository }}
           ref: ${{ inputs.deployment_sha }}
           path: candidate-runtime
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -193,26 +257,30 @@ jobs:
         working-directory: candidate-runtime/${{ env.CANDIDATE_PROJECT_PATH }}
         run: npm ci --ignore-scripts
 
-      - name: Install Chromium in a separate approved step
-        working-directory: candidate-runtime/${{ env.CANDIDATE_PROJECT_PATH }}
-        run: npx playwright install --with-deps chromium
-
       - name: Require the runtime checkout to match the deployment
         env:
           DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
         working-directory: candidate-runtime
         run: test "$(git rev-parse HEAD)" = "$DEPLOYMENT_SHA"
 
+      # Readiness: HTTP 200 + valid health JSON only, evaluated by trusted
+      # helper code. A 302 is never readiness and redirects are never
+      # followed. Public targets need no bypass header; protected targets
+      # need the approved bypass value (named interface below), which is
+      # configured only at a later explicit checkpoint — absent it, a
+      # protected target fails closed.
+      - name: Require the approved preview bypass to be configured
+        env:
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        shell: bash
+        run: test -n "$BYPASS" || { echo '::error::preview bypass is not configured'; exit 1; }
+
       - name: Wait for the exact preview
         env:
           TARGET_URL: ${{ inputs.environment_url }}
           BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         shell: bash
-        run: |
-          node -e "const u=new URL(process.env.TARGET_URL); if(u.protocol!=='https:') throw new Error('preview URL must use HTTPS')"
-          header=()
-          if [[ -n "$BYPASS" ]]; then header=(-H "x-vercel-protection-bypass: $BYPASS"); fi
-          curl --fail --silent --show-error --retry 18 --retry-delay 5 --retry-all-errors "${header[@]}" "$TARGET_URL/api/health" >/dev/null
+        run: node workflow-trusted/.github/helpers/probe-readiness.mjs "$TARGET_URL"
 
       - name: Require approved preview inputs
         env:
@@ -231,6 +299,8 @@ jobs:
           TEST_USER_US_EAST_1: ${{ secrets.TEST_USER_US_EAST_1 }}
           TEST_USER_EU_WEST_1: ${{ secrets.TEST_USER_EU_WEST_1 }}
           API_TOKEN: ${{ secrets.API_TOKEN }}
+          MULTISTEP_USER_US_EAST_1: ${{ secrets.MULTISTEP_USER_US_EAST_1 }}
+          MULTISTEP_USER_EU_WEST_1: ${{ secrets.MULTISTEP_USER_EU_WEST_1 }}
           BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           TARGET_URL: ${{ inputs.environment_url }}
           TARGET_REVISION: ${{ inputs.deployment_sha }}
@@ -238,15 +308,44 @@ jobs:
           DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
         shell: bash
         run: |
-          env_file="$RUNNER_TEMP/verify-fix.env"
-          metadata_file="$RUNNER_TEMP/verify-fix-target.json"
+          set -euo pipefail
           umask 077
-          : > "$env_file"
-          [[ -n "$TEST_USER" ]] && printf 'TEST_USER=%s\n' "$TEST_USER" >> "$env_file"
-          [[ -n "$TEST_USER_US_EAST_1" ]] && printf 'TEST_USER_US_EAST_1=%s\n' "$TEST_USER_US_EAST_1" >> "$env_file"
-          [[ -n "$TEST_USER_EU_WEST_1" ]] && printf 'TEST_USER_EU_WEST_1=%s\n' "$TEST_USER_EU_WEST_1" >> "$env_file"
-          [[ -n "$API_TOKEN" ]] && printf 'API_TOKEN=%s\n' "$API_TOKEN" >> "$env_file"
-          [[ -n "$BYPASS" ]] && printf 'CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET=%s\n' "$BYPASS" >> "$env_file"
+          env_file=""
+          metadata_file=""
+          trap 'rm -f -- "$env_file" "$metadata_file"' ERR
+          env_file="$(mktemp "$RUNNER_TEMP/verify-fix-preview.XXXXXXXX")"
+          metadata_file="$(mktemp "$RUNNER_TEMP/verify-fix-preview-target.XXXXXXXX")"
+          chmod 0600 "$env_file" "$metadata_file"
+          # Legacy API/Playwright preview jobs never expose Multistep account
+          # values to their candidate checks. Only a reviewed Multistep bundle
+          # receives these extra secret names inside its approved job.
+          [[ "$VERIFY_FIX_BUNDLE" =~ ^incidents/[A-Za-z0-9_-]+$ ]]
+          bundle_type="$(jq -r '.check.checkType // empty' "trusted/$VERIFY_FIX_BUNDLE/manifest.json")"
+          [[ "$bundle_type" == "API" || "$bundle_type" == "PLAYWRIGHT" || "$bundle_type" == "MULTI_STEP" ]]
+          input_names=(TEST_USER TEST_USER_US_EAST_1 TEST_USER_EU_WEST_1 API_TOKEN BYPASS)
+          if [[ "$bundle_type" == MULTI_STEP ]]; then
+            input_names+=(MULTISTEP_USER_US_EAST_1 MULTISTEP_USER_EU_WEST_1)
+          fi
+          # Neither region may share a browser account or the other region's
+          # account. Do not print any value. The verifier also checks trimming,
+          # control bytes, and both-region selection before launching a child.
+          if [[ "$bundle_type" == MULTI_STEP ]]; then
+            [[ -n "${MULTISTEP_USER_US_EAST_1:-}" && -n "${MULTISTEP_USER_EU_WEST_1:-}" && "$MULTISTEP_USER_US_EAST_1" != "$MULTISTEP_USER_EU_WEST_1" ]] || { echo '::error::Multistep regional inputs are missing or overlap'; false; }
+            for browser_key in TEST_USER TEST_USER_US_EAST_1 TEST_USER_EU_WEST_1; do
+              [[ -z "${!browser_key-}" || ( "${!browser_key}" != "$MULTISTEP_USER_US_EAST_1" && "${!browser_key}" != "$MULTISTEP_USER_EU_WEST_1" ) ]] || { echo '::error::Multistep and browser identities overlap'; false; }
+            done
+          fi
+          for name in "${input_names[@]}"; do
+            value="${!name-}"
+            [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || { echo '::error::invalid protected input'; false; }
+            if [[ -n "$value" ]]; then
+              if [[ "$name" == BYPASS ]]; then
+                printf 'CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET=%s\n' "$value" >> "$env_file"
+              else
+                printf '%s=%s\n' "$name" "$value" >> "$env_file"
+              fi
+            fi
+          done
           node -e 'const fs=require("node:fs"); fs.writeFileSync(process.argv[1], JSON.stringify({provider:"github-deployment",deploymentId:process.env.DEPLOYMENT_ID,revision:process.env.TARGET_REVISION,url:process.env.TARGET_URL,environment:process.env.DEPLOYMENT_ENVIRONMENT}))' "$metadata_file"
           echo "VERIFY_FIX_ENV_FILE=$env_file" >> "$GITHUB_ENV"
           echo "VERIFY_FIX_TARGET_METADATA=$metadata_file" >> "$GITHUB_ENV"
@@ -285,107 +384,318 @@ jobs:
 
       - name: Upload verification evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: verify-fix-${{ inputs.deployment_sha }}
           path: artifacts/verify-fix.*
           if-no-files-found: warn
 
-  production-verify-and-deploy:
-    name: verify production then deploy checks
+      - name: Remove preview runtime inputs
+        if: always()
+        shell: bash
+        run: |
+          for file in "${VERIFY_FIX_ENV_FILE:-}" "${VERIFY_FIX_TARGET_METADATA:-}"; do
+            [[ -z "$file" ]] || { [[ "$file" == "$RUNNER_TEMP/"* ]] && rm -f -- "$file"; }
+          done
+
+  # Secret-free preflight that must complete before any job with the
+  # protected production environment can request approval.
+  #   - no GitHub environment, no repository or environment secret;
+  #   - makes no Vercel API call and requires no VERCEL_TOKEN;
+  #   - requires the deployment SHA to equal BOTH the caller SHA and the
+  #     current main SHA before approval, then inspects the full bounded
+  #     status history of that exact deployment:
+  #     the automatic generated-URL status is the verification target and the
+  #     manually verified stable status (identified only by the exact marker
+  #     in .github/helpers/deployment-url-roles.mjs) is the monitoring target;
+  #   - requires successful states, bare HTTPS origins (no path, query, or
+  #     fragment; no embedded credentials), two distinct roles, and rejects
+  #     ambiguous or conflicting matches;
+  #   - exposes verification_url and monitoring_url only for a complete
+  #     valid pair (ready=true).
+  # Status ordering: generated-only → waiting (ready=false, no approval);
+  # manual-only → waiting; a later event with both valid statuses may become
+  # ready. Malformed, conflicting, ambiguous, wrong-deployment, or wrong-SHA
+  # evidence fails closed. Helper code is the trusted checkout at
+  # inputs.workflow_ref (later the caller's W pin), never candidate code.
+  production-preflight:
+    name: secret-free production URL preflight
     if: >-
       inputs.environment_url != '' && inputs.environment == 'Production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      ready: ${{ steps.resolve.outputs.ready }}
+      reason: ${{ steps.resolve.outputs.reason }}
+      verification_url: ${{ steps.resolve.outputs.verification_url }}
+      monitoring_url: ${{ steps.resolve.outputs.monitoring_url }}
+      deployment_id: ${{ steps.resolve.outputs.deployment_id }}
+      deployment_sha: ${{ steps.resolve.outputs.deployment_sha }}
+      generated_status_id: ${{ steps.resolve.outputs.generated_status_id }}
+      stable_status_id: ${{ steps.resolve.outputs.stable_status_id }}
+    steps:
+      - name: Check out trusted workflow helpers at the immutable pin
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.workflow_ref }}
+          path: workflow-trusted
+          persist-credentials: false
+
+      - name: Require the helper checkout to equal the trusted pin
+        env:
+          WORKFLOW_REF: ${{ inputs.workflow_ref }}
+        shell: bash
+        run: |
+          [[ "$WORKFLOW_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C workflow-trusted rev-parse HEAD)" = "$WORKFLOW_REF"
+
+      # Every helper-executing job installs the pinned runtime first — never
+      # the runner's system Node.
+      - name: Set up Node.js to run trusted helper code
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Resolve URL roles from GitHub deployment metadata and statuses
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          EVENT_URL: ${{ inputs.environment_url }}
+        shell: bash
+        run: node workflow-trusted/.github/helpers/run-production-url-preflight.mjs
+
+  production-verify-and-deploy:
+    name: verify production then deploy checks
+    needs: production-preflight
+    if: >-
+      inputs.environment_url != '' && inputs.environment == 'Production' &&
+      needs.production-preflight.outputs.ready == 'true'
     runs-on: ubuntu-latest
     environment: verify-fix-production
     timeout-minutes: 45
     steps:
-      - name: Validate production deployment and default-branch identity
-        uses: actions/github-script@v7
-        env:
-          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
-          DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
-          DEPLOYMENT_URL: ${{ inputs.environment_url }}
-          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
-        with:
-          script: |
-            const deploymentId = Number(process.env.DEPLOYMENT_ID)
-            const { data: deployment } = await github.rest.repos.getDeployment({ owner: context.repo.owner, repo: context.repo.repo, deployment_id: deploymentId })
-            const { data: statuses } = await github.rest.repos.listDeploymentStatuses({ owner: context.repo.owner, repo: context.repo.repo, deployment_id: deploymentId, per_page: 100 })
-            const { data: repository } = await github.rest.repos.get({ owner: context.repo.owner, repo: context.repo.repo })
-            const { data: branch } = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: repository.default_branch })
-            if (deployment.sha !== process.env.DEPLOYMENT_SHA || deployment.environment !== process.env.DEPLOYMENT_ENVIRONMENT) core.setFailed('Production deployment metadata does not match GitHub.')
-            else if (!statuses.some((item) => item.state === 'success' && item.environment_url === process.env.DEPLOYMENT_URL)) core.setFailed('GitHub has no successful production status for this exact URL.')
-            else if (branch.commit.sha !== process.env.DEPLOYMENT_SHA) core.setFailed('Production deployment is not the current default-branch revision.')
-
-      - name: Check out protected verifier and production source
-        uses: actions/checkout@v4
+      - name: Check out exact production source (not the verifier)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ inputs.deployment_sha }}
+          path: candidate-runtime
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Check out trusted workflow helpers at the immutable pin
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.workflow_ref }}
+          path: workflow-trusted
+          persist-credentials: false
+
+      - name: Require the helper checkout to equal the trusted pin
+        env:
+          WORKFLOW_REF: ${{ inputs.workflow_ref }}
+        shell: bash
+        run: |
+          [[ "$WORKFLOW_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C workflow-trusted rev-parse HEAD)" = "$WORKFLOW_REF"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Recheck after approval: a deployment/status pair or main HEAD could
+      # have changed while the reviewer was deciding. No protected credential
+      # is given to these steps, and neither executes the candidate project.
+      - name: Revalidate production identity and both URL roles after approval
+        id: revalidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          EVENT_URL: ${{ inputs.environment_url }}
+        shell: bash
+        run: node workflow-trusted/.github/helpers/run-production-url-preflight.mjs
+
+      - name: Require the approved pair to be unchanged
+        env:
+          ORIGINAL_READY: ${{ needs.production-preflight.outputs.ready }}
+          ORIGINAL_ID: ${{ needs.production-preflight.outputs.deployment_id }}
+          ORIGINAL_SHA: ${{ needs.production-preflight.outputs.deployment_sha }}
+          ORIGINAL_GENERATED_ID: ${{ needs.production-preflight.outputs.generated_status_id }}
+          ORIGINAL_STABLE_ID: ${{ needs.production-preflight.outputs.stable_status_id }}
+          ORIGINAL_VERIFICATION: ${{ needs.production-preflight.outputs.verification_url }}
+          ORIGINAL_MONITORING: ${{ needs.production-preflight.outputs.monitoring_url }}
+          CURRENT_READY: ${{ steps.revalidate.outputs.ready }}
+          CURRENT_ID: ${{ steps.revalidate.outputs.deployment_id }}
+          CURRENT_SHA: ${{ steps.revalidate.outputs.deployment_sha }}
+          CURRENT_GENERATED_ID: ${{ steps.revalidate.outputs.generated_status_id }}
+          CURRENT_STABLE_ID: ${{ steps.revalidate.outputs.stable_status_id }}
+          CURRENT_VERIFICATION: ${{ steps.revalidate.outputs.verification_url }}
+          CURRENT_MONITORING: ${{ steps.revalidate.outputs.monitoring_url }}
+        shell: bash
+        run: |
+          test "$ORIGINAL_READY" = true && test "$CURRENT_READY" = true
+          test "$ORIGINAL_ID" = "$CURRENT_ID" && test "$ORIGINAL_SHA" = "$CURRENT_SHA"
+          test "$ORIGINAL_GENERATED_ID" = "$CURRENT_GENERATED_ID"
+          test "$ORIGINAL_STABLE_ID" = "$CURRENT_STABLE_ID"
+          test "$ORIGINAL_VERIFICATION" = "$CURRENT_VERIFICATION"
+          test "$ORIGINAL_MONITORING" = "$CURRENT_MONITORING"
+
+      # The candidate checkout above supplies only runtime dependencies and
+      # the main revision under test. The verifier and incident are an
+      # immutable protected snapshot; neither comes from candidate code.
+      - name: Check out protected verifier and incident inputs
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.verifier_ref }}
+          path: trusted
+          persist-credentials: false
+
+      - name: Require the protected verifier checkout to equal the trusted pin
+        env:
+          VERIFIER_REF: ${{ inputs.verifier_ref }}
+        shell: bash
+        run: |
+          [[ "$VERIFIER_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C trusted rev-parse HEAD)" = "$VERIFIER_REF"
 
       - name: Require checkout to equal the deployed revision
         env:
           DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
+        working-directory: candidate-runtime
         run: test "$(git rev-parse HEAD)" = "$DEPLOYMENT_SHA"
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+      # Phase 7 has no reviewed real Multistep incident bundle yet. The
+      # legacy API example is never an eligible production fallback. This
+      # guard fails closed until a reviewed bundle is pinned with the trusted
+      # verifier and its explicit path is configured in VERIFY_FIX_BUNDLE.
+      - name: Require a reviewed Phase 7 Multistep incident bundle
+        env:
+          APPROVED_BUNDLE: ${{ vars.VERIFY_FIX_BUNDLE }}
+        shell: bash
+        run: |
+          [[ "$APPROVED_BUNDLE" =~ ^incidents/[A-Za-z0-9_-]+$ ]] || { echo '::error::reviewed Phase 7 bundle is not configured'; exit 1; }
+          test "$APPROVED_BUNDLE" = "$VERIFY_FIX_BUNDLE"
+          test -f "trusted/$APPROVED_BUNDLE/manifest.json"
+          jq -e '.schemaVersion == "v3" and .check.checkType == "MULTI_STEP" and .check.file == "checks/multistep-booking.spec.ts" and .check.logicalId == "slots-booking-multistep" and .recordings.multistepFailing == "recordings/failing.multistep.json"' "trusted/$APPROVED_BUNDLE/manifest.json" > /dev/null
 
-      - run: npm ci --ignore-scripts
+      # Verification target = the generated deployment URL resolved by the
+      # secret-free preflight (never a guessed host). Readiness is HTTP 200 +
+      # valid health JSON evaluated by trusted helper code; a 302 is never
+      # readiness and redirects are never followed. Public targets need no
+      # bypass; protected targets need the approved bypass value from the
+      # named interface below, configured only at a later explicit
+      # checkpoint — absent it, a protected target fails closed.
+      - name: Require the protected production bypass to be configured
+        env:
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        shell: bash
+        run: test -n "$BYPASS" || { echo '::error::production bypass is not configured'; exit 1; }
 
-      - name: Install project dependencies without lifecycle scripts
-        working-directory: ${{ env.CANDIDATE_PROJECT_PATH }}
+      - name: Require the verification target to be ready
+        env:
+          TARGET_URL: ${{ needs.production-preflight.outputs.verification_url }}
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        shell: bash
+        run: node workflow-trusted/.github/helpers/probe-readiness.mjs "$TARGET_URL"
+
+      - name: Install the protected verifier without lifecycle scripts
+        working-directory: trusted
         run: npm ci --ignore-scripts
 
-      - name: Install Chromium separately
-        working-directory: ${{ env.CANDIDATE_PROJECT_PATH }}
-        run: npx playwright install --with-deps chromium
+      - name: Install project dependencies without lifecycle scripts
+        working-directory: candidate-runtime/${{ env.CANDIDATE_PROJECT_PATH }}
+        run: npm ci --ignore-scripts
 
-      - name: Build temporary runtime environment
+      - name: Build private runtime inputs and exact target metadata
         env:
           TEST_USER: ${{ secrets.TEST_USER }}
           TEST_USER_US_EAST_1: ${{ secrets.TEST_USER_US_EAST_1 }}
           TEST_USER_EU_WEST_1: ${{ secrets.TEST_USER_EU_WEST_1 }}
           API_TOKEN: ${{ secrets.API_TOKEN }}
+          MULTISTEP_USER_US_EAST_1: ${{ secrets.MULTISTEP_USER_US_EAST_1 }}
+          MULTISTEP_USER_EU_WEST_1: ${{ secrets.MULTISTEP_USER_EU_WEST_1 }}
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          VERIFIED_ID: ${{ needs.production-preflight.outputs.deployment_id }}
+          VERIFIED_SHA: ${{ needs.production-preflight.outputs.deployment_sha }}
+          VERIFIED_URL: ${{ needs.production-preflight.outputs.verification_url }}
         shell: bash
         run: |
-          file="$RUNNER_TEMP/verify-fix.env"
+          set -euo pipefail
           umask 077
-          : > "$file"
-          [[ -n "$TEST_USER" ]] && printf 'TEST_USER=%s\n' "$TEST_USER" >> "$file"
-          [[ -n "$TEST_USER_US_EAST_1" ]] && printf 'TEST_USER_US_EAST_1=%s\n' "$TEST_USER_US_EAST_1" >> "$file"
-          [[ -n "$TEST_USER_EU_WEST_1" ]] && printf 'TEST_USER_EU_WEST_1=%s\n' "$TEST_USER_EU_WEST_1" >> "$file"
-          [[ -n "$API_TOKEN" ]] && printf 'API_TOKEN=%s\n' "$API_TOKEN" >> "$file"
-          echo "VERIFY_FIX_ENV_FILE=$file" >> "$GITHUB_ENV"
+          env_file=""
+          metadata_file=""
+          trap 'rm -f -- "$env_file" "$metadata_file"' ERR
+          env_file="$(mktemp "$RUNNER_TEMP/verify-fix-production.XXXXXXXX")"
+          metadata_file="$(mktemp "$RUNNER_TEMP/verify-fix-production-target.XXXXXXXX")"
+          chmod 0600 "$env_file" "$metadata_file"
+          # The earlier Phase 7 bundle guard already required MULTI_STEP.
+          input_names=(TEST_USER TEST_USER_US_EAST_1 TEST_USER_EU_WEST_1 API_TOKEN BYPASS MULTISTEP_USER_US_EAST_1 MULTISTEP_USER_EU_WEST_1)
+          # Neither region may share a browser account or the other region's
+          # account. Do not print any value. The verifier also checks trimming,
+          # control bytes, and both-region selection before launching a child.
+          [[ -n "${MULTISTEP_USER_US_EAST_1:-}" && -n "${MULTISTEP_USER_EU_WEST_1:-}" && "$MULTISTEP_USER_US_EAST_1" != "$MULTISTEP_USER_EU_WEST_1" ]] || { echo '::error::Multistep regional inputs are missing or overlap'; false; }
+          for browser_key in TEST_USER TEST_USER_US_EAST_1 TEST_USER_EU_WEST_1; do
+            [[ -z "${!browser_key-}" || ( "${!browser_key}" != "$MULTISTEP_USER_US_EAST_1" && "${!browser_key}" != "$MULTISTEP_USER_EU_WEST_1" ) ]] || { echo '::error::Multistep and browser identities overlap'; false; }
+          done
+          for name in "${input_names[@]}"; do
+            value="${!name-}"
+            [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || { echo '::error::invalid protected input'; false; }
+            if [[ -n "$value" ]]; then
+              if [[ "$name" == BYPASS ]]; then
+                printf 'CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET=%s\n' "$value" >> "$env_file"
+              else
+                printf '%s=%s\n' "$name" "$value" >> "$env_file"
+              fi
+            fi
+          done
+          node -e 'const fs=require("node:fs"); fs.writeFileSync(process.argv[1], JSON.stringify({provider:"github-deployment",deploymentId:process.env.VERIFIED_ID,revision:process.env.VERIFIED_SHA,url:process.env.VERIFIED_URL,environment:"Production"}))' "$metadata_file"
+          echo "VERIFY_FIX_ENV_FILE=$env_file" >> "$GITHUB_ENV"
+          echo "VERIFY_FIX_TARGET_METADATA=$metadata_file" >> "$GITHUB_ENV"
 
-      - name: Verify production source
+      - name: Verify production with the pinned verifier before any Checkly deploy
         env:
           CHECKLY_API_KEY: ${{ secrets.CHECKLY_API_KEY }}
           CHECKLY_ACCOUNT_ID: ${{ vars.CHECKLY_ACCOUNT_ID }}
-          TARGET_URL: ${{ inputs.environment_url }}
-          TARGET_REVISION: ${{ inputs.deployment_sha }}
+          TARGET_URL: ${{ needs.production-preflight.outputs.verification_url }}
+          TARGET_REVISION: ${{ needs.production-preflight.outputs.deployment_sha }}
+          APPROVED_DEPLOYMENT_ID: ${{ needs.production-preflight.outputs.deployment_id }}
         shell: bash
         run: |
           mkdir -p artifacts
-          node bin/verify-fix verify \
-            --bundle "$VERIFY_FIX_BUNDLE" \
-            --candidate-project "$CANDIDATE_PROJECT_PATH" \
+          node trusted/bin/verify-fix verify \
+            --bundle "trusted/$VERIFY_FIX_BUNDLE" \
+            --candidate-project candidate-runtime \
             --base "$TARGET_REVISION" \
-            --project "$CANDIDATE_PROJECT_PATH" \
+            --project "candidate-runtime/$CANDIDATE_PROJECT_PATH" \
             --target "$TARGET_URL" \
             --target-revision "$TARGET_REVISION" \
+            --target-metadata "$VERIFY_FIX_TARGET_METADATA" \
             --env-name production \
             --env-file "$VERIFY_FIX_ENV_FILE" \
             --executor hybrid \
             --report-json artifacts/verify-fix-production.json \
-            --report-markdown artifacts/verify-fix-production.md \
-            --verbose
+            --report-markdown artifacts/verify-fix-production.md
+          test "$(jq -r .verdict artifacts/verify-fix-production.json)" = PASS
+          test "$(jq -r .target artifacts/verify-fix-production.json)" = "$TARGET_URL"
+          test "$(jq -r .targetRevision artifacts/verify-fix-production.json)" = "$TARGET_REVISION"
+          test "$(jq -r .candidateRevision.source artifacts/verify-fix-production.json)" = local
+          test "$(jq -r .candidateRevision.headSha artifacts/verify-fix-production.json)" = "$TARGET_REVISION"
+          test "$(jq -r .candidateRevision.dirty artifacts/verify-fix-production.json)" = false
+          test "$(jq -r .targetBinding.scope artifacts/verify-fix-production.json)" = local
+          test "$(jq -r .targetBinding.sourceRevision artifacts/verify-fix-production.json)" = "$TARGET_REVISION"
+          test "$(jq -r .targetBinding.targetRevision artifacts/verify-fix-production.json)" = "$TARGET_REVISION"
+          test "$(jq -r .targetBinding.deployment.deploymentId artifacts/verify-fix-production.json)" = "$APPROVED_DEPLOYMENT_ID"
+          test "$(jq -r .targetBinding.deployment.url artifacts/verify-fix-production.json)" = "$TARGET_URL"
 
-      - name: Deploy monitoring source after PASS
-        working-directory: ${{ env.CANDIDATE_PROJECT_PATH }}
+      # Deployment preview runs first and must PASS before the force step can
+      # start (a failed step halts this job). Identical environment names and
+      # values as the force step, same stable monitoring URL — never the
+      # generated verification URL.
+      - name: Preview monitoring source before force
+        working-directory: candidate-runtime/${{ env.CANDIDATE_PROJECT_PATH }}
         env:
           CHECKLY_API_KEY: ${{ secrets.CHECKLY_API_KEY }}
           CHECKLY_ACCOUNT_ID: ${{ vars.CHECKLY_ACCOUNT_ID }}
@@ -393,13 +703,89 @@ jobs:
           TEST_USER_US_EAST_1: ${{ secrets.TEST_USER_US_EAST_1 }}
           TEST_USER_EU_WEST_1: ${{ secrets.TEST_USER_EU_WEST_1 }}
           API_TOKEN: ${{ secrets.API_TOKEN }}
-          ENVIRONMENT_URL: ${{ inputs.environment_url }}
-        run: npx checkly deploy --force
+          # Environment-provided Multistep monitoring identities — names and
+          # secret references only. Values are never committed, never printed,
+          # never passed as arguments, and never exposed as outputs. Kept
+          # separate from the browser TEST_USER identities above.
+          MULTISTEP_USER_US_EAST_1: ${{ secrets.MULTISTEP_USER_US_EAST_1 }}
+          MULTISTEP_USER_EU_WEST_1: ${{ secrets.MULTISTEP_USER_EU_WEST_1 }}
+          CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          # Monitoring target = the manually verified stable alias only —
+          # never the generated verification URL, never a guessed host.
+          ENVIRONMENT_URL: ${{ needs.production-preflight.outputs.monitoring_url }}
+        run: ./node_modules/.bin/checkly deploy --preview
+
+      - name: Recheck current main and both status IDs immediately before deploy
+        id: final-roles
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          EVENT_URL: ${{ inputs.environment_url }}
+        shell: bash
+        run: node workflow-trusted/.github/helpers/run-production-url-preflight.mjs
+
+      - name: Preserve the approved role identities and PASS as bounded evidence
+        env:
+          APPROVED_ID: ${{ needs.production-preflight.outputs.deployment_id }}
+          APPROVED_SHA: ${{ needs.production-preflight.outputs.deployment_sha }}
+          APPROVED_GENERATED_ID: ${{ needs.production-preflight.outputs.generated_status_id }}
+          APPROVED_STABLE_ID: ${{ needs.production-preflight.outputs.stable_status_id }}
+          APPROVED_VERIFICATION: ${{ needs.production-preflight.outputs.verification_url }}
+          APPROVED_MONITORING: ${{ needs.production-preflight.outputs.monitoring_url }}
+          FINAL_READY: ${{ steps.final-roles.outputs.ready }}
+          FINAL_ID: ${{ steps.final-roles.outputs.deployment_id }}
+          FINAL_SHA: ${{ steps.final-roles.outputs.deployment_sha }}
+          FINAL_GENERATED_ID: ${{ steps.final-roles.outputs.generated_status_id }}
+          FINAL_STABLE_ID: ${{ steps.final-roles.outputs.stable_status_id }}
+          FINAL_VERIFICATION: ${{ steps.final-roles.outputs.verification_url }}
+          FINAL_MONITORING: ${{ steps.final-roles.outputs.monitoring_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$FINAL_READY" = true && test "$FINAL_ID" = "$APPROVED_ID"
+          test "$FINAL_SHA" = "$APPROVED_SHA"
+          test "$FINAL_GENERATED_ID" = "$APPROVED_GENERATED_ID"
+          test "$FINAL_STABLE_ID" = "$APPROVED_STABLE_ID"
+          test "$FINAL_VERIFICATION" = "$APPROVED_VERIFICATION"
+          test "$FINAL_MONITORING" = "$APPROVED_MONITORING"
+          test "$(jq -r .verdict artifacts/verify-fix-production.json)" = PASS
+          node -e 'const fs=require("node:fs"); fs.writeFileSync("artifacts/verify-fix-production-roles.json", JSON.stringify({deploymentId:process.env.APPROVED_ID,sha:process.env.APPROVED_SHA,generatedStatusId:process.env.APPROVED_GENERATED_ID,stableStatusId:process.env.APPROVED_STABLE_ID,verificationUrl:process.env.APPROVED_VERIFICATION,monitoringUrl:process.env.APPROVED_MONITORING,verdict:"PASS"})+"\n", {mode:0o600})'
+
+      - name: Deploy monitoring source after PASS
+        working-directory: candidate-runtime/${{ env.CANDIDATE_PROJECT_PATH }}
+        env:
+          CHECKLY_API_KEY: ${{ secrets.CHECKLY_API_KEY }}
+          CHECKLY_ACCOUNT_ID: ${{ vars.CHECKLY_ACCOUNT_ID }}
+          TEST_USER: ${{ secrets.TEST_USER }}
+          TEST_USER_US_EAST_1: ${{ secrets.TEST_USER_US_EAST_1 }}
+          TEST_USER_EU_WEST_1: ${{ secrets.TEST_USER_EU_WEST_1 }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+          # Environment-provided Multistep monitoring identities — names and
+          # secret references only. Values are never committed, never printed,
+          # never passed as arguments, and never exposed as outputs. Kept
+          # separate from the browser TEST_USER identities above.
+          MULTISTEP_USER_US_EAST_1: ${{ secrets.MULTISTEP_USER_US_EAST_1 }}
+          MULTISTEP_USER_EU_WEST_1: ${{ secrets.MULTISTEP_USER_EU_WEST_1 }}
+          CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          # Monitoring target = the manually verified stable alias only —
+          # never the generated verification URL, never a guessed host.
+          ENVIRONMENT_URL: ${{ needs.production-preflight.outputs.monitoring_url }}
+        run: ./node_modules/.bin/checkly deploy --force
 
       - name: Upload production verification evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: verify-fix-production-${{ inputs.deployment_sha }}
           path: artifacts/verify-fix-production.*
           if-no-files-found: warn
+
+      - name: Remove production runtime inputs
+        if: always()
+        shell: bash
+        run: |
+          for file in "${VERIFY_FIX_ENV_FILE:-}" "${VERIFY_FIX_TARGET_METADATA:-}"; do
+            [[ -z "$file" ]] || { [[ "$file" == "$RUNNER_TEMP/"* ]] && rm -f -- "$file"; }
+          done

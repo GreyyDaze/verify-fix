@@ -147,12 +147,33 @@ export interface CheckResultsPage {
 
 export type AssetType = "log" | "trace" | "video" | "screenshot" | "pcap" | "report" | "file";
 
+/**
+ * Checkly asset manifests have appeared with both the current structured
+ * result-source object and the CLI's string source form. The endpoint itself
+ * is already scoped to this check/result, so the string form is accepted only
+ * when it is exactly `check-result`.
+ * `contentType` is optional/free-form; archive zip-ness is verified from
+ * downloaded bytes instead of trusting metadata.
+ */
+/** Checkly CLI 9.5.0 asset-manifest source. The API endpoint itself scopes the result. */
+export interface AssetManifestSourceObject {
+  type: "check-result";
+  checkId?: string;
+  checkName?: string;
+  checkType?: string;
+  resultId?: string;
+  testSessionId?: string;
+}
+export type AssetManifestSource = "check-result" | AssetManifestSourceObject;
+
 export interface AssetManifestEntry {
   type: AssetType;
   name: string;
   url: string;
   contentType?: string;
-  source: string;
+  /** Live Checkly result assets may include the transfer encoding metadata. */
+  contentEncoding?: string;
+  source: AssetManifestSource;
   archive?: { entryName: string };
 }
 
@@ -162,6 +183,7 @@ export interface AssetManifest {
   entriesReturned?: number;
   entriesTotal?: number;
 }
+
 
 export interface RcaEvidence {
   artifacts: Array<{ name: string; type: string }>;

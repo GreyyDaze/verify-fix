@@ -53,6 +53,12 @@ export function isWeakMatcher(matcher: string): boolean {
   return matcherClass(matcher).kind === "property" && !matcherClass(matcher).falsifiable;
 }
 
+/** True when the matcher is in the classification table. Unknown matchers are
+ * unsupported by the Multistep contract parser (UNCERTAIN, never approximated). */
+export function isKnownMatcher(matcher: string): boolean {
+  return Object.prototype.hasOwnProperty.call(TABLE, matcher);
+}
+
 /** toBe with a boolean/string/number literal is only strong if the target is concrete. */
 export function isFalsifiable(matcher: string, target: string): boolean {
   const cls = matcherClass(matcher);

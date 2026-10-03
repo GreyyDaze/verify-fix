@@ -21,7 +21,7 @@
 //                      ("expect(locator).toHaveText(expected) failed … Expected … Received …").
 // A trace zip may contain several chunks (0-trace.*, 1-trace.*, test.trace).
 
-import { openZip } from "./zip.ts";
+import { openZipBounded } from "./zip.ts";
 import type { Har, HarEntry } from "./har-types.ts";
 
 export type BodyPolicy = "api" | "all" | "none";
@@ -164,7 +164,7 @@ function toAction(call: RawCall, category: ActionCategory, browser: RawCall | nu
 export function traceZipToHar(zipBuffer: Buffer, opts: TraceToHarOptions = {}): TraceExtract {
   const bodies = opts.bodies ?? "api";
   const maxBodyBytes = opts.maxBodyBytes ?? 256 * 1024;
-  const zip = openZip(zipBuffer);
+  const zip = openZipBounded(zipBuffer);
 
   const networkFiles = [...zip.keys()].filter((n) => n.endsWith(".network")).sort();
   const traceFiles = [...zip.keys()].filter((n) => n.endsWith(".trace")).sort();

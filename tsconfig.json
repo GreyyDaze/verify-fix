@@ -5,6 +5,7 @@
     "moduleResolution": "NodeNext",
     "strict": true,
     "noEmit": true,
+    "allowJs": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
     "erasableSyntaxOnly": true,

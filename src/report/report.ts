@@ -35,6 +35,8 @@ export interface ReportDetails {
   candidateRevision?: CandidateRevisionMetadata | null;
   candidateCheck?: { logicalId: string; name: string | null; file: string | null } | null;
   targetBinding?: CandidateTargetBinding | null;
+  /** Normalized Multistep evidence summary from the bundle's sanitized recording. */
+  multistep?: { kind: string | null; steps: string[]; problems: string[] } | null;
 }
 
 export function buildReport(contract: ContractReport, decision: Decision, observations: Map<string, SceneObservation>, details: ReportDetails = {}): Report {
@@ -118,13 +120,28 @@ export function buildReport(contract: ContractReport, decision: Decision, observ
     if (checklyResultIds.length > 0) lines.push(`- Result ids: ${checklyResultIds.map((id) => `\`${id}\``).join(", ")}`);
     lines.push("");
   }
+  if (details.multistep) {
+    lines.push("**Multistep evidence:**");
+    lines.push(`- Ordered steps observed: ${details.multistep.steps.length > 0 ? details.multistep.steps.map((s) => markdownCode(s)).join(" → ") : "none"}`);
+    lines.push(`- Capture kind: ${details.multistep.kind ?? "unavailable"}`);
+    if (details.multistep.problems.length > 0) lines.push(`- Evidence problems (→ UNCERTAIN): ${details.multistep.problems.join("; ")}`);
+    lines.push("- Mechanics vs real proof: local replay proves check behavior against recorded evidence only; only exact-revision live execution can prove the candidate application repair.");
+    lines.push("- Monitor repair vs application-only repair: a monitor repair changes the check, an application-only repair changes the application; retry attempts measure recurrence only and cannot change a FAILED or UNCERTAIN contract into PASS.");
+    lines.push("- Locally constructed fixtures prove mechanics only — they are never real Checkly, browser, deployment, or cloud proof.");
+    lines.push("");
+  }
   if (details.cost) {
     const c = details.cost;
     lines.push("**Cost:**");
     lines.push(`- Checkly test sessions: ${c.checklyTestSessions}`);
     lines.push(`- Checkly cloud check runs: ${c.checklyCloudRuns}`);
     lines.push(`- Local runs: ${c.localRuns}`);
-    lines.push(`- Browser processes: ${c.browserProcesses}`);
+    lines.push(`- Browser processes: ${c.browserProcesses}${details.multistep ? " (sum of measured per-run maxima, not a claim about unmeasured runs)" : ""}`);
+    if (details.multistep) {
+      const samples = c.multiStepBrowserCounts ?? [];
+      const measured = samples.filter((n): n is number => n !== null);
+      lines.push(`- Multistep browser-process measurements: ${samples.length} run(s), ${measured.length} measured, ${samples.length - measured.length} unavailable; peak ${measured.length ? Math.max(...measured) : "unknown"}. ${measured.length ? `Per-run maxima: ${samples.map((n) => n ?? "unknown").join(", ")}` : "No measured zero-browser claim."}`);
+    }
     lines.push(`- Completed API requests/replays: ${c.httpRequests ?? 0}`);
     lines.push(`- Mutation runs: ${c.mutationRuns}`);
     lines.push(`- Total completed runs: ${c.runs}`);
@@ -157,6 +174,7 @@ export function buildReport(contract: ContractReport, decision: Decision, observ
       candidateCheck: details.candidateCheck ?? null,
       targetBinding: details.targetBinding ?? null,
       checklyEvidence: { testSessionIds: checklySessionIds, resultIds: checklyResultIds },
+      multistep: details.multistep ?? null,
       cost: details.cost ?? null,
       topEvidence: topOut,
     },

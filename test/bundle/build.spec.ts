@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { gzipSync } from "node:zlib";
 import { buildBundle, assertNoSecretLeak, collectProjectSources } from "../../src/bundle/build.ts";
 import { loadBundle } from "../../src/bundle.ts";
 import type { ChecklyClient } from "../../src/checkly/client.ts";
@@ -74,9 +75,9 @@ function fakeClient(opts: { archive?: boolean; drift?: boolean } = {}) {
       return { ...s, playwrightCheckResult: { errors } } as CheckResult;
     },
     async getAssets(_checkId: string, id: string): Promise<AssetManifest> {
-      if (id === "r-fail" && opts.archive) return { assets: [{ type: "trace", name: "booking-trace.zip", url: "https://s3.example/archive.zip?sig=1", source: "playwright", archive: { entryName: "traces/booking-trace.zip" } }] };
-      if (id === "r-fail") return { assets: [{ type: "trace", name: "trace.zip", url: "https://s3.example/failing.zip?sig=1", source: "playwright" }] };
-      return { assets: [{ type: "trace", name: "trace.zip", url: "https://s3.example/passing.zip?sig=2", source: "playwright" }] };
+      if (id === "r-fail" && opts.archive) return { assets: [{ type: "trace", name: "booking-trace.zip", url: "https://s3.example/archive.zip?sig=1", source: { type: "check-result" }, archive: { entryName: "traces/booking-trace.zip" } }] };
+      if (id === "r-fail") return { assets: [{ type: "trace", name: "trace.zip", url: "https://s3.example/failing.zip?sig=1", source: { type: "check-result" } }] };
+      return { assets: [{ type: "trace", name: "trace.zip", url: "https://s3.example/passing.zip?sig=2", source: { type: "check-result" } }] };
     },
     async download(url: string) {
       downloads.push(url);
@@ -286,5 +287,97 @@ test("cli: `bundle` without credentials exits 2 with guidance; help lists both c
     assert.match(bad.stderr, /--check <checkId> is required/);
   } finally {
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("MULTI_STEP accepts the live Checkly compressed asset descriptor and reaches download", async () => {
+  const out = mkdtempSync(join(tmpdir(), "vf-multistep-content-encoding-"));
+  try {
+    const { client, downloads } = fakeClient();
+    const rawArchive = writeZip({
+      "test-results.json.gz": gzipSync(Buffer.from("{not-a-valid-report", "utf8")),
+      "logs.txt.gz": gzipSync(Buffer.from("not-a-valid-log", "utf8")),
+    });
+    client.getCheck = async () => ({ ...CHECK, checkType: "MULTI_STEP" });
+    client.getAssets = async (_checkId: string, id: string) => ({
+      assets: [
+        {
+          name: "test-results.json.gz",
+          type: "report" as const,
+          url: `https://s3.example/${id}.zip?sig=1`,
+          contentType: "application/gzip",
+          contentEncoding: "gzip",
+          source: { type: "check-result" as const, checkId: CHECK.id, resultId: id },
+          archive: { entryName: "test-results.json.gz" },
+        },
+        {
+          name: "logs.txt.gz",
+          type: "log" as const,
+          url: `https://s3.example/${id}.zip?sig=1`,
+          contentType: "application/gzip",
+          contentEncoding: "gzip",
+          source: { type: "check-result" as const, checkId: CHECK.id, resultId: id },
+          archive: { entryName: "logs.txt.gz" },
+        },
+      ],
+    });
+    client.download = async (url: string) => {
+      downloads.push(url);
+      return rawArchive;
+    };
+
+    const logs: string[] = [];
+    const outcome = await buildBundle(
+      { checkId: CHECK.id, outDir: out, log: (line) => logs.push(line) },
+      { client, accountId: "a" },
+    );
+
+    assert.equal(downloads.length, 2, "both failing and passing result archives are downloaded");
+    assert.equal(downloads[0], "https://s3.example/r-fail.zip?sig=1");
+    assert.equal(downloads[1], "https://s3.example/r-pass-2.zip?sig=1");
+    assert.ok(logs.some((line) => /failing: multistep asset selected=2/.test(line)));
+    assert.ok(logs.some((line) => /passing: multistep asset selected=2/.test(line)));
+    assert.equal(outcome.warnings.some((warning) => /MULTISTEP_ASSET_TYPE_INVALID/.test(warning)), false);
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test("MULTI_STEP --keep-raw recovers raw artifacts beside the bundle, never inside it", async () => {
+  const out = mkdtempSync(join(tmpdir(), "vf-multistep-no-raw-"));
+  const rawSibling = `${out}-raw`;
+  try {
+    const { client, downloads } = fakeClient();
+    client.getCheck = async () => ({ ...CHECK, checkType: "MULTI_STEP" });
+    // Raw multistep artifact bytes (deliberately invalid evidence: recovery
+    // must persist them even when admission rejects the side).
+    const rawArchive = writeZip({ "test-results.json": "{\"stats\":{}}", "check-run-data.json": "{}", "logs.txt": "[]" });
+    client.getAssets = async () => ({ assets: (["test-results.json", "check-run-data.json", "logs.txt"] as const).map((name) => ({
+      name, type: name === "logs.txt" ? "log" as const : name === "check-run-data.json" ? "file" as const : "report" as const,
+      source: { type: "check-result" as const, checkId: CHECK.id, checkName: CHECK.name, checkType: "MULTI_STEP", resultId: "r-fail" },
+      contentType: "application/octet-stream", url: "https://s3.example/raw.zip?sig=1", archive: { entryName: name },
+    })) });
+    client.download = async (url: string) => { downloads.push(url); return rawArchive; };
+    const logs: string[] = [];
+    const outcome = await buildBundle({ checkId: CHECK.id, outDir: out, keepRaw: true, log: (line) => logs.push(line) },
+      { client, accountId: "synthetic-account" });
+    // The recovery run completes and warns where the raw bytes went.
+    assert.ok(logs.some((line) => line.includes(rawSibling)) || outcome.warnings.some((w) => w.includes(rawSibling)),
+      "the operator must be told where raw artifacts live");
+    // Raw bytes live ONLY in the sibling directory, never inside the bundle.
+    assert.equal(existsSync(join(out, "raw")), false);
+    assert.ok(existsSync(join(rawSibling, "failing")), "failing-side raw artifacts recovered");
+    const rawNames = readdirSync(join(rawSibling, "failing")).sort();
+    assert.equal(rawNames.length, 1);
+    assert.match(rawNames[0]!, /^archive-[0-9a-f]{64}\.zip$/);
+    // The sanitized bundle is untouched by raw retention (no raw/ entry in
+    // the bundle tree; the recovery raw dir is a sibling).
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)]);
+    assert.ok(!walk(out).some((path) => path.split("/").includes("raw")));
+    assert.ok(walk(out).some((path) => path.endsWith("manifest.json")), "the bundle itself was still written");
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+    rmSync(rawSibling, { recursive: true, force: true });
   }
 });

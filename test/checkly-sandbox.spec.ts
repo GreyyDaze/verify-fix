@@ -16,7 +16,7 @@ function report(result = "Pass", retries = 0) {
     testSessionId: "session-123",
     numChecks: 1,
     runLocation: "eu-west-1",
-    checks: [{ result, name: "slots booking flow", checkType: "PLAYWRIGHT", retries, link: "https://app.checklyhq.com/test-sessions/session-123/results/result-456" }],
+    checks: [{ result, name: "slots booking flow", checkType: "PLAYWRIGHT", retries, link: "https://app.checklyhq.com/accounts/synthetic-account/test-sessions/session-123/results/result-456" }],
   });
 }
 
@@ -51,27 +51,60 @@ const args = process.argv.slice(2)
 const value = (name) => args[args.indexOf(name) + 1]
 const source = fs.readFileSync('tests/booking.spec.ts', 'utf8')
 const envText = fs.readFileSync(value('--env-file'), 'utf8')
-const ok = args[0] === 'test' && args.includes('--record') && value('--retries') === '0' && value('--location') === 'eu-west-1' && value('--grep') === '^slots booking flow$' && !args.includes('-e') && source.includes('CANDIDATE') && envText.includes('TEST_USER="demo"') && envText.includes('ENVIRONMENT_URL="https://preview.example.com"') && envText.includes('ENVIRONMENT_NAME="preview"') && process.env.TEST_USER === 'demo' && process.env.ENVIRONMENT_URL === 'https://preview.example.com' && !fs.existsSync('app/private.txt') && !fs.existsSync('.env.local')
-const out = { testSessionId: 'session-live', numChecks: 1, runLocation: 'eu-west-1', checks: [{ result: ok ? 'Pass' : 'Fail', name: 'slots booking flow', checkType: 'PLAYWRIGHT', retries: 0, link: 'https://app.checklyhq.com/test-sessions/session-live/results/result-live' }] }
+const ok = args[0] === 'test' && args.filter((item) => item === '--record').length === 1 && value('--retries') === '0' && value('--location') === 'eu-west-1' && value('--grep') === '^slots booking flow$' && !args.includes('-e') && source.includes('CANDIDATE') && envText.includes('TEST_USER="demo"') && envText.includes('ENVIRONMENT_URL="https://preview.example.com"') && envText.includes('ENVIRONMENT_NAME="preview"') && process.env.TEST_USER === 'demo' && process.env.ENVIRONMENT_URL === 'https://preview.example.com' && !fs.existsSync('app/private.txt') && !fs.existsSync('.env.local')
+const out = { testSessionId: 'session-live', numChecks: 1, runLocation: 'eu-west-1', checks: [{ result: ok ? 'Pass' : 'Fail', name: 'slots booking flow', checkType: 'PLAYWRIGHT', retries: 0, link: 'https://app.checklyhq.com/accounts/synthetic-checkly-account/test-sessions/session-live/results/result-live' }] }
 fs.writeFileSync(process.env.CHECKLY_REPORTER_JSON_OUTPUT, JSON.stringify(out))
 process.exitCode = ok ? 0 : 1
 `);
     chmodSync(cli, 0o755);
 
-    const outcome = await runChecklySandbox({
-      projectDir: project,
-      files: { "checkly.config.ts": "// CANDIDATE CONFIG", "tests/booking.spec.ts": "// CANDIDATE SPEC" },
-      target: "https://preview.example.com",
-      targetRevision: "abc123",
-      env: { TEST_USER: "demo", ENVIRONMENT_NAME: "preview" },
-      location: "eu-west-1",
-      checkName: "slots booking flow",
-      testSessionName: "verify candidate",
-    });
-    assert.equal(outcome.passed, true, outcome.reason ?? outcome.raw);
+    const savedApiKey = process.env.CHECKLY_API_KEY;
+    const savedAccountId = process.env.CHECKLY_ACCOUNT_ID;
+    process.env.CHECKLY_API_KEY = "synthetic-checkly-key";
+    process.env.CHECKLY_ACCOUNT_ID = "synthetic-checkly-account";
+    let outcome;
+    try {
+      outcome = await runChecklySandbox({
+        projectDir: project,
+        files: { "checkly.config.ts": "// CANDIDATE CONFIG", "tests/booking.spec.ts": "// CANDIDATE SPEC" },
+        target: "https://preview.example.com",
+        targetRevision: "abc123",
+        env: { TEST_USER: "demo", ENVIRONMENT_NAME: "preview" },
+        location: "eu-west-1", checkName: "slots booking flow", testSessionName: "verify candidate",
+      });
+    } finally {
+      if (savedApiKey === undefined) delete process.env.CHECKLY_API_KEY;
+      else process.env.CHECKLY_API_KEY = savedApiKey;
+      if (savedAccountId === undefined) delete process.env.CHECKLY_ACCOUNT_ID;
+      else process.env.CHECKLY_ACCOUNT_ID = savedAccountId;
+    }
+    assert.equal(outcome.passed, true, outcome.reason ?? "no reason");
     assert.equal(outcome.testSessionId, "session-live");
     assert.deepEqual(outcome.checkResultIds, ["result-live"]);
     assert.equal(outcome.cloudRuns, 1);
+    // A failed child can emit anything to stderr. No unstructured output or
+    // raw provider exception becomes a report, even without a JSON file.
+    writeFileSync(cli, "#!/usr/bin/env node\nprocess.stderr.write('private-stderr-canary')\nprocess.exitCode = 7\n");
+    chmodSync(cli, 0o755);
+    process.env.CHECKLY_API_KEY = "synthetic-checkly-key";
+    process.env.CHECKLY_ACCOUNT_ID = "synthetic-checkly-account";
+    try {
+      const failed = await runChecklySandbox({
+        projectDir: project,
+        files: { "checkly.config.ts": "// CANDIDATE CONFIG", "tests/booking.spec.ts": "// CANDIDATE SPEC" },
+        target: "https://preview.example.com", env: { TEST_USER: "demo" },
+        location: "eu-west-1", checkName: "slots booking flow", testSessionName: "verify candidate",
+      });
+      assert.equal(failed.inconclusive, true);
+      assert.equal(failed.testSessionId, null);
+      assert.ok(!JSON.stringify(failed).includes("private-stderr-canary"));
+      assert.ok(!JSON.stringify(failed).includes("synthetic-checkly-key"));
+    } finally {
+      if (savedApiKey === undefined) delete process.env.CHECKLY_API_KEY;
+      else process.env.CHECKLY_API_KEY = savedApiKey;
+      if (savedAccountId === undefined) delete process.env.CHECKLY_ACCOUNT_ID;
+      else process.env.CHECKLY_ACCOUNT_ID = savedAccountId;
+    }
   });
 
   test("remote executor repeats every configured location and reports cloud cost", async () => {
@@ -87,7 +120,8 @@ const fs = require('node:fs')
 const args = process.argv.slice(2)
 const at = (name) => args[args.indexOf(name) + 1]
 const location = at('--location')
-fs.writeFileSync(process.env.CHECKLY_REPORTER_JSON_OUTPUT, JSON.stringify({ testSessionId: 'session-' + location, numChecks: 1, runLocation: location, checks: [{ result: 'Pass', name: 'slots booking flow', retries: 0, link: 'https://app.checklyhq.com/test-sessions/x/results/result-' + location }] }))
+const session = 'session-' + location + '-' + process.pid
+fs.writeFileSync(process.env.CHECKLY_REPORTER_JSON_OUTPUT, JSON.stringify({ testSessionId: session, numChecks: 1, runLocation: location, checks: [{ result: 'Pass', name: 'slots booking flow', checkType: 'PLAYWRIGHT', retries: 0, link: 'https://app.checklyhq.com/accounts/synthetic-account/test-sessions/' + session + '/results/result-' + process.pid }] }))
 `);
     chmodSync(cli, 0o755);
     const bundle = {
@@ -106,8 +140,15 @@ fs.writeFileSync(process.env.CHECKLY_REPORTER_JSON_OUTPUT, JSON.stringify({ test
       experiments: [{ durationSec: 1, repetitions: 2, expectStable: true }],
       assertionsInvolved: [],
     };
+    const invalidTarget = new ChecklyCliExecutor({ target: "invalid://private-stderr-canary", projectDir: project });
+    const refused = await invalidTarget.runScene(bundle, bundle.checkSource, scene);
+    assert.equal(refused.observed, "uncertain");
+    assert.equal(refused.repetitions, 0);
+    assert.ok(!JSON.stringify(refused).includes("private-stderr-canary"));
     const previous = process.env.CHECKLY_API_KEY;
+    const previousAccount = process.env.CHECKLY_ACCOUNT_ID;
     process.env.CHECKLY_API_KEY = "test-key";
+    process.env.CHECKLY_ACCOUNT_ID = "synthetic-account";
     try {
       const executor = new ChecklyCliExecutor({ target: "https://preview.example.com", projectDir: project });
       const observed = await executor.runScene(bundle, bundle.checkSource, scene, { config: bundle.config, files: bundle.files, phase: "candidate" });
@@ -122,6 +163,50 @@ fs.writeFileSync(process.env.CHECKLY_REPORTER_JSON_OUTPUT, JSON.stringify({ test
     } finally {
       if (previous === undefined) delete process.env.CHECKLY_API_KEY;
       else process.env.CHECKLY_API_KEY = previous;
+      if (previousAccount === undefined) delete process.env.CHECKLY_ACCOUNT_ID;
+      else process.env.CHECKLY_ACCOUNT_ID = previousAccount;
     }
   });
+});
+
+test("Checkly JSON reporter admission rejects forged accounts, retries, shadow keys, wrong source and stale status", () => {
+  const expected = { name: "slots booking multistep transaction", location: "eu-west-1",
+    checkType: "MULTI_STEP", accountId: "synthetic-account" };
+  const base = JSON.parse(report()) as Record<string, unknown> & { checks: Array<Record<string, unknown>> };
+  base.checks[0]!.name = expected.name;
+  base.checks[0]!.checkType = expected.checkType;
+  base.checks[0]!.filename = "checks/multistep-booking.check.ts";
+  const good = JSON.stringify(base);
+  assert.equal(parseChecklyReport(good, 0, "", 0, expected).inconclusive, false);
+  const tamper = (fn: (data: typeof base) => void) => {
+    const data = structuredClone(base);
+    fn(data);
+    const observed = parseChecklyReport(JSON.stringify(data), 0, "private-stderr-canary", 0, expected);
+    assert.equal(observed.inconclusive, true);
+    assert.equal(observed.cloudRuns, 0);
+    assert.equal(observed.testSessionId, null);
+    assert.equal(observed.checkResultIds.length, 0);
+    assert.ok(!JSON.stringify(observed).includes("private-stderr-canary"));
+  };
+  tamper((d) => { d.numChecks = 2; });
+  tamper((d) => { d.checks.push({ ...d.checks[0] }); });
+  tamper((d) => { d.runLocation = "us-east-1"; });
+  tamper((d) => { d.checks[0]!.retries = 1; });
+  tamper((d) => { delete d.checks[0]!.retries; });
+  tamper((d) => { d.checks[0]!.runError = "secret-from-provider"; });
+  tamper((d) => { d.checks[0]!.filename = "checks/multistep-booking.spec.ts"; });
+  tamper((d) => { d.checks[0]!.filename = "checks/other.check.ts"; });
+  tamper((d) => { d.checks[0]!.name = "other transaction"; });
+  tamper((d) => { d.checks[0]!.link = String(d.checks[0]!.link).replace("synthetic-account", "other-account"); });
+  tamper((d) => { d.checks[0]!.link = String(d.checks[0]!.link).replace("session-123", "other-session"); });
+  tamper((d) => { d.checks[0]!.link = String(d.checks[0]!.link).replace("app.checklyhq.com", "attacker.invalid"); });
+  assert.equal(parseChecklyReport(good, 1, "", 0, expected).inconclusive, true, "exit 1 cannot prove Pass");
+  assert.equal(parseChecklyReport(good.replace('"retries":0', '"retries":1,"retries":0'), 0, "", 0, expected).inconclusive,
+    true, "duplicate JSON keys cannot hide a retry");
+  const deep = structuredClone(base);
+  let nested: unknown = "value";
+  for (let i = 0; i < 36; i++) nested = { branch: nested };
+  deep.extra = nested;
+  assert.equal(parseChecklyReport(JSON.stringify(deep), 0, "", 0, expected).inconclusive, true,
+    "unused nested reporter data still obeys the raw schema bound");
 });

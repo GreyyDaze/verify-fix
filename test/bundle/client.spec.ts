@@ -42,15 +42,15 @@ test("client: API calls carry bearer + account headers; presigned downloads carr
   assert.deepEqual(c.calls.map((x) => x.url), ["get-check", "asset"]);
 });
 
-test("client: same-origin asset downloads carry Checkly auth; presigned downloads do not", async () => {
+test("client: same-origin asset downloads carry Checkly auth without pathname allow-listing", async () => {
   const { fetch, calls } = fakeFetch((url) => {
-    if (url.includes("/v1/check-results/chk/result/assets/redirect/archive.zip")) {
+    if (url.includes("/next/assets/check-run-data/eu-west-1/account%2Fsession%2Fresult%2Fassets.zip/redirect")) {
       return new Response(new Uint8Array([4, 5, 6]), { status: 200 });
     }
     return new Response("nope", { status: 404 });
   });
   const c = new ChecklyClient(creds, { fetchImpl: fetch, baseUrl: "https://api.checklyhq.com" });
-  const buf = await c.download("https://api.checklyhq.com/v1/check-results/chk/result/assets/redirect/archive.zip?signature=HIDDEN");
+  const buf = await c.download("https://api.checklyhq.com/next/assets/check-run-data/eu-west-1/account%2Fsession%2Fresult%2Fassets.zip/redirect?signature=HIDDEN");
   assert.deepEqual([...buf], [4, 5, 6]);
   const headers = calls[0].init.headers as Record<string, string>;
   assert.equal(headers.authorization, "Bearer cu_test_key");
@@ -178,7 +178,7 @@ test("credentials: env wins; otherwise the Checkly CLI login files are read; val
 });
 
 
-test("client: Checkly test-session asset URLs are allow-listed", async () => {
+test("client: Checkly test-session asset URLs are treated as trusted manifest assets", async () => {
   const { fetch, calls } = fakeFetch((url, init) => {
     if (url.startsWith("https://api.checklyhq.com/v1/test-sessions/session-1/results/result-1/assets/")) {
       const headers = init.headers as Record<string, string>;

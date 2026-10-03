@@ -16,7 +16,8 @@ if (!creds) throw new Error("Checkly credentials not found. Set CHECKLY_API_KEY 
 const outDir = process.env.VERIFY_FIX_ACCEPTANCE_OUT
   ?? join(tmpdir(), `verify-fix-checkly-acceptance-${Date.now()}`);
 const projectDir = process.env.VERIFY_FIX_ACCEPTANCE_PROJECT || null;
-const resultId = process.env.VERIFY_FIX_ACCEPTANCE_RESULT_ID || undefined;
+const resultId = process.env.VERIFY_FIX_ACCEPTANCE_RESULT_ID || process.env.VERIFY_FIX_ACCEPTANCE_FAIL_RESULT_ID || undefined;
+const passingResultId = process.env.VERIFY_FIX_ACCEPTANCE_PASS_RESULT_ID || undefined;
 mkdirSync(outDir, { recursive: true });
 
 const client = new ChecklyClient(creds, { userAgent: "verify-fix-real-checkly-acceptance/0.1.0" });
@@ -29,6 +30,7 @@ try {
     {
       checkId,
       resultId,
+      passingResultId,
       outDir,
       projectDir,
       historyLimit: 100,
@@ -53,6 +55,13 @@ try {
     }
   } else if (!m.recordings.failing || !m.recordings.passing) {
     throw new Error("REAL_CHECKLY_ACCEPTANCE_INCOMPLETE: result trace recordings were not captured");
+  }
+
+  if (resultId && m.results.failing?.id !== resultId) {
+    throw new Error(`REAL_CHECKLY_ACCEPTANCE_INCOMPLETE: requested failing result ${resultId} was not captured`);
+  }
+  if (passingResultId && m.results.passing?.id !== passingResultId) {
+    throw new Error(`REAL_CHECKLY_ACCEPTANCE_INCOMPLETE: requested passing result ${passingResultId} was not captured`);
   }
 
   console.log(JSON.stringify({

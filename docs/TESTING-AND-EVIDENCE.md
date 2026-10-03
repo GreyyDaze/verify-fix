@@ -170,14 +170,14 @@ VERIFY_FIX_ACCEPTANCE_RESULT_ID=<failing-result-id> \
 VERIFY_FIX_ACCEPTANCE_PASS_RESULT_ID=<passing-result-id> \
 VERIFY_FIX_ACCEPTANCE_TARGET=https://<real-target-origin> \
 VERIFY_FIX_ACCEPTANCE_ENV_FILE=/private/path/checkly.env \
+VERIFY_FIX_ACCEPTANCE_PATCH=/path/to/known-good-patch \
+VERIFY_FIX_ACCEPTANCE_PROJECT=/path/to/project \
 npm run test:checkly:verify
 ```
 
 Optional:
 
 ```bash
-VERIFY_FIX_ACCEPTANCE_PROJECT=<checkly-project-dir>
-VERIFY_FIX_ACCEPTANCE_PATCH=<known-good-patch-dir>
 VERIFY_FIX_ACCEPTANCE_OUT=<output-dir>
 ```
 
@@ -191,8 +191,6 @@ The full command:
 7. requires `UNCERTAIN` / exit 2
 8. writes JSON and Markdown reports for the PASS and FAILED cases
 
-The default known repair is the existing slots-booking per-location-user repair in `fixtures/patches/slots-booking-overlap/14-good-per-location-users`.
-
-The command is intentionally outside `npm test`. It requires real Checkly credentials, a controlled real target, and a private env file.
+The command is intentionally outside `npm test`. It requires real Checkly credentials, a controlled real target, a private env file, and explicit local paths for the candidate patch and dependency project. The example slots-booking project is only a demonstration/test fixture; it is not part of the CLI runtime and its `.env` is never committed or required by the CLI.
 
 The synthetic Multistep and API bundle tests remain explicitly named `contract:`. They do not count as live-provider evidence.

@@ -79,7 +79,7 @@ async function bundleFor(client: ChecklyClient, outDir: string) {
   );
 }
 
-test("remote manifest selection uses the full Multistep manifest and downloads selected evidence", async (t) => {
+test("contract: synthetic remote manifest selection uses the full Multistep manifest and downloads selected evidence", async (t) => {
   const { mkdtemp, rm } = await import("node:fs/promises");
   const out = await mkdtemp("/tmp/verify-fix-contract-");
   t.after(() => rm(out, { recursive: true, force: true }));
@@ -89,7 +89,7 @@ test("remote manifest selection uses the full Multistep manifest and downloads s
   assert.equal(client.downloads.length, 2, "one archive download per result");
 });
 
-test("remote Multistep downloads are byte-bounded", async (t) => {
+test("contract: synthetic Multistep downloads are byte-bounded", async (t) => {
   const { mkdtemp, rm } = await import("node:fs/promises");
   const out = await mkdtemp("/tmp/verify-fix-contract-");
   t.after(() => rm(out, { recursive: true, force: true }));
@@ -101,7 +101,7 @@ test("remote Multistep downloads are byte-bounded", async (t) => {
   assert.ok(MAX_ASSET_FILE_BYTES > 0);
 });
 
-test("bounded archive parsing returns the declared entry and rejects missing entries", () => {
+test("contract: bounded archive parsing returns the declared entry and rejects missing entries", () => {
   const archive = writeZip({ "selected.json": "selected", "other.json": "other" });
   const zip = openZipBounded(archive);
   assert.equal(zip.get("selected.json")?.().toString("utf8"), "selected");
@@ -109,7 +109,7 @@ test("bounded archive parsing returns the declared entry and rejects missing ent
   assert.throws(() => openZipBounded(Buffer.from("not-a-zip")), /zip:/);
 });
 
-test("remote manifest validation preserves contract rejection categories", async (t) => {
+test("contract: synthetic remote manifest validation preserves rejection categories", async (t) => {
   const { mkdtemp, rm } = await import("node:fs/promises");
   const cases: Array<[string, (id: string) => AssetManifestEntry[], RegExp]> = [
     ["bad source", () => [{

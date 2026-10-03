@@ -148,3 +148,35 @@ From lowest to highest external realism:
 6. complete protected production verification
 
 A lower level can prove a specific implementation property. It cannot automatically prove the levels above it.
+
+## 10. Dedicated real Checkly acceptance command
+
+The repository now has an explicit live-provider command:
+
+```bash
+VERIFY_FIX_ACCEPTANCE_CHECK_ID=<real-check-id> npm run test:checkly
+```
+
+Optional inputs:
+
+```bash
+VERIFY_FIX_ACCEPTANCE_PROJECT=<checkly-project-dir>
+VERIFY_FIX_ACCEPTANCE_RESULT_ID=<specific-failing-result-id>
+VERIFY_FIX_ACCEPTANCE_OUT=<output-dir>
+```
+
+The command uses real Checkly credentials from `CHECKLY_API_KEY` + `CHECKLY_ACCOUNT_ID`, or the credentials saved by `checkly login`.
+
+It performs these checks:
+
+1. fetches the named check from Checkly
+2. fetches real FINAL result history
+3. requires a real failing and passing result
+4. fetches the result evidence through the production bundle path
+5. requires the expected recording type for the check
+6. writes the resulting bundle to the requested output directory
+7. prints the result IDs, locations, history counts, asset count, and recording paths
+
+This command is intentionally outside `npm test`. It is the explicit provider-acceptance gate and must use controlled credentials and a controlled Checkly check.
+
+The synthetic Multistep and API bundle tests are now explicitly named `contract:` and remain deterministic mechanics tests. They do not count as live-provider evidence.

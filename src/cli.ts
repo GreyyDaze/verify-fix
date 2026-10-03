@@ -248,7 +248,7 @@ async function runBundle(args: Args): Promise<ExitCode> {
   }
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(args.check) || args.result && !/^[A-Za-z0-9_-]{1,128}$/.test(args.result)
     || args.targetUrl && !safeTargetOrigin(args.targetUrl)
-    || !Number.isSafeInteger(args.history) || args.history < 1 || args.history > 1000
+    || !Number.isSafeInteger(args.history) || args.history < 1 || args.history > 5000
     || !Number.isSafeInteger(args.measure) || args.measure < 0 || args.measure > 500
     || !Number.isSafeInteger(args.measureOverlap) || args.measureOverlap < 0 || args.measureOverlap > 500) {
     process.stderr.write("bundle identifier, target origin or measurement bound is invalid\n");

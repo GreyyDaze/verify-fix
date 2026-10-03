@@ -46,15 +46,21 @@ try {
   }
 
   if (m.check.checkType === "MULTI_STEP") {
-    if (!m.recordings.multistepFailing || !m.recordings.multistepPassing) {
-      throw new Error("REAL_CHECKLY_ACCEPTANCE_INCOMPLETE: Multistep recordings were not captured from Checkly assets");
+    // Multistep evidence is bound into the v3 multistep capture. Checkly does
+    // not expose it as a generic HAR/trace recording.
+    if (!m.multistep?.failing || !m.multistep?.passing) {
+      throw new Error("REAL_CHECKLY_ACCEPTANCE_INCOMPLETE: Multistep evidence was not normalized for both selected results");
     }
   } else if (m.check.checkType === "API") {
     if (!m.recordings.apiFailing || !m.recordings.apiPassing) {
-      throw new Error("REAL_CHECKLY_ACCEPTANCE_INCOMPLETE: API recordings were not captured");
+      throw new Error("REAL_CHECKLY_ACCEPTANCE_INCOMPLETE: API recordings were not captured for both selected results");
     }
-  } else if (!m.recordings.failing || !m.recordings.passing) {
-    throw new Error("REAL_CHECKLY_ACCEPTANCE_INCOMPLETE: result trace recordings were not captured");
+  } else {
+    // Checkly may retain a trace for only one of the selected runs. Require
+    // actual trace-derived evidence, but do not assume both runs have traces.
+    if (!m.recordings.failing && !m.recordings.passing) {
+      throw new Error("REAL_CHECKLY_ACCEPTANCE_INCOMPLETE: no real Checkly trace recording was captured");
+    }
   }
 
   if (resultId && m.results.failing?.id !== resultId) {

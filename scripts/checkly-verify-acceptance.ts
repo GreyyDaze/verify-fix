@@ -12,8 +12,6 @@ import { loadPatch } from "../src/patch.ts";
 
 const execFileAsync = promisify(execFile);
 const ROOT = resolve(import.meta.dirname, "..");
-const DEFAULT_PATCH = join(ROOT, "fixtures/patches/slots-booking-overlap/14-good-per-location-users");
-const DEFAULT_PROJECT = join(ROOT, "examples/slots-booking/web");
 
 function required(name: string): string {
   const value = process.env[name];
@@ -67,10 +65,10 @@ async function main(): Promise<void> {
   const passingResultId = required("VERIFY_FIX_ACCEPTANCE_PASS_RESULT_ID");
   const target = required("VERIFY_FIX_ACCEPTANCE_TARGET");
   const envFile = required("VERIFY_FIX_ACCEPTANCE_ENV_FILE");
+  const patchDir = resolve(required("VERIFY_FIX_ACCEPTANCE_PATCH"));
+  const projectDir = resolve(required("VERIFY_FIX_ACCEPTANCE_PROJECT"));
   if (!safeOrigin(target)) throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_CONFIG: target must be an origin URL");
 
-  const patchDir = resolve(process.env.VERIFY_FIX_ACCEPTANCE_PATCH ?? DEFAULT_PATCH);
-  const projectDir = resolve(process.env.VERIFY_FIX_ACCEPTANCE_PROJECT ?? DEFAULT_PROJECT);
   const outDir = resolve(process.env.VERIFY_FIX_ACCEPTANCE_OUT ?? mkdtempSync(join(tmpdir(), "verify-fix-real-")));
   const creds = resolveCredentials();
   if (!creds) throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_CONFIG: Checkly credentials are unavailable");

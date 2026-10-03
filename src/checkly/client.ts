@@ -149,7 +149,7 @@ export class ChecklyClient {
   private async request(method: string, url: string, signal: AbortSignal,
     init: { body?: unknown; accept?: string; authenticated?: boolean; allowAssetRedirect?: boolean } = {}): Promise<Response> {
     const apiOrigin = new URL(this.baseUrl).origin;
-    const authenticated = init.authenticated !== false;
+    let authenticated = init.authenticated !== false;
     let destination = httpsUrl(new URL(url, this.baseUrl).toString());
     if (authenticated && destination.origin !== apiOrigin) throw new Error("Checkly API request left its configured origin");
     const operation = operationOf(destination, authenticated);
@@ -187,6 +187,7 @@ export class ChecklyClient {
           // Follow that handoff without forwarding Checkly credentials.
           delete headers.authorization;
           delete headers["x-checkly-account"];
+          authenticated = false;
         } else if (authenticated && operationOf(next, true) !== operation) {
           throw new Error("Checkly API redirect changed its authorized origin or operation");
         }

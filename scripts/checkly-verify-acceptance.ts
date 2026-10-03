@@ -103,8 +103,9 @@ async function main(): Promise<void> {
     throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: no real browser evidence was captured");
   }
 
+  const loaded = loadBundle(outcome.outDir).bundle;
   const noOpPatch = join(outDir, "original-check.noop.ts");
-  writeFileSync(noOpPatch, manifest.checkSource, "utf8");
+  writeFileSync(noOpPatch, loaded.checkSource, "utf8");
   const reportDir = join(outDir, "reports");
   mkdirSync(reportDir, { recursive: true });
 
@@ -137,7 +138,6 @@ async function main(): Promise<void> {
   if (noOpJson?.verdict !== "FAILED" || noOpJson.exitCode !== 1) throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: no-op report is not FAILED/1");
   if (uncertainJson?.verdict !== "UNCERTAIN" || uncertainJson.exitCode !== 2) throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: missing-target report is not UNCERTAIN/2");
 
-  const loaded = loadBundle(outcome.outDir).bundle;
   const patch = loadPatch(patchDir, loaded);
   if (Object.keys(patch.files).length === 0) throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: known repair patch is empty");
 

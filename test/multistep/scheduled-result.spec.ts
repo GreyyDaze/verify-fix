@@ -136,7 +136,7 @@ test("remote manifest validation preserves contract rejection categories", async
     t.after(() => rm(out, { recursive: true, force: true }));
     const client = clientFor({ entries: makeEntries });
     const result = await bundleFor(client, out);
-    const problems = result.manifest.multistep?.problems ?? [];
+    const problems = result.manifest.multistep?.failing?.problems ?? [];
     assert.ok(problems.some((problem) => expected.test(problem)), `${name}: ${problems.join(", ")}`);
   }
 });

@@ -43,6 +43,7 @@ function clientFor(variant: {
   return {
     assetTypes,
     downloads,
+    calls: [],
     async getCheck() {
       return {
         id: "synthetic-check", name: "slots booking multistep transaction", checkType: "MULTI_STEP",
@@ -103,7 +104,7 @@ test("remote Multistep downloads are byte-bounded", async (t) => {
 test("bounded archive parsing returns the declared entry and rejects missing entries", () => {
   const archive = writeZip({ "selected.json": "selected", "other.json": "other" });
   const zip = openZipBounded(archive);
-  assert.equal(zip.get("selected.json")?.toString("utf8"), "selected");
+  assert.equal(zip.get("selected.json")?.().toString("utf8"), "selected");
   assert.equal(zip.get("missing.json"), undefined);
   assert.throws(() => openZipBounded(Buffer.from("not-a-zip")), /zip:/);
 });

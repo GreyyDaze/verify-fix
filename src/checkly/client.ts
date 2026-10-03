@@ -70,7 +70,8 @@ function httpsUrl(raw: string): URL {
   return url;
 }
 
-function operationOf(url: URL, authenticated: boolean): string {
+function operationOf(url: URL, authenticated: boolean, asset = false): string {
+  if (asset) return "asset";
   if (!authenticated) return "asset";
   if (/^\/v1\/checks\/[^/]+$/.test(url.pathname)) return "get-check";
   if (/^\/v2\/check-results\/[^/]+$/.test(url.pathname)) return "list-results";
@@ -148,12 +149,12 @@ export class ChecklyClient {
   }
 
   private async request(method: string, url: string, signal: AbortSignal,
-    init: { body?: unknown; accept?: string; authenticated?: boolean; allowAssetRedirect?: boolean } = {}): Promise<Response> {
+    init: { body?: unknown; accept?: string; authenticated?: boolean; asset?: boolean; allowAssetRedirect?: boolean } = {}): Promise<Response> {
     const apiOrigin = new URL(this.baseUrl).origin;
     let authenticated = init.authenticated !== false;
     let destination = httpsUrl(new URL(url, this.baseUrl).toString());
     if (authenticated && destination.origin !== apiOrigin) throw new Error("Checkly API request left its configured origin");
-    const operation = operationOf(destination, authenticated);
+    const operation = operationOf(destination, authenticated, init.asset === true);
     if (authenticated && operation === "checkly-api") throw new Error("Checkly API operation is not allow-listed");
     const headers: Record<string, string> = { "user-agent": this.userAgent, accept: init.accept ?? "application/json" };
     // Asset requests carry NO Checkly credentials, even if an asset URL happens
@@ -171,7 +172,7 @@ export class ChecklyClient {
     let redirects = 0;
     for (;;) {
       const res = await this.fetchImpl(destination.toString(), { method, headers, body, redirect: "manual", signal });
-      this.calls.push({ method, url: operationOf(destination, authenticated), status: res.status });
+      this.calls.push({ method, url: operationOf(destination, authenticated, init.asset === true), status: res.status });
       if ([301, 302, 303, 307, 308].includes(res.status)) {
         const location = res.headers.get("location");
         await res.body?.cancel();
@@ -180,7 +181,7 @@ export class ChecklyClient {
         }
         const next = httpsUrl(new URL(location, destination).toString());
         if (authenticated && next.origin !== apiOrigin) {
-          if (!init.allowAssetRedirect || operation !== "list-assets") {
+          if (!init.allowAssetRedirect || operation !== "asset") {
             throw new Error("Checkly API redirect changed its authorized origin or operation");
           }
           // Checkly asset manifests can point at API-origin redirect URLs that
@@ -254,7 +255,7 @@ export class ChecklyClient {
       const destination = new URL(url);
       const apiOrigin = new URL(this.baseUrl).origin;
       const authenticated = destination.origin === apiOrigin;
-      const res = await this.request("GET", url, signal, { accept: "*/*", authenticated, allowAssetRedirect: true });
+      const res = await this.request("GET", url, signal, { accept: "*/*", authenticated, asset: true, allowAssetRedirect: true });
       if (!res.ok) {
         await res.body?.cancel();
         throw new ChecklyApiError(res.status, "asset", "remote asset download failed");

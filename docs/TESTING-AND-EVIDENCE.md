@@ -36,9 +36,7 @@ Remote asset tests cover:
 - duplicate evidence names
 - bounded ZIP parsing
 
-These are important because they test failure boundaries deterministically.
-
-They do not prove that the live Checkly API currently returns those exact shapes.
+These test failure boundaries deterministically. They do not prove that the live Checkly API currently returns those exact shapes.
 
 ## 3. Current CLI integration examples
 
@@ -50,15 +48,13 @@ Important tests include:
 - test/checkly-sandbox.spec.ts
 - test/playwright-sandbox.spec.ts
 
-These tests exercise real production CLI code instead of calling only individual helper functions.
-
-Some deliberately replace external services with local stand-ins. That is useful for deterministic testing but must not be described as a live-provider test.
+These exercise production CLI code. Some deliberately replace external services with local stand-ins. That is useful for deterministic testing but is not live-provider evidence.
 
 ## 4. Real application evidence
 
 The seeded slots-booking application is used to reproduce real application behavior.
 
-The verification tests check things such as:
+The verification tests check:
 - the original failure is actually observed
 - the verifier contacts the application
 - a good repair passes
@@ -67,13 +63,9 @@ The verification tests check things such as:
 - configuration-only or retry-only changes do not create a false PASS
 - repeated observations remain deterministic where required
 
-This is stronger than testing only parsed objects because the verifier actually exercises application behavior.
-
 ## 5. Real Checkly acceptance
 
-The real provider acceptance path should be treated separately from npm test.
-
-Required evidence:
+The live provider path is separate from npm test:
 
 ```
 authenticated Checkly credentials
@@ -87,52 +79,53 @@ real failing + passing results
 real result assets
         ↓
 verify-fix bundle
+        ↓
+existing verifier
+        ↓
+CLI decision + exit code
 ```
 
-For the current Multistep work, the external authenticated bundle is the acceptance evidence.
+The repository now has two acceptance levels:
+
+1. bundle acceptance: proves real Checkly discovery, result selection, evidence acquisition, parsing, normalization, and leak protection
+2. verification acceptance: proves the real captured bundle reaches the actual CLI verifier and produces PASS, FAILED, and UNCERTAIN correctly
 
 ## 6. What the normal test suite should not claim
 
-The following statements are too strong for mocked-provider tests:
-
-- Checkly returned the expected manifest.
-- Checkly accepted the request.
-- the live Checkly asset endpoint works.
-- the provider's current response shape is proven.
+Mocked-provider tests must not be described as proof that:
+- Checkly returned the expected live manifest
+- Checkly accepted the request
+- the live Checkly asset endpoint works
+- the provider's current response shape is proven
 
 Correct wording:
+- the provider contract is tested with a synthetic manifest
+- the HTTP client behavior is tested with a controlled response
+- the CLI path is tested with a local provider stand-in
+- live Checkly acceptance was verified separately
 
-- the provider contract is tested with a synthetic manifest.
-- the HTTP client behavior is tested with a controlled response.
-- the CLI path is tested with a local provider stand-in.
-- live Checkly acceptance was verified separately.
+## 7. Acceptance gaps
 
-## 7. Gaps to fix
+### Gap 1: Live credentials must stay out of npm test
 
-### Gap 1: No permanent live-provider automated gate
+The normal suite remains credential-free. Live acceptance uses an explicit command and controlled credentials.
 
-The normal test suite does not use real Checkly credentials. This is good for deterministic development, but there should be a separate acceptance command or protected workflow for live-provider verification.
+### Gap 2: Bundle acceptance is not verification acceptance
 
-### Gap 2: Bundle acceptance and verify acceptance should be separate
+A real bundle proves provider acquisition. It does not by itself prove that the verifier can grade a candidate against the captured incident.
 
-Capturing a real bundle proves provider acquisition. It does not automatically prove that the full candidate verification path passes against a real deployed target.
+The dedicated verification acceptance closes that gap.
 
-Both should have explicit acceptance procedures.
+### Gap 3: Live target and candidate credentials are external inputs
 
-### Gap 3: Test names should communicate evidence level
-
-Tests using fakeFetch, synthetic manifests, or local Checkly stand-ins should make that clear in the test name or file documentation.
-
-### Gap 4: Do not make live credentials part of npm test
-
-Real provider tests should not run on every developer test command. They should be an explicit acceptance step with protected credentials and controlled targets.
+The full verification acceptance intentionally requires a real target origin and a private env file. These values are never written into the bundle or reports.
 
 ## 8. Acceptance standard
 
 A feature is fully accepted only when both are true:
 
-1. deterministic tests prove the implementation invariants
-2. the real-provider acceptance path proves the external integration
+1. deterministic tests prove implementation invariants
+2. real-provider acceptance proves the external integration and the end-to-end verification decision
 
 Neither replaces the other.
 
@@ -144,39 +137,62 @@ From lowest to highest external realism:
 2. synthetic provider contract test
 3. CLI integration against local stand-in
 4. CLI against a real local/deployed application
-5. authenticated real-provider acceptance
-6. complete protected production verification
+5. authenticated real-provider bundle acceptance
+6. authenticated real-provider verification acceptance
+7. complete protected production verification
 
-A lower level can prove a specific implementation property. It cannot automatically prove the levels above it.
+A lower level cannot automatically prove the levels above it.
 
-## 10. Dedicated real Checkly acceptance command
+## 10. Dedicated live Checkly commands
 
-The repository now has an explicit live-provider command:
+### Bundle acceptance
 
 ```bash
 VERIFY_FIX_ACCEPTANCE_CHECK_ID=<real-check-id> npm run test:checkly
 ```
 
-Optional inputs:
+Optional:
 
 ```bash
 VERIFY_FIX_ACCEPTANCE_PROJECT=<checkly-project-dir>
 VERIFY_FIX_ACCEPTANCE_RESULT_ID=<specific-failing-result-id>
+VERIFY_FIX_ACCEPTANCE_PASS_RESULT_ID=<specific-passing-result-id>
 VERIFY_FIX_ACCEPTANCE_OUT=<output-dir>
 ```
 
-The command uses real Checkly credentials from `CHECKLY_API_KEY` + `CHECKLY_ACCOUNT_ID`, or the credentials saved by `checkly login`.
+This command fetches the real check, real FINAL history, selected failing/passing results, real evidence, and writes the production bundle.
 
-It performs these checks:
+### Full verification acceptance
 
-1. fetches the named check from Checkly
-2. fetches real FINAL result history
-3. requires a real failing and passing result
-4. fetches the result evidence through the production bundle path
-5. requires the expected recording type for the check
-6. writes the resulting bundle to the requested output directory
-7. prints the result IDs, locations, history counts, asset count, and recording paths
+```bash
+VERIFY_FIX_ACCEPTANCE_CHECK_ID=<real-check-id> \
+VERIFY_FIX_ACCEPTANCE_RESULT_ID=<failing-result-id> \
+VERIFY_FIX_ACCEPTANCE_PASS_RESULT_ID=<passing-result-id> \
+VERIFY_FIX_ACCEPTANCE_TARGET=https://<real-target-origin> \
+VERIFY_FIX_ACCEPTANCE_ENV_FILE=/private/path/checkly.env \
+npm run test:checkly:verify
+```
 
-This command is intentionally outside `npm test`. It is the explicit provider-acceptance gate and must use controlled credentials and a controlled Checkly check.
+Optional:
 
-The synthetic Multistep and API bundle tests are now explicitly named `contract:` and remain deterministic mechanics tests. They do not count as live-provider evidence.
+```bash
+VERIFY_FIX_ACCEPTANCE_PROJECT=<checkly-project-dir>
+VERIFY_FIX_ACCEPTANCE_PATCH=<known-good-patch-dir>
+VERIFY_FIX_ACCEPTANCE_OUT=<output-dir>
+```
+
+The full command:
+1. captures the real Checkly incident through the production bundle path
+2. runs the actual CLI verifier with the known valid repair
+3. requires `PASS` / exit 0
+4. runs the captured original check as a no-op candidate
+5. requires `FAILED` / exit 1
+6. runs the valid repair without `--target`
+7. requires `UNCERTAIN` / exit 2
+8. writes JSON and Markdown reports for the PASS and FAILED cases
+
+The default known repair is the existing slots-booking per-location-user repair in `fixtures/patches/slots-booking-overlap/14-good-per-location-users`.
+
+The command is intentionally outside `npm test`. It requires real Checkly credentials, a controlled real target, and a private env file.
+
+The synthetic Multistep and API bundle tests remain explicitly named `contract:`. They do not count as live-provider evidence.

@@ -75,6 +75,7 @@ function operationOf(url: URL, authenticated: boolean): string {
   if (/^\/v1\/checks\/[^/]+$/.test(url.pathname)) return "get-check";
   if (/^\/v2\/check-results\/[^/]+$/.test(url.pathname)) return "list-results";
   if (/^\/v1\/check-results\/[^/]+\/[^/]+\/assets(?:\/.*)?$/.test(url.pathname)) return "list-assets";
+  if (/^\/v1\/test-sessions\/[^/]+\/results\/[^/]+\/assets(?:\/.*)?$/.test(url.pathname)) return "list-assets";
   if (/^\/v1\/check-results\/[^/]+\/[^/]+$/.test(url.pathname)) return "get-result";
   if (/^\/v1\/error-groups\/(?:checks\/)?[^/]+$/.test(url.pathname)) return "error-group";
   if (/^\/v1\/root-cause-analyses\/(?:error-groups\/)?[^/]+$/.test(url.pathname)) return "rca";

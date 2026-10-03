@@ -21,7 +21,8 @@
     "prepack": "npm run build",
     "test": "node --no-warnings --test \"test/**/*.spec.ts\"",
     "typecheck": "tsc --noEmit",
-    "verify": "node src/cli.ts"
+    "verify": "node src/cli.ts",
+    "test:checkly": "node --no-warnings scripts/checkly-acceptance.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0"

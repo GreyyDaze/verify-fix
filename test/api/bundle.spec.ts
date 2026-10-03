@@ -53,7 +53,8 @@ test("contract: synthetic Checkly API bundle captures sanitized request, respons
   cpSync("incidents/slots-availability-api/check/checks", join(project, "checks"), { recursive: true });
   const failing = summary("api-failing", false, "2026-09-24T10:10:00.000Z");
   const passing = summary("api-passing", true, "2026-09-24T10:05:00.000Z");
-  // Synthetic ChecklyClient: validates bundle mechanics only; this test does not prove live Checkly API shapes.\n  const client = {
+  // Synthetic ChecklyClient: validates bundle mechanics only; this test does not prove live Checkly API shapes.
+  const client = {
     calls: [],
     async getCheck() {
       return {

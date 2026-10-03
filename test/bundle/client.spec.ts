@@ -177,6 +177,23 @@ test("credentials: env wins; otherwise the Checkly CLI login files are read; val
   }
 });
 
+
+test("client: Checkly test-session asset URLs are allow-listed", async () => {
+  const { fetch, calls } = fakeFetch((url, init) => {
+    if (url.startsWith("https://api.checklyhq.com/v1/test-sessions/session-1/results/result-1/assets/")) {
+      const headers = init.headers as Record<string, string>;
+      assert.equal(headers.authorization, "Bearer cu_test_key");
+      assert.equal(headers["x-checkly-account"], "acct-123");
+      return new Response(new Uint8Array([10, 11, 12]), { status: 200 });
+    }
+    return new Response("nope", { status: 404 });
+  });
+  const c = new ChecklyClient(creds, { fetchImpl: fetch, baseUrl: "https://api.checklyhq.com" });
+  const buf = await c.download("https://api.checklyhq.com/v1/test-sessions/session-1/results/result-1/assets/archive.zip");
+  assert.deepEqual([...buf], [10, 11, 12]);
+  assert.equal(calls.length, 1);
+});
+
 test("client: API-origin asset redirect hands off to presigned storage without credentials", async () => {
   const { fetch, calls } = fakeFetch((url, init) => {
     if (url.startsWith("https://api.checklyhq.com/v1/check-results/chk/result/assets/")) {

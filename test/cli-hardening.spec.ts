@@ -26,7 +26,7 @@ test("CLI rejects ambiguous and secret-bearing inputs without echo or running a 
       ["bundle", "--check", "some-check", "private-canary-value"],
       ["bundle", "--check", "some-check", "--bogus=private-canary-value"],
       ["bundle", "--check", "some-check", "--result=../private-canary-value"],
-      ["bundle", "--check", "some-check", "--history=501"],
+      ["bundle", "--check", "some-check", "--history=5001"],
       ["bundle", "--check", "some-check", "--measure=Infinity"],
       ["bundle", "--check", "some-check", "--target-url=https://example.test/api?token=private-canary-value"],
       ["verify", "--patch", patch, "--bundle", bundle, "--target=https://user:private-canary-value@example.test"],

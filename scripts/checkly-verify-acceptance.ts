@@ -20,7 +20,7 @@ function required(name: string): string {
 }
 
 function safeOrigin(raw: string): boolean {
-  if (raw.length === 0 || raw.length > 2048 || /[\\x00-\\x20\\x7f\\\\]/.test(raw)) return false;
+  if (raw.length === 0 || raw.length > 2048 || /[\x00-\x20\x7f\\]/.test(raw)) return false;
   try {
     const url = new URL(raw);
     return (url.protocol === "https:" || url.protocol === "http:")

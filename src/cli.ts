@@ -230,7 +230,7 @@ function usage(): string {
     "      --env-file gives the check its own variables (KEY=VALUE lines, like `checkly test --env-file`).",
     "",
     "  verify-fix measure --bundle <dir> --target <url> --project <dir> [--runs 20] [--env-file <file>] [--verbose]",
-    "      Runs the original Playwright check locally through its reproduction mode, then writes measured",
+    "      Runs the original Playwright or Multistep check against its reproduction mode, then writes measured",
     "      determinism numbers to manifest.json with method local-runner. No Checkly credentials are used.",
     "",
     "  verify-fix cost-report --reports <dir> [--json]",

@@ -171,6 +171,29 @@ describe("measured real bundles", () => {
     const driftFix = loadPatch(join(ROOT, "fixtures/patches/slots-booking-drift/01-good-rename"), drift);
     assert.equal(buildContract(overlap, patchedCheckSource(overlap, overlapFix)).determinismGate.blocked, false);
     assert.equal(buildContract(drift, patchedCheckSource(drift, driftFix)).determinismGate.blocked, false);
+
+    const persistentMultiStep = {
+      ...drift,
+      check: { ...drift.check, checkType: "MULTI_STEP" },
+      determinism: {
+        ...drift.determinism,
+        achieved: 20,
+        targetRuns: 20,
+        sequentialPassRate: 0,
+        reproductionFailRate: 1,
+        baselinePassRate: 0,
+        method: "local-runner" as const,
+      },
+    };
+    assert.equal(buildContract(persistentMultiStep, patchedCheckSource(drift, driftFix)).determinismGate.blocked, false,
+      "a reproducible sequential Multistep failure has no healthy baseline requirement");
+
+    const intermittentMultiStep = {
+      ...persistentMultiStep,
+      determinism: { ...persistentMultiStep.determinism, sequentialPassRate: 0.5, baselinePassRate: 0.5 },
+    };
+    assert.equal(buildContract(intermittentMultiStep, patchedCheckSource(drift, driftFix)).determinismGate.blocked, true,
+      "an inconsistent sequential baseline must still block");
   });
 
   test("an API-only browser replay without --target is inconclusive before Playwright starts", async () => {

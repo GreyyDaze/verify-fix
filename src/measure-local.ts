@@ -98,9 +98,12 @@ export async function measureLocalDeterminism(opts: LocalMeasureOptions): Promis
   try {
     const sequentialScene = measuredScene(reproduction, "measure-sequential", "live");
     const seqStart = records.length;
-    await executor.runScene(bundle, bundle.checkSource, sequentialScene, ctx);
+    const sequentialObservation = await executor.runScene(bundle, bundle.checkSource, sequentialScene, ctx);
     const sequentialRecords = records.slice(seqStart);
-    if (sequentialRecords.length !== runs) throw new Error(`sequential measurement completed ${sequentialRecords.length}/${runs} runs`);
+    if (sequentialRecords.length !== runs) {
+      const reason = sequentialObservation.reason ? `: ${sequentialObservation.reason}` : "";
+      throw new Error(`sequential measurement completed ${sequentialRecords.length}/${runs} runs${reason}`);
+    }
 
     const request = manifest.failurePoint?.request ?? null;
     const sequentialPassed = countMeasuredPasses(sequentialRecords, request, isMultiStep);

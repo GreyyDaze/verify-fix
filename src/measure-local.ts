@@ -111,9 +111,12 @@ export async function measureLocalDeterminism(opts: LocalMeasureOptions): Promis
     let overlap: LocalMeasureResult["overlap"] = null;
     if (parsed.kind === "live-concurrent") {
       const overlapStart = records.length;
-      await executor.runScene(bundle, bundle.checkSource, measuredScene(reproduction, "measure-reproduction", reproduction.mode), ctx);
+      const overlapObservation = await executor.runScene(bundle, bundle.checkSource, measuredScene(reproduction, "measure-reproduction", reproduction.mode), ctx);
       const overlapRecords = records.slice(overlapStart);
-      if (overlapRecords.length !== runs) throw new Error(`overlap measurement completed ${overlapRecords.length}/${runs} pairs`);
+      if (overlapRecords.length !== runs) {
+        const reason = overlapObservation.reason ? `: ${overlapObservation.reason}` : "";
+        throw new Error(`overlap measurement completed ${overlapRecords.length}/${runs} pairs${reason}`);
+      }
       const pairsWithFailure = overlapRecords.filter((r) => {
         if (isMultiStep || !request) return !r.checkPassed;
         return matchingHits(r, request).some((h) => h.status === request.status);

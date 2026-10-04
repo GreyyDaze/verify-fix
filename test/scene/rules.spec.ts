@@ -13,7 +13,7 @@ import { loadBundle } from "../../src/bundle.ts";
 import { loadCandidateProject, loadPatch, patchedConfig, patchedCheckSource, newFiles } from "../../src/patch.ts";
 import { parseInventory, inventoryDiff } from "../../src/assertion/inventory.ts";
 import { buildContract } from "../../src/contract/contract.ts";
-import { detectEnvScopeDodge, regionalUserEnvKey, SceneExecutor } from "../../src/executor/scene.ts";
+import { detectEnvScopeDodge, matchesTargetOrigin, regionalUserEnvKey, SceneExecutor } from "../../src/executor/scene.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const INCIDENT_DIR = join(ROOT, "fixtures/slots-booking/bundle/incidents/slots-booking-overlap");
@@ -141,6 +141,17 @@ describe("Playwright locator drift", () => {
     const diff = inventoryDiff(parseInventory("x.spec.ts", original), parseInventory("x.spec.ts", patched));
     assert.equal(diff.removed.length, 1);
     assert.match(diff.removed[0].subject, /book-status/);
+  });
+});
+
+describe("Multistep target ownership", () => {
+  test("accepts only a bare env-file origin that matches the explicit target", () => {
+    assert.equal(matchesTargetOrigin("https://slots-booking-verify-fix.vercel.app/", "https://slots-booking-verify-fix.vercel.app"), true);
+    assert.equal(matchesTargetOrigin("https://other.example", "https://slots-booking-verify-fix.vercel.app"), false);
+    assert.equal(matchesTargetOrigin("https://user:pass@slots-booking-verify-fix.vercel.app", "https://slots-booking-verify-fix.vercel.app"), false);
+    assert.equal(matchesTargetOrigin("https://slots-booking-verify-fix.vercel.app/path", "https://slots-booking-verify-fix.vercel.app"), false);
+    assert.equal(matchesTargetOrigin("https://slots-booking-verify-fix.vercel.app?x=1", "https://slots-booking-verify-fix.vercel.app"), false);
+    assert.equal(matchesTargetOrigin("https://slots-booking-verify-fix.vercel.app", null), false);
   });
 });
 

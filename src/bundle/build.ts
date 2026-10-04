@@ -922,8 +922,10 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     if (!entries.length || nextId === previousNextId) break;
     // Once both sides exist, older pages cannot improve the selected passing
     // control. Stop early while preserving the explicit bound.
-    const hasFailure = history.some((r) => !isOk(r));
-    const hasPass = history.some((r) => isOk(r));
+    const hasRequestedFailure = !opts.resultId || history.some((r) => r.id === opts.resultId);
+    const hasRequestedPass = !opts.passingResultId || history.some((r) => r.id === opts.passingResultId);
+    const hasFailure = opts.resultId ? hasRequestedFailure : history.some((r) => !isOk(r));
+    const hasPass = opts.passingResultId ? hasRequestedPass : history.some((r) => isOk(r));
     if (hasFailure && hasPass) break;
   } while (nextId !== null);
   history.sort((a, b) => b.startedAt.localeCompare(a.startedAt));

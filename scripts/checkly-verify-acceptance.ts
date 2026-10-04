@@ -109,6 +109,21 @@ async function main(): Promise<void> {
   const reportDir = join(outDir, "reports");
   mkdirSync(reportDir, { recursive: true });
 
+  // Measure the captured baseline before candidate verification so the determinism gate
+  // has real repeated-run evidence instead of silently remaining at 0/20.
+  const measurement = await runCli([
+    "measure", "--bundle", outcome.outDir,
+    "--target", target, "--project", projectDir, "--env-file", envFile,
+    "--runs", "20", "--json",
+  ]);
+  assertCode("20-run determinism measurement", measurement.code, 0, measurement.stdout + measurement.stderr);
+  let determinism: Record<string, unknown>;
+  try {
+    determinism = JSON.parse(measurement.stdout) as Record<string, unknown>;
+  } catch {
+    throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: determinism measurement returned invalid JSON");
+  }
+
   const good = await runCli([
     "verify", "--patch", patchDir, "--bundle", outcome.outDir,
     "--target", target, "--project", projectDir, "--env-file", envFile, "--json",
@@ -145,6 +160,7 @@ async function main(): Promise<void> {
     check: { id: manifest.check.id, name: manifest.check.name, type: manifest.check.checkType },
     results: { failing: resultId, passing: passingResultId },
     evidence: { failingRecording: manifest.recordings.failing, passingRecording: manifest.recordings.passing, outDir: outcome.outDir },
+    determinism,
     verification: {
       goodRepair: { verdict: goodJson?.verdict, exitCode: goodJson?.exitCode },
       noOp: { verdict: noOpJson?.verdict, exitCode: noOpJson?.exitCode },

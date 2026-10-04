@@ -84,7 +84,7 @@ async function main(): Promise<void> {
       passingResultId,
       outDir,
       projectDir,
-      historyLimit: 100,
+      historyLimit: 10000,
       bodies: "api",
       keepRaw: false,
     }, { client, accountId: creds.accountId, toolVersion: "0.1.0" });
@@ -96,11 +96,16 @@ async function main(): Promise<void> {
   const manifest = outcome.manifest;
   if (manifest.results.failing?.id !== resultId) throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: requested failing result was not captured");
   if (manifest.results.passing?.id !== passingResultId) throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: requested passing result was not captured");
-  if (manifest.check.checkType !== "PLAYWRIGHT") {
-    throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_CONFIG: full verification acceptance currently targets the Playwright slots-booking check; got " + manifest.check.checkType);
-  }
-  if (!manifest.recordings.failing && !manifest.recordings.passing) {
-    throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: no real browser evidence was captured");
+  if (manifest.check.checkType === "MULTI_STEP") {
+    if (!manifest.recordings.multistepFailing || !manifest.recordings.multistepPassing) {
+      throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: real Multistep evidence is not bound for both selected results");
+    }
+  } else if (manifest.check.checkType === "PLAYWRIGHT") {
+    if (!manifest.recordings.failing && !manifest.recordings.passing) {
+      throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: no real browser evidence was captured");
+    }
+  } else {
+    throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_CONFIG: full verification acceptance supports Playwright and Multistep checks; got " + manifest.check.checkType);
   }
 
   const loaded = loadBundle(outcome.outDir).bundle;

@@ -133,10 +133,20 @@ export function buildContract(bundle: Bundle, patchedSource: string, patchedFile
     // persistent `live` drift incident has no green baseline on the current
     // target; its one-at-a-time failures are the reproduction itself.
     const baselinePassRate = bundle.determinism.baselinePassRate === undefined ? bundle.determinism.sequentialPassRate : bundle.determinism.baselinePassRate;
-    if (baselinePassRate !== null && baselinePassRate !== 1) {
+    // A Multistep source-bound failure that reproduces in every one-at-a-time
+    // local run is a persistent check failure, not a concurrency incident
+    // with a healthy sequential baseline. The candidate still has to pass the
+    // full reproduction and scene checks; only the inapplicable green-baseline
+    // requirement is waived.
+    const persistentMultiStepFailure = bundle.check.checkType === "MULTI_STEP"
+      && bundle.determinism.method === "local-runner"
+      && bundle.determinism.achieved >= bundle.determinism.targetRuns
+      && bundle.determinism.sequentialPassRate === 0
+      && reproductionFailRate === 1;
+    if (!persistentMultiStepFailure && baselinePassRate !== null && baselinePassRate !== 1) {
       return { blocked: true, reason: `baseline pass-rate ${baselinePassRate * 100}% ≠ 100% — healthy baseline is not deterministic` };
     }
-    return { blocked: false, reason: `determinism gate passed${bundle.determinism.method ? ` (${bundle.determinism.method})` : ""}` };
+    return { blocked: false, reason: `determinism gate passed${persistentMultiStepFailure ? " (persistent Multistep failure reproduced locally)" : bundle.determinism.method ? ` (${bundle.determinism.method})` : ""}` };
   })();
 
   const suppressionCandidates = patched.assertions

@@ -17,7 +17,7 @@ import type { ProxyHit } from "./scene/proxy.ts";
 import { parseMode } from "./scene/modes.ts";
 import { bundleReadme } from "./bundle/build.ts";
 
-interface MeasurementRecord {
+export interface MeasurementRecord {
   checkPassed: boolean;
   hits: ProxyHit[];
 }
@@ -46,6 +46,20 @@ function rate(n: number, total: number): number {
 function matchingHits(record: MeasurementRecord, req: NonNullable<ManifestV3["failurePoint"]>["request"]): ProxyHit[] {
   if (!req) return [];
   return record.hits.filter((h) => h.method === req.method && h.path === req.path);
+}
+
+/** Count the original check's healthy repetitions without confusing a Multistep
+ * HTTP 200 response with a passing assertion result. */
+export function countMeasuredPasses(
+  records: readonly MeasurementRecord[],
+  request: NonNullable<ManifestV3["failurePoint"]>["request"],
+  isMultiStep: boolean,
+): number {
+  return records.filter((record) => {
+    if (isMultiStep || !request) return record.checkPassed;
+    const hits = matchingHits(record, request);
+    return hits.length > 0 && hits.every((hit) => hit.status === request.passingStatus);
+  }).length;
 }
 
 export async function measureLocalDeterminism(opts: LocalMeasureOptions): Promise<LocalMeasureResult> {
@@ -89,13 +103,7 @@ export async function measureLocalDeterminism(opts: LocalMeasureOptions): Promis
     if (sequentialRecords.length !== runs) throw new Error(`sequential measurement completed ${sequentialRecords.length}/${runs} runs`);
 
     const request = manifest.failurePoint?.request ?? null;
-    // For Multistep, HTTP status is not the check verdict: a stale assertion
-    // can fail on a valid 200 response. Measure the actual test result.
-    const sequentialPassed = sequentialRecords.filter((r) => {
-      if (isMultiStep || !request) return r.checkPassed;
-      const hits = matchingHits(r, request);
-      return hits.length > 0 && hits.every((h) => h.status === request.passingStatus);
-    }).length;
+    const sequentialPassed = countMeasuredPasses(sequentialRecords, request, isMultiStep);
 
     let overlap: LocalMeasureResult["overlap"] = null;
     if (parsed.kind === "live-concurrent") {

@@ -82,7 +82,7 @@ test('slots booking multistep transaction', async ({ request }) => {
       token?: unknown
     }
     expect(body.ok).toBe(true)
-    expect(typeof body.booking.account).toBe('string')
+    expect(typeof body.account).toBe('string')
     expect(body.account).toBe(account)
     expect(typeof body.version).toBe('number')
     expect(body.version).toBeGreaterThan(0)
@@ -107,7 +107,7 @@ test('slots booking multistep transaction', async ({ request }) => {
     }
     expect(body.valid).toBe(true)
     expect(typeof body.account).toBe('string')
-    expect(body.booking.account).toBe(loginAccount)
+    expect(body.account).toBe(loginAccount)
     expect(body.tokenVersion).toBe(loginVersion)
     expect(body.currentVersion).toBe(loginVersion)
     sessionAccount = body.account as string
@@ -144,8 +144,8 @@ test('slots booking multistep transaction', async ({ request }) => {
     }
     expect(body.booking.confirmed).toBe(true)
     expect(body.booking.status).toBe('CONFIRMED')
-    expect(typeof body.account).toBe('string')
-    expect(body.account).toBe(loginAccount)
+    expect(typeof body.booking.account).toBe('string')
+    expect(body.booking.account).toBe(loginAccount)
     expect(body.booking.slot).toBe(SELECTED_SLOT)
     expect(body.booking.slot).toBe('09:30')
     expect(body.booking.sessionVersion).toBe(loginVersion)

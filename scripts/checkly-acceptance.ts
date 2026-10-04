@@ -33,7 +33,9 @@ try {
       passingResultId,
       outDir,
       projectDir,
-      historyLimit: 100,
+      // Explicit result IDs may be several days old. Page through bounded history
+      // instead of trying the detail endpoint for an ID Checkly can still serve assets for.
+      historyLimit: 10000,
       bodies: "api",
       log: (line) => process.stderr.write(`[acceptance] ${line}\n`),
     },

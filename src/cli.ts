@@ -374,7 +374,13 @@ async function runMeasure(args: Args): Promise<ExitCode> {
     }
     return 0;
   } catch (err) {
-    process.stderr.write("measure unavailable: private input, bundle or local runner rejected\n");
+    const raw = err instanceof Error ? err.message : String(err);
+    const safe = raw
+      .replace(/https?:\/\/[^\s)\]}>"]+/g, "<redacted-url>")
+      .replace(/\b((?:CHECKLY_)?(?:SECRET|TOKEN|KEY|USER)[A-Z0-9_]*)\s*=\s*[^\s,;]+/gi, "$1=<redacted>")
+      .replace(/\/(?:Users|private|var|tmp)\/[^\s:]+/g, "<path>")
+      .slice(0, 300);
+    process.stderr.write(`measure unavailable: ${safe || "unknown measurement failure"}\n`);
     return 2;
   }
 }

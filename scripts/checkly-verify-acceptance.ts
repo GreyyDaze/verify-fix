@@ -164,7 +164,7 @@ async function main(): Promise<void> {
   process.stdout.write(JSON.stringify({
     check: { id: manifest.check.id, name: manifest.check.name, type: manifest.check.checkType },
     results: { failing: resultId, passing: passingResultId },
-    evidence: { failingRecording: manifest.recordings.failing, passingRecording: manifest.recordings.passing, outDir: outcome.outDir },
+    evidence: { failingRecording: manifest.recordings.failing, passingRecording: manifest.recordings.passing, multistepFailing: manifest.recordings.multistepFailing ?? null, multistepPassing: manifest.recordings.multistepPassing ?? null, outDir: outcome.outDir },
     determinism,
     verification: {
       goodRepair: { verdict: goodJson?.verdict, exitCode: goodJson?.exitCode },

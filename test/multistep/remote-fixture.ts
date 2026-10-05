@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildBundle } from "../../src/bundle/build.ts";
+import { buildProtectedRequirements, policyKnown, protectedSourceIdentity } from "../../src/protected-requirements.ts";
 import { loadBundle } from "../../src/bundle.ts";
 import type { ChecklyClient } from "../../src/checkly/client.ts";
 import type { AssetManifestEntry, CheckResultSummary } from "../../src/checkly/types.ts";
@@ -69,5 +70,22 @@ export async function syntheticRemoteBundle() {
     { client, accountId: "synthetic", now: () => new Date("2026-09-27T00:00:00.000Z") });
   const bundle = loadBundle(outDir).bundle;
   if (bundle.multistep?.problems.length) throw new Error("synthetic fixture did not bind both remote recordings");
+  const policy = buildProtectedRequirements({
+    check: {
+      id: bundle.check.deployedId ?? "synthetic-check",
+      logicalId: bundle.check.logicalId ?? null,
+      checkType: "MULTI_STEP",
+    },
+    sources: [protectedSourceIdentity("checkly-api", "synthetic-checkly-check", "synthetic-checkly-check")],
+    values: {
+      "multistep.environmentMapping": policyKnown({
+        "eu-west-1": "MULTISTEP_USER_EU_WEST_1",
+        "us-east-1": "MULTISTEP_USER_US_EAST_1",
+      }),
+    },
+  });
+  if (policy.status !== "ready") throw new Error("synthetic fixture could not seal Phase 9 policy");
+  bundle.protectedRequirements = policy.envelope;
+  bundle.protectedRequirementsIssue = null;
   return bundle;
 }

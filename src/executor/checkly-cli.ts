@@ -171,12 +171,24 @@ export class ChecklyCliExecutor implements ExperimentExecutor {
       // candidate when the source parser cannot reconstruct a mapping that
       // was already captured and sealed in the bundle. The candidate must
       // still prove that it preserves that exact secret-free mapping.
-      if (policy.rejected || policy.uncertain || checkFile !== bundle.check.file || checkName !== bundle.check.name
-        || !trustedMapping || !candidateMapping
-        || !sameRegionAccountMapping(trustedMapping, candidateMapping)
-        || JSON.stringify(Object.keys(files).sort()) !== JSON.stringify(keys)
+      if (policy.rejected) {
+        return this.uncertain(scene, "MULTISTEP_POLICY_REJECTED", 0, [], [], [], environment);
+      }
+      if (policy.uncertain) {
+        return this.uncertain(scene, "MULTISTEP_POLICY_UNCERTAIN", 0, [], [], [], environment);
+      }
+      if (checkFile !== bundle.check.file || checkName !== bundle.check.name) {
+        return this.uncertain(scene, "MULTISTEP_CHECK_IDENTITY_CHANGED", 0, [], [], [], environment);
+      }
+      if (!trustedMapping || !candidateMapping) {
+        return this.uncertain(scene, "MULTISTEP_MAPPING_UNRESOLVED", 0, [], [], [], environment);
+      }
+      if (!sameRegionAccountMapping(trustedMapping, candidateMapping)) {
+        return this.uncertain(scene, "MULTISTEP_MAPPING_CHANGED", 0, [], [], [], environment);
+      }
+      if (JSON.stringify(Object.keys(files).sort()) !== JSON.stringify(keys)
         || keys.some((key) => key !== checkFile && files[key] !== bundle.files[key])) {
-        return this.uncertain(scene, "Multistep source identity or construct changed before a cloud run", 0, [], [], [], environment);
+        return this.uncertain(scene, "MULTISTEP_FILE_SET_CHANGED", 0, [], [], [], environment);
       }
     }
 

@@ -492,7 +492,7 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
     const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
       const child = spawn(
         process.execPath,
-        ["--no-warnings", join(ROOT, "src/cli.ts"), "verify", "--patch", join(PATCH_DIR, "01-good-run-parallel-false"), "--bundle", INCIDENT_DIR, "--target", app.url, "--env-file", envFile, "--env-name", "ci", "--requirements-mode", "enforce", "--requirements-digest", "7e54a7a13fc503c66d911e109d1580c053330b1c9f5428667dcbd12212545b69"],
+        ["--no-warnings", join(ROOT, "src/cli.ts"), "verify", "--patch", join(PATCH_DIR, "01-good-run-parallel-false"), "--bundle", INCIDENT_DIR, "--target", app.url, "--env-file", envFile, "--env-name", "ci", "--requirements-mode", "enforce", "--requirements-digest", "31950e360088e98768ac9599096a8b662c0b10eaa3a8d502ac144ad7361d578b"],
         { cwd: ROOT }
       );
       let stdout = "";

@@ -304,7 +304,15 @@ function candidateProtectedRequirements(
       for (const name of ["playwright.testSelection", "playwright.retries", "playwright.target"]) fields[name] = policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
     }
   }
-  return { check: { id: bundle.check.deployedId, logicalId, checkType: bundle.check.checkType }, fields, identityResolved };
+  return {
+    check: {
+      id: bundle.check.deployedId ?? "",
+      logicalId,
+      checkType: bundle.check.checkType ?? "",
+    },
+    fields,
+    identityResolved: identityResolved && bundle.check.deployedId !== null && bundle.check.checkType !== undefined,
+  };
 }
 
 export function makeExecutor(opts: { target?: string | null; targetRevision?: string; env?: Record<string, string>; environmentName?: string; maxRunsPerScene?: number; projectDir?: string | null; browserExecutablePath?: string; verbose?: boolean }): ExperimentExecutor {

@@ -71,7 +71,7 @@ test("unclassified candidate settings are uncertain instead of silently accepted
 });
 
 test("metadata-only differences are reported without blocking", () => {
-  const result = compareProtectedRequirements(sealProtectedRequirements(policy), unchanged);
+  const result = compareProtectedRequirements(sealProtectedRequirements(policy), unchangedCandidate);
   assert.equal(result.verdict, "PASS");
   assert.deepEqual(result.changedMetadata, ["frequency"]);
 });

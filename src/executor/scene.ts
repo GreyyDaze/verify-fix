@@ -275,11 +275,11 @@ export class SceneExecutor implements ExperimentExecutor {
     // may NOT relabel two executed regions as one.
     // Experiment conditions belong to the trusted bundle. Candidate project
     // configuration must never lower regions or reproduction concurrency.
-    // Experiment conditions are candidate-independent. Scheduling changes are
-    // evaluated by the protected-requirements gate; scene execution keeps the
-    // trusted bundle schedule so a candidate cannot reduce the difficulty of
-    // the reproduction or regression experiment.
-    const config = bundle.config ?? ctx?.config ?? null;
+    // The caller supplies the effective experiment config. verify() passes the
+    // trusted bundle config so candidate scheduling cannot reduce experiment
+    // difficulty; direct executor tests may supply an explicit config to test
+    // scheduling mechanics in isolation.
+    const config = ctx?.config ?? bundle.config ?? null;
     const allowed = effectiveConcurrency(config);
     const candidateLocations = config?.locations.length ? config.locations : bundle.config?.locations ?? [];
     const trustedConstruct = isMultiStep

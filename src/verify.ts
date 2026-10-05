@@ -304,6 +304,14 @@ function candidateProtectedRequirements(
       for (const name of ["playwright.testSelection", "playwright.retries", "playwright.target"]) fields[name] = policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
     }
   }
+  // Fields not rewritten by the candidate resolver still inherit the
+  // trusted effective value. This is required for unchanged inherited/default
+  // settings such as alert behavior and dependency metadata. A changed setting
+  // is explicitly written as known or unknown above; it is never silently
+  // replaced here.
+  for (const [name, requirement] of Object.entries(original)) {
+    if (!(name in fields)) fields[name] = requirement.original;
+  }
   return {
     check: {
       id: bundle.check.deployedId ?? "",

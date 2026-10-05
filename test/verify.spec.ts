@@ -9,10 +9,9 @@
 //      maps it to UNCERTAIN (exit 2) with an explicit reason.
 //   2. The scene layer reproduces the incident from the real app: two
 //      interleaved runs on one account → 401 on booking, deterministically.
-//   3. The seeded suite keeps its oracle verdicts: the good config patches PASS
-//      (exit 0) with scene-c observing a real `fail`; every fooling seed is
-//      FAILED (1); the flaky seed is never PASS. Outcomes are stable across
-//      re-runs.
+//   3. Phase 9 protected policy is enforced for the seeded suite. Deliberate
+//      scheduling reductions are FAILED before any scene runs; code-only
+//      repairs still reach the experiment layer. The flaky seed is never PASS.
 
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -503,9 +502,8 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
     });
     assert.equal(result.code, 1, result.stdout + result.stderr);
     assert.match(result.stdout, /\*\*Verdict:\*\* FAILED \(exit 1\)/);
-    assert.match(result.stdout, /\| experiment \| environment \| oracle \|/);
-    assert.match(result.stdout, /\| scene-c-auth-failure \| target 127\.0\.0\.1:\d+ \+ inject POST \/api\/book -> 401 \| [^|]+ \| fail \| fail \| ✓ \|/);
-    assert.match(result.stdout, /Live rows ran against 127\.0\.0\.1:\d+/);
+    assert.match(result.stdout, /PROTECTED_REQUIREMENT_CHANGED/);
+    assert.match(result.stdout, /local runs: 0/i);
   });
 
   test("CLI: the retired direct-API executor cannot be selected", async () => {

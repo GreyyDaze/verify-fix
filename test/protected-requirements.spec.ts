@@ -47,7 +47,7 @@ function candidate(fields: CandidateEffectiveRequirements["fields"]): CandidateE
 const unchanged = candidate({
   activated: { state: "known", value: true },
   locations: { state: "known", value: ["eu-west-1", "us-east-1"] },
-  assertions: { state: "known", value: [
+  "multistep.assertions": { state: "known", value: [
     { id: "assert-1", subject: "booking.confirmed", matcher: "toBe", target: "CONFIRMED" },
     { id: "assert-2", subject: "session.user", matcher: "toBeDefined", target: true },
   ] },

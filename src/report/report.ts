@@ -5,6 +5,7 @@
 import type { Decision, EvidenceRow, ExecutionCost, SceneObservation } from "../types.ts";
 import type { ContractReport } from "../contract/contract.ts";
 import type { CandidateRevisionMetadata, CandidateTargetBinding } from "../candidate/revision.ts";
+import type { ResolvedPolicyValue } from "../protected-requirements.ts";
 
 export interface Report {
   incidents: string;
@@ -37,6 +38,22 @@ export interface ReportDetails {
   targetBinding?: CandidateTargetBinding | null;
   /** Normalized Multistep evidence summary from the bundle's sanitized recording. */
   multistep?: { kind: string | null; steps: string[]; problems: string[] } | null;
+  protectedRequirements?: {
+    mode: "shadow" | "migration" | "enforce";
+    policyVersion: number | null;
+    digest: string | null;
+    expectedDigestMatched: boolean | null;
+    staticVerdict: "PASS" | "FAILED" | "UNCERTAIN";
+    reasonCodes: string[];
+    changedMetadata: string[];
+    originalValues: Record<string, ResolvedPolicyValue>;
+    candidateValues: Record<string, ResolvedPolicyValue>;
+    trustedConcurrency: number | null;
+    measuredConcurrency: number | null;
+    requiredRegions: string[] | null;
+    executedRegions: string[];
+    affectedMonitors: { known: string[]; unresolved: boolean; reason: string | null };
+  };
 }
 
 export function buildReport(contract: ContractReport, decision: Decision, observations: Map<string, SceneObservation>, details: ReportDetails = {}): Report {
@@ -130,6 +147,29 @@ export function buildReport(contract: ContractReport, decision: Decision, observ
     lines.push("- Locally constructed fixtures prove mechanics only — they are never real Checkly, browser, deployment, or cloud proof.");
     lines.push("");
   }
+  if (details.protectedRequirements) {
+    const p = details.protectedRequirements;
+    lines.push("**Protected monitoring requirements:**");
+    lines.push(`- Rollout mode: ${p.mode}; static assessment: ${p.staticVerdict}`);
+    lines.push(`- Policy version: ${p.policyVersion ?? "unknown"}`);
+    lines.push(`- Policy digest: ${p.digest ? `sha256:${p.digest}` : "missing"}; caller pin: ${p.expectedDigestMatched === null ? "not supplied" : p.expectedDigestMatched ? "matched" : "missing or mismatched"}`);
+    lines.push(`- Changed metadata: ${p.changedMetadata.length ? p.changedMetadata.join(", ") : "none"}`);
+    lines.push(`- Assessment reason codes: ${p.reasonCodes.length ? p.reasonCodes.join(", ") : "none"}`);
+    lines.push(`- Reproduction concurrency: trusted ${p.trustedConcurrency ?? "unknown"}; measured ${p.measuredConcurrency ?? "not run"}`);
+    lines.push(`- Regions: required ${p.requiredRegions === null ? "unknown" : p.requiredRegions.length ? p.requiredRegions.join(", ") : "none"}; executed ${p.executedRegions.length ? p.executedRegions.join(", ") : "none"}`);
+    const affected = p.affectedMonitors;
+    lines.push(`- Affected monitors: ${affected.known.length ? affected.known.join(", ") : "unknown"}${affected.unresolved ? `; sibling impact unresolved${affected.reason ? ` (${affected.reason})` : ""}` : ""}`);
+    const names = [...new Set([...Object.keys(p.originalValues), ...Object.keys(p.candidateValues)])].sort();
+    for (const name of names) {
+      const original = p.originalValues[name];
+      const candidate = p.candidateValues[name];
+      const show = (value: ResolvedPolicyValue | undefined) => !value || value.state === "unknown"
+        ? `unknown${value?.state === "unknown" ? `:${value.reason}` : ""}` : JSON.stringify(value.value);
+      lines.push(`- ${name}: original ${show(original)}; candidate ${show(candidate)}`);
+    }
+    if (p.mode === "shadow") lines.push("- Shadow assessment is report-only; it does not change the current verdict.");
+    lines.push("");
+  }
   if (details.cost) {
     const c = details.cost;
     lines.push("**Cost:**");
@@ -175,6 +215,7 @@ export function buildReport(contract: ContractReport, decision: Decision, observ
       targetBinding: details.targetBinding ?? null,
       checklyEvidence: { testSessionIds: checklySessionIds, resultIds: checklyResultIds },
       multistep: details.multistep ?? null,
+      protectedRequirements: details.protectedRequirements ?? null,
       cost: details.cost ?? null,
       topEvidence: topOut,
     },

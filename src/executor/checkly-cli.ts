@@ -5,14 +5,12 @@
 // test session. It never deploys or changes a scheduled monitor.
 
 import { runChecklySandbox } from "../checkly-sandbox.ts";
-import { trustedAutomationBypass, trustedRegionalAccounts } from "../multistep/accounts.ts";
+import { regionalAccountMappingFromBundle, trustedAutomationBypass, trustedRegionalAccounts } from "../multistep/accounts.ts";
 import { multiStepDiskRebound } from "../multistep/rebind.ts";
 import { evaluateMultiStepPolicy } from "../multistep/policy.ts";
 import { parseMultiStepProject } from "../multistep/source.ts";
+import { deriveRegionalAccountMapping, sameRegionAccountMapping } from "../multistep/region-account-mapping.ts";
 import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExecutor, type ObservationValue, type RunContext, type Scene, type SceneObservation, type TraceStep } from "../types.ts";
-
-const MULTISTEP_REMOTE_NAMES = ["MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1",
-  "CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET", "ENVIRONMENT_NAME"] as const;
 
 /** Only the identities required by the checked Multistep construct and the
  * approved bypass/name may cross into a cloud checkly-test child. The shared
@@ -21,14 +19,17 @@ const MULTISTEP_REMOTE_NAMES = ["MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_W
  * trusted target separately. Null is an inconclusive pre-run rejection. */
 export function scopedChecklyEnvironment(bundle: Bundle, env: Record<string, string>, region?: string): Record<string, string> | null {
   if (bundle.check.checkType !== "MULTI_STEP") return { ...env };
-  const accounts = trustedRegionalAccounts(env, region);
-  if (!accounts || !trustedAutomationBypass(env)
-    || ["TEST_USER", "TEST_USER_US_EAST_1", "TEST_USER_EU_WEST_1"].some((key) =>
-      env[key] && (env[key] === accounts.east || env[key] === accounts.west))) return null;
-  return Object.fromEntries(MULTISTEP_REMOTE_NAMES
-    .filter((key) => env[key] !== undefined && (!region || !key.startsWith("MULTISTEP_USER_")
-      || key === (region === "us-east-1" ? "MULTISTEP_USER_US_EAST_1" : "MULTISTEP_USER_EU_WEST_1")))
-    .map((key) => [key, env[key]!]));
+  const mapping = regionalAccountMappingFromBundle(bundle);
+  const locations = bundle.config?.locations.length ? bundle.config.locations : Object.keys(mapping ?? {});
+  if (!mapping || !locations.length) return null;
+  const accounts = trustedRegionalAccounts(env, mapping, locations, region);
+  if (!accounts || !trustedAutomationBypass(env)) return null;
+  const names = [...new Set([
+    ...(region ? [accounts.selectedKey!] : Object.values(mapping)),
+    "CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET",
+    "ENVIRONMENT_NAME",
+  ])];
+  return Object.fromEntries(names.filter((key) => env[key] !== undefined).map((key) => [key, env[key]!]));
 }
 
 export interface ChecklyCliExecutorOptions {
@@ -118,16 +119,15 @@ export class ChecklyCliExecutor implements ExperimentExecutor {
     const repetitions = Math.min(wanted, remaining);
     this.used.set(scene.sceneId, used + repetitions);
 
-    const config = isMultiStep ? bundle.config : ctx?.config ?? bundle.config;
+    // Trusted experiment requirements come from the bundle; candidate config
+    // cannot shrink locations or concurrency for a cloud execution.
+    const config = bundle.config ?? ctx?.config ?? null;
     const locations = config?.locations.length ? config.locations : bundle.config?.locations ?? [];
-    if (isMultiStep && (JSON.stringify(locations) !== JSON.stringify(["us-east-1", "eu-west-1"])
-      || config?.runParallel !== true)) {
-      return this.uncertain(scene, "Multistep requires its unchanged two-region parallel schedule", 0, [], [], [], environment);
-    }
     if (locations.length === 0) return this.uncertain(scene, "candidate config has no Checkly location", 0, [], [], [], environment);
     const combinedEnv = { ...this.env, ...(scene.env ?? {}) };
-    if (bundle.check.checkType === "MULTI_STEP" && Object.keys(scene.env ?? {}).some((key) =>
-      key !== "MULTISTEP_USER_US_EAST_1" && key !== "MULTISTEP_USER_EU_WEST_1")) {
+    const trustedMapping = regionalAccountMappingFromBundle(bundle);
+    const regionalKeys = trustedMapping ? Object.values(trustedMapping) : [];
+    if (bundle.check.checkType === "MULTI_STEP" && Object.keys(scene.env ?? {}).some((key) => !regionalKeys.includes(key))) {
       return this.uncertain(scene, "Multistep scene cannot add unrelated cloud environment inputs", 0, [], [], [], environment);
     }
     const scopedEnv = scopedChecklyEnvironment(bundle, combinedEnv);
@@ -142,8 +142,15 @@ export class ChecklyCliExecutor implements ExperimentExecutor {
       const original = parseMultiStepProject(new Map(Object.entries(bundle.files)), bundle.check.file);
       const candidate = parseMultiStepProject(new Map(Object.entries(files)), checkFile);
       const policy = evaluateMultiStepPolicy(original, candidate);
+      const trustedLocations = original.construct?.locations ?? [];
+      const declared = original.construct?.environmentKeys ?? [];
+      const originalMapping = deriveRegionalAccountMapping(Object.entries(bundle.files), trustedLocations, declared);
+      const candidateMapping = deriveRegionalAccountMapping(Object.entries(files), trustedLocations, declared);
       const keys = Object.keys(bundle.files).sort();
       if (policy.rejected || policy.uncertain || checkFile !== bundle.check.file || checkName !== bundle.check.name
+        || !trustedMapping || !originalMapping || !candidateMapping
+        || !sameRegionAccountMapping(trustedMapping, originalMapping)
+        || !sameRegionAccountMapping(originalMapping, candidateMapping)
         || JSON.stringify(Object.keys(files).sort()) !== JSON.stringify(keys)
         || keys.some((key) => key !== checkFile && files[key] !== bundle.files[key])) {
         return this.uncertain(scene, "Multistep source identity or construct changed before a cloud run", 0, [], [], [], environment);
@@ -162,10 +169,14 @@ export class ChecklyCliExecutor implements ExperimentExecutor {
       checkRuns: 0,
       wallTimeMs: 0,
       phase: (ctx?.phase ?? "candidate") as "candidate" | "mutation",
+      maxConcurrentRuns: locations.length,
+      requiredRegions: [...locations],
+      executedRegions: [] as string[],
     };
     this.cost.byScene.push(costRow);
 
     for (let repetition = 0; repetition < repetitions; repetition++) {
+      costRow.executedRegions!.push(...locations.filter((location) => !costRow.executedRegions!.includes(location)));
       const results = await Promise.all(locations.map((location) => runChecklySandbox({
         projectDir: this.projectDir!,
         files,

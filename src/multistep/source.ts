@@ -336,17 +336,20 @@ export function parseMultiStepConstruct(files: Map<string, string>): { model: Mu
   if (objectProperty(options, "tags") && !stringArrayLiteral(objectProperty(options, "tags"))) errors.push("MultiStepCheck tags do not resolve statically (UNCERTAIN)");
   const environmentKeys: string[] = [];
   const environmentDefinitions: MultiStepConstructModel["environmentDefinitions"] = [];
-  const approvedKeys = new Set(["ENVIRONMENT_URL", "MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1", "VERCEL_AUTOMATION_BYPASS_SECRET"]);
   const approvedEnvValue = (key: string, expression: ts.Expression): boolean => {
     // The canonical construct uses ?? '' to leave a missing deployment value
     // empty; no nonempty default or second environment key is admissible.
     const value = ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
       && literalString(expression.right) === "" ? expression.left : expression;
-    return approvedKeys.has(key) && ts.isPropertyAccessExpression(value)
-      && value.name.text === (key === "VERCEL_AUTOMATION_BYPASS_SECRET" ? "CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET" : key)
-      && ts.isPropertyAccessExpression(value.expression) && value.expression.name.text === "env"
-      && ts.isIdentifier(value.expression.expression) && value.expression.expression.text === "process"
-      && lexicalDeclaration("process", value) === null;
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(key) || !ts.isPropertyAccessExpression(value)
+      || !ts.isPropertyAccessExpression(value.expression) || value.expression.name.text !== "env"
+      || !ts.isIdentifier(value.expression.expression) || value.expression.expression.text !== "process"
+      || lexicalDeclaration("process", value) !== null) return false;
+    const sourceName = value.name.text;
+    // Checkly secret references are environment bindings with a stable
+    // provider prefix; all other variable names are resolved from the actual
+    // check construct, not from a fixture allow-list.
+    return sourceName === key || sourceName === `CHECKLY_SECRET_${key}`;
   };
   const envExpr = objectProperty(options, "environmentVariables");
   if (envExpr && ts.isArrayLiteralExpression(envExpr)) {

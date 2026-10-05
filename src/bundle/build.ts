@@ -17,11 +17,12 @@ import { execFileSync } from "node:child_process";
 import { closeSync, constants, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { ChecklyClient } from "../checkly/client.ts";
-import type { AssetManifestEntry, ChecklyCheck, CheckResult, CheckResultSummary, ErrorGroup, RootCauseAnalysis } from "../checkly/types.ts";
+import type { AssetManifestEntry, ChecklyCheck, ChecklyCheckGroup, CheckResult, CheckResultSummary, ErrorGroup, RootCauseAnalysis } from "../checkly/types.ts";
 import { ASSET_ZIP_BOUNDS, isZip, openZipBounded } from "../trace/zip.ts";
 import { mergeHars, traceZipToHar, type BodyPolicy, type TraceExtract } from "../trace/trace-to-har.ts";
+import { parseInventory } from "../assertion/inventory.ts";
 import { sanitizeHar } from "./sanitize.ts";
-import { buildManifest, expectedReceived, findOverlappingRuns, groupErrorMatches, rcaFit, rcaMentionsReceived, resultErrors, runOutcome, type FetchedResult } from "./manifest.ts";
+import { buildManifest, detectTargetResolution, expectedReceived, findOverlappingRuns, groupErrorMatches, rcaFit, rcaMentionsReceived, resultErrors, runOutcome, type FetchedResult } from "./manifest.ts";
 import { measureDeterminism, type MeasureResult, type Runner } from "./measure.ts";
 import type { ManifestV3 } from "./types.ts";
 import { apiRecordingFromResult, setupProvenance } from "../api/recording.ts";
@@ -33,8 +34,11 @@ import type { MultiStepRecording } from "../multistep/capture.ts";
 import { constrainMultiStepManifest, multiStepRunMetadata } from "../multistep/bundle-evidence.ts";
 import { multistepProblemCategory } from "../multistep/sanitize.ts";
 import { parseMultiStepConstruct, parseMultiStepProject } from "../multistep/source.ts";
+import { parseCheckConfig } from "../scene/config-diff.ts";
 import { deployedProblem } from "../multistep/identity.ts";
 import { multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_BYTES, MULTISTEP_MAX_SOURCE_FILE_BYTES, MULTISTEP_MAX_SOURCE_FILES } from "../multistep/files.ts";
+import { buildProtectedRequirements, policyKnown, policyUnknown, protectedSourceIdentity, type ProtectedPolicyEnvelope, type ResolvedPolicyValue } from "../protected-requirements.ts";
+import { deriveRegionalAccountMapping } from "../multistep/region-account-mapping.ts";
 
 export interface BuildOptions {
   checkId: string;
@@ -73,6 +77,182 @@ const RESULT_FIELDS = ["id", "checkId", "name", "hasFailures", "hasErrors", "isD
 
 function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function hasOwn(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function policySetting(check: ChecklyCheck, group: ChecklyCheckGroup | null, project: Record<string, unknown>, key: string): ResolvedPolicyValue {
+  const checkRecord = check as unknown as Record<string, unknown>;
+  const checkHas = hasOwn(checkRecord, key) && checkRecord[key] !== undefined;
+  const groupHas = group !== null && hasOwn(group, key) && group[key] !== undefined;
+  if (checkHas && checkRecord[key] !== null) return policyKnown(checkRecord[key] as never);
+  if (checkHas && checkRecord[key] === null && groupHas && group![key] !== null) {
+    // A null check field may mean either "inherit" or an explicit unset. Do
+    // not guess which Checkly interpretation applies to this resource.
+    return policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
+  }
+  if (groupHas && group![key] !== null) return policyKnown(group![key] as never);
+  if (checkHas) return policyKnown(null);
+  if (groupHas) return policyKnown(null);
+  if (hasOwn(project, key) && project[key] !== undefined) return policyKnown(project[key] as never);
+  return policyUnknown("CONFIG_NOT_RETURNED");
+}
+
+function policyUrlStructure(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  if (/\{\{[^}]+\}\}/.test(value)) return value.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_match, name: string) => `{{${name}}}`);
+  try {
+    const u = new URL(value);
+    const query = [...u.searchParams.entries()].map(([key, entry]) => [key, sha256(entry)] as const)
+      .sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => `${key}=${entry}`).join("&");
+    return `${u.protocol}//${u.host}${u.pathname}${query ? `?${query}` : ""}`;
+  } catch {
+    return value.split(/[?#]/, 1)[0] ?? value;
+  }
+}
+
+function tupleDigests(values: unknown[]): string[] {
+  return values.map((value) => sha256(JSON.stringify(value))).sort();
+}
+
+function protectedRequirementsFor(input: {
+  check: ChecklyCheck;
+  group: ChecklyCheckGroup | null;
+  sources: Array<{ path: string; content: string }>;
+  mainSource: string | null;
+  logicalId: string | null;
+  playwright: ProjectSources["playwright"];
+  dependencyMetadata: Record<string, string>;
+}): ProtectedPolicyEnvelope | null {
+  const { check, group, sources } = input;
+  const configSource = sources.find((source) => /^checkly\.config\.[cm]?[jt]sx?$/.test(source.path));
+  const parsedConfig = configSource ? parseCheckConfig(configSource.content) : null;
+  const projectSettings: Record<string, unknown> = {};
+  if (parsedConfig) {
+    if (parsedConfig.runParallel !== null) projectSettings.runParallel = parsedConfig.runParallel;
+    if (parsedConfig.locations !== null) projectSettings.locations = parsedConfig.locations;
+    if (parsedConfig.frequency !== null) projectSettings.frequency = parsedConfig.frequency;
+    if (parsedConfig.retryStrategy !== null) projectSettings.retryStrategy = parsedConfig.retryStrategy;
+    if (parsedConfig.envKeys.length) projectSettings.environmentVariables = parsedConfig.envKeys;
+  }
+  const groupRecord = group as unknown as Record<string, unknown> | null;
+  const values: Record<string, ResolvedPolicyValue> = {
+    "check.name": policyKnown(check.name),
+    activated: policySetting(check, group, projectSettings, "activated"),
+    muted: policySetting(check, group, projectSettings, "muted"),
+    shouldFail: policySetting(check, group, projectSettings, "shouldFail"),
+    frequency: policySetting(check, group, projectSettings, "frequency"),
+    locations: policySetting(check, group, projectSettings, "locations"),
+    privateLocations: policySetting(check, group, projectSettings, "privateLocations"),
+    runParallel: policySetting(check, group, projectSettings, "runParallel"),
+    retryStrategy: policySetting(check, group, projectSettings, "retryStrategy"),
+    environmentVariableNames: (() => {
+      const names = (list: unknown): string[] | null => Array.isArray(list)
+        ? list.map((item) => typeof item === "string" ? item : item && typeof item === "object" && typeof (item as { key?: unknown }).key === "string" ? (item as { key: string }).key : null)
+            .filter((item): item is string => item !== null).sort()
+        : null;
+      const checkNames = names(check.environmentVariables);
+      const groupNames = names(group?.environmentVariables);
+      const projectNames = names(projectSettings.environmentVariables);
+      const returned = [checkNames, groupNames, projectNames].filter((item): item is string[] => item !== null);
+      return returned.length === 0 ? policyUnknown("CONFIG_NOT_RETURNED")
+        : policyKnown([...new Set(returned.flat())].sort());
+    })(),
+    targetResolution: policyKnown(detectTargetResolution(check, sources)),
+    "execution.dependencyMetadata": Object.keys(input.dependencyMetadata).length
+      ? policyKnown(input.dependencyMetadata)
+      : policyUnknown("SOURCE_UNAVAILABLE"),
+    alertBehavior: (() => {
+      const alertKeys = ["alertChannels", "alertEscalationPolicy", "alertSettings"];
+      const from = (record: Record<string, unknown> | null): unknown[] | null => {
+        if (!record) return null;
+        const present = alertKeys.filter((key) => hasOwn(record, key)).map((key) => [key, record[key]]);
+        return present.length ? present : null;
+      };
+      const selected = from(check as unknown as Record<string, unknown>) ?? from(groupRecord);
+      return selected === null ? policyUnknown("CONFIG_NOT_RETURNED") : policyKnown(sha256(JSON.stringify(selected)));
+    })(),
+  };
+
+  const sourceMap = new Map(sources.map((source) => [source.path.replaceAll("\\", "/"), source.content]));
+  const fileHash = (path: string | null): string | null => path ? (sourceMap.has(path) ? sha256(sourceMap.get(path)!) : null) : null;
+  const main = input.mainSource ? sourceMap.get(input.mainSource) ?? null : null;
+  const targetResolution = detectTargetResolution(check, sources);
+  if (check.checkType === "API") {
+    const model = input.mainSource ? parseApiCheckProject(input.mainSource, sourceMap, input.logicalId) : null;
+    const req = check.request;
+    values["api.requestMethod"] = req?.method ? policyKnown(req.method.toUpperCase()) : model?.request.method ? policyKnown(model.request.method.toUpperCase()) : policyUnknown("SOURCE_UNAVAILABLE");
+    const url = policyUrlStructure(req?.url ?? model?.request.url);
+    values["api.urlStructure"] = (req?.url ?? model?.request.url) ? policyKnown(sha256((req?.url ?? model!.request.url))) : policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
+    const assertions = model?.request.assertions.map((item) => [item.property, item.selector, item.operator, item.target])
+      ?? (req?.assertions?.length ? req.assertions.map((item) => [item.source, item.property ?? null, item.comparison, item.target]) : null);
+    values["api.assertions"] = assertions ? policyKnown(tupleDigests(assertions)) : policyUnknown("SOURCE_UNAVAILABLE");
+    values["api.setupScript"] = model?.setupFile ? (fileHash(model.setupFile) ? policyKnown(fileHash(model.setupFile)!) : policyUnknown("SOURCE_UNAVAILABLE")) : policyKnown(null);
+    values["api.tearDownScript"] = model?.teardownFile ? (fileHash(model.teardownFile) ? policyKnown(fileHash(model.teardownFile)!) : policyUnknown("SOURCE_UNAVAILABLE")) : policyKnown(null);
+  } else if (check.checkType === "BROWSER") {
+    const inventory = input.mainSource && main ? parseInventory(input.mainSource, main) : null;
+    values["browser.entrypoint"] = input.mainSource || check.scriptPath ? policyKnown(input.mainSource ?? check.scriptPath!) : policyUnknown("SOURCE_UNAVAILABLE");
+    values["browser.runtime"] = check.runtimeId ? policyKnown(check.runtimeId) : policyUnknown("CONFIG_NOT_RETURNED");
+    values["browser.assertions"] = inventory ? policyKnown(tupleDigests(inventory.assertions.map((a) => [a.subject, a.matcher, a.target, a.negated ?? false]))) : policyUnknown("SOURCE_UNAVAILABLE");
+    values["browser.target"] = policyKnown(targetResolution);
+  } else if (check.checkType === "PLAYWRIGHT") {
+    values["playwright.configPath"] = check.playwrightConfigPath || input.playwright.configPath ? policyKnown(check.playwrightConfigPath ?? input.playwright.configPath) : policyUnknown("CONFIG_NOT_RETURNED");
+    values["playwright.projects"] = policyKnown(check.pwProjects?.length ? [...check.pwProjects].sort() : [...input.playwright.projects].sort());
+    values["playwright.tags"] = policyKnown(check.pwTags?.length ? [...check.pwTags].sort() : [...input.playwright.tags].sort());
+    values["playwright.testSelection"] = check.testCommand ? policyKnown(sha256(check.testCommand)) : policyUnknown("CONFIG_NOT_RETURNED");
+    values["playwright.retries"] = policyUnknown("CONFIG_NOT_RETURNED");
+    values["playwright.target"] = policyKnown(targetResolution);
+    values["playwright.runtime"] = check.runtimeId ? policyKnown(check.runtimeId) : policyUnknown("CONFIG_NOT_RETURNED");
+  } else if (check.checkType === "MULTI_STEP") {
+    const model = input.mainSource ? parseMultiStepProject(sourceMap, input.mainSource) : null;
+    const complete = Boolean(model?.script && model.errors.length === 0 && model.construct && model.construct.errors.length === 0);
+    const locations = Array.isArray(check.locations) && check.locations.length
+      ? check.locations
+      : model?.construct?.locations ?? [];
+    const declaredAccountKeys = [...new Set([
+      ...((check.environmentVariables ?? []).map((item) => item.key)),
+      ...(model?.construct?.environmentKeys ?? []),
+      ...(Array.isArray(projectSettings.environmentVariables) ? projectSettings.environmentVariables as string[] : []),
+    ])];
+    const regionalAccounts = complete
+      ? deriveRegionalAccountMapping(sourceMap.entries(), locations, declaredAccountKeys)
+      : null;
+    values["multistep.orderedSteps"] = complete ? policyKnown(model!.script!.steps.map((step) => sha256(step.title))) : policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
+    values["multistep.routesAndMethods"] = complete ? policyKnown(model!.script!.requests.map((request) => [request.method, request.route ? sha256(request.route) : null])) : policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
+    values["multistep.assertions"] = complete ? policyKnown(tupleDigests(model!.script!.assertions.map((a) => [a.stepTitle, a.id, a.matcher, a.target, a.negated]))) : policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
+    values["multistep.environmentMapping"] = regionalAccounts ? policyKnown(regionalAccounts) : policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
+    values["multistep.runtimeTransaction"] = complete ? policyKnown({ steps: model!.script!.steps.map((step) => sha256(step.title)), requests: model!.script!.requests.map((request) => [request.method, request.route ? sha256(request.route) : null]) }) : policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
+    values["multistep.runtime"] = check.runtimeId ? policyKnown(check.runtimeId) : policyUnknown("CONFIG_NOT_RETURNED");
+  }
+
+  const sourceIdentities = [protectedSourceIdentity("checkly-api", `checks/${check.id}`, JSON.stringify({
+    id: check.id, name: check.name, type: check.checkType, activated: check.activated, muted: check.muted,
+    groupId: check.groupId, frequency: check.frequency, locations: check.locations,
+    privateLocations: check.privateLocations ?? null, runParallel: check.runParallel ?? null,
+    retryStrategy: check.retryStrategy ?? null, environmentVariableNames: (check.environmentVariables ?? []).map((v) => v.key).sort(),
+    requestMethod: check.request?.method ?? null, requestUrl: policyUrlStructure(check.request?.url) ? sha256(policyUrlStructure(check.request?.url)!) : null,
+  }))];
+  if (group) sourceIdentities.push(protectedSourceIdentity("check-group", `check-groups/${group.id}`, JSON.stringify({
+    id: group.id, activated: group.activated ?? null, muted: group.muted ?? null,
+    frequency: group.frequency ?? null, locations: group.locations ?? null,
+    privateLocations: group.privateLocations ?? null, runParallel: group.runParallel ?? null,
+    retryStrategy: group.retryStrategy ?? null,
+    environmentVariableNames: (group.environmentVariables ?? []).map((v) => v.key).sort(),
+    alertBehavior: group.alertChannels ?? group.alertEscalationPolicy ?? null,
+  })));
+  for (const source of sources) {
+    const kind = /^checkly\.config\.[cm]?[jt]sx?$/.test(source.path) ? "project-default"
+      : source.path === input.mainSource ? "check" : /playwright\.config\.[cm]?[jt]sx?$/.test(source.path) ? "playwright-config" : "imported-source";
+    sourceIdentities.push(protectedSourceIdentity(kind, source.path, source.content));
+  }
+  const result = buildProtectedRequirements({
+    check: { id: check.id, logicalId: input.logicalId, checkType: check.checkType },
+    sources: sourceIdentities,
+    values,
+  });
+  return result.status === "ready" ? result.envelope : null;
 }
 
 function isOk(r: CheckResultSummary): boolean {
@@ -193,6 +373,8 @@ function collectMultiStepClosure(root: string, initial: string[], sources: Array
 
 interface ProjectSources {
   sources: Array<{ path: string; content: string }>;
+  /** Hashes only: package/config metadata is compared without copying its content into the bundle. */
+  dependencyMetadata: Record<string, string>;
   mainSource: string | null;
   gitCommit: string | null;
   logicalId: string | null;
@@ -212,6 +394,7 @@ function stringList(source: string, key: string): string[] {
 export function collectProjectSources(check: ChecklyCheck, projectDir: string | null | undefined, failingErrors: string[]): ProjectSources {
   const warnings: string[] = [];
   const sources: Array<{ path: string; content: string }> = [];
+  const dependencyMetadata: Record<string, string> = {};
   let mainSource: string | null = null;
   let gitCommit: string | null = null;
   let logicalId: string | null = null;
@@ -235,6 +418,32 @@ export function collectProjectSources(check: ChecklyCheck, projectDir: string | 
 
   if (projectDir) {
     const root = resolve(projectDir);
+    // Runtime metadata affects how the candidate is installed and executed.
+    // Retain hashes only; never persist scripts, registry URLs, or lockfile data.
+    const dependencyFiles = new Set([
+      "package.json", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb",
+    ]);
+    try {
+      for (const name of readdirSync(root)) {
+        if (/^(?:tsconfig|jsconfig)(?:\.[^.]+)*\.json$/.test(name)) dependencyFiles.add(name);
+      }
+    } catch { warnings.push("project dependency metadata could not be enumerated"); }
+    let metadataBytes = 0;
+    for (const name of [...dependencyFiles].sort()) {
+      const path = join(root, name);
+      if (!existsSync(path)) continue;
+      try {
+        const stat = lstatSync(path);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024
+          || metadataBytes + stat.size > 12 * 1024 * 1024) {
+          warnings.push("project dependency metadata exceeded the safe capture bound");
+          continue;
+        }
+        const content = readFileSync(path);
+        metadataBytes += content.byteLength;
+        dependencyMetadata[name] = sha256(content);
+      } catch { warnings.push("project dependency metadata could not be read safely"); }
+    }
     try {
       gitCommit = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim() || null;
     } catch {
@@ -369,7 +578,7 @@ export function collectProjectSources(check: ChecklyCheck, projectDir: string | 
     const named = specs.find((s) => errText.includes(s.path) || errText.includes(basename(s.path)));
     mainSource = named?.path ?? (specs.length === 1 ? specs[0].path : specs[0]?.path ?? null);
   }
-  return { sources, mainSource, gitCommit, logicalId, repoUrl, playwright, warnings };
+  return { sources, dependencyMetadata, mainSource, gitCommit, logicalId, repoUrl, playwright, warnings };
 }
 
 const MULTISTEP_ASSET_NAMES = ["test-results.json", "check-run-data.json", "logs.txt"];
@@ -882,6 +1091,17 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   if (check.checkType === "MULTI_STEP") log("[bundle] Multistep deployed check fetched; configuration and script require exact local binding");
   else log(`[bundle] check ${check.id} "${check.name}" type=${check.checkType} locations=${(check.locations ?? []).join(",")} runParallel=${Boolean(check.runParallel)}`);
   const secretValues = (check.environmentVariables ?? []).map((v) => v.value).filter((v): v is string => typeof v === "string");
+  let checkGroup: ChecklyCheckGroup | null = null;
+  if (check.groupId !== null && check.groupId !== undefined) {
+    try {
+      checkGroup = await client.getCheckGroup(check.groupId);
+    } catch (error) {
+      // Keep capture useful in shadow/migration mode, but policy fields that
+      // may inherit from this group remain unknown. The verifier will not
+      // substitute a guessed default if enforcement is requested.
+      warnings.push(`check group settings unresolved (${error instanceof Error ? error.constructor.name : "provider error"})`);
+    }
+  }
   const isMultiStep = check.checkType === "MULTI_STEP";
   // Raw retention for this protected transaction never lands INSIDE the
   // sanitized bundle (which must stay origin-free and bounded): for a
@@ -1132,6 +1352,17 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     }
   }
   log(`[bundle] sources: ${proj.sources.map((s) => s.path).join(", ") || "none"}; main=${proj.mainSource ?? "none"}`);
+  const protectedRequirements = protectedRequirementsFor({
+    check,
+    group: checkGroup,
+    sources: proj.sources,
+    mainSource: proj.mainSource,
+    logicalId: proj.logicalId,
+    playwright: proj.playwright,
+    dependencyMetadata: proj.dependencyMetadata,
+  });
+  if (!protectedRequirements) warnings.push(`protected requirements unsupported for check type ${check.checkType}`);
+  else log(`[bundle] protected requirements ${protectedRequirements.policy.schemaVersion} sha256=${protectedRequirements.sha256} sources=${protectedRequirements.policy.sources.length}`);
 
   // 6. measurement
   let measurement: MeasureResult | null = null;
@@ -1181,6 +1412,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     accountId: deps.accountId,
     now,
     toolVersion,
+    protectedRequirements,
   });
   if (isMultiStep) manifest = constrainMultiStepManifest(manifest, boundRecordings,
     new Map(proj.sources.map((item) => [item.path, item.content])));

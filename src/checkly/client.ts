@@ -17,6 +17,7 @@ import type {
   AssetManifest,
   AssetType,
   ChecklyCheck,
+  ChecklyCheckGroup,
   CheckResult,
   CheckResultsPage,
   ErrorGroup,
@@ -74,6 +75,7 @@ function operationOf(url: URL, authenticated: boolean, asset = false): string {
   if (asset) return "asset";
   if (!authenticated) return "asset";
   if (/^\/v1\/checks\/[^/]+$/.test(url.pathname)) return "get-check";
+  if (/^\/v1\/check-groups\/[^/]+$/.test(url.pathname)) return "get-check-group";
   if (/^\/v2\/check-results\/[^/]+$/.test(url.pathname)) return "list-results";
   if (/^\/v1\/check-results\/[^/]+\/[^/]+\/assets(?:\/.*)?$/.test(url.pathname)) return "list-assets";
   if (/^\/v1\/test-sessions\/[^/]+\/results\/[^/]+\/assets(?:\/.*)?$/.test(url.pathname)) return "list-assets";
@@ -221,6 +223,12 @@ export class ChecklyClient {
 
   getCheck(id: string): Promise<ChecklyCheck> {
     return this.json<ChecklyCheck>("GET", `/v1/checks/${encodeURIComponent(id)}`).then((r) => r.data);
+  }
+
+  /** Fetch the inherited settings source for a grouped check. Callers must
+   * still resolve precedence explicitly; this method does not infer defaults. */
+  getCheckGroup(id: number | string): Promise<ChecklyCheckGroup> {
+    return this.json<ChecklyCheckGroup>("GET", `/v1/check-groups/${encodeURIComponent(String(id))}`).then((r) => r.data);
   }
 
   listResults(checkId: string, params: ListResultsParams = {}): Promise<CheckResultsPage> {

@@ -3,6 +3,8 @@
 // outcomes ("recorded:<runId>") and check-code assertions ("code:assert:<id>").
 // Anything else is rejected at ingestion.
 
+import type { ProtectedPolicyEnvelope } from "./protected-requirements.ts";
+
 export type SceneType = "REPRODUCTION" | "HEALTHY" | "DETECTION" | "MUTATION" | "REGRESSION";
 
 export type VerdictProvenance =
@@ -166,6 +168,10 @@ export interface Bundle {
   determinism: DeterminismEvidence;
   runBudget: RunBudget;
   oracleProvenance: { recorded: number; codeDerived: number };
+  /** Parsed and digest-checked provider policy from a v3 trusted bundle. */
+  protectedRequirements?: ProtectedPolicyEnvelope | null;
+  /** Fixed safe reason when the v3 policy is absent or invalid. */
+  protectedRequirementsIssue?: string | null;
 }
 
 // ---- assertion inventory (contract engine 5.1) ----
@@ -295,6 +301,10 @@ export interface SceneCost {
   checkRuns: number;
   wallTimeMs: number;
   phase: "candidate" | "mutation";
+  /** Candidate-independent run conditions used by this scene. */
+  maxConcurrentRuns?: number;
+  requiredRegions?: string[];
+  executedRegions?: string[];
   /** Per-sandbox descendant browser-process sample maxima (null = unavailable). */
   multiStepBrowserCounts?: Array<number | null>;
 }

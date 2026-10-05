@@ -25,6 +25,8 @@ import { AUTOMATION_BYPASS_INPUT, trustedAutomationBypass, trustedRegionalAccoun
 import { trustedMultiStepDetection } from "../multistep/detection.ts";
 import { multiStepDiskRebound } from "../multistep/rebind.ts";
 import { runMultiStepSandbox } from "../multistep/executor.ts";
+import { parseMultiStepProject } from "../multistep/source.ts";
+import { deriveRegionalAccountMapping } from "../multistep/region-account-mapping.ts";
 import { knownRoute } from "../multistep/routes.ts";
 import { sceneExpected } from "../contract/contract.ts";
 import { fnv1a } from "../assertion/id.ts";
@@ -69,16 +71,9 @@ interface CandidateOutcome {
   browserProcesses?: number | null;
 }
 
-// These are the locations the canonical Multistep transaction has isolated
-// monitoring accounts for. This is deliberately not an arbitrary env-file
-// value or a spelling guessed from a private/unknown Checkly location.
-const MULTISTEP_REGIONS: Readonly<Record<string, string>> = Object.freeze({
-  "us-east-1": "us-east-1",
-  "eu-west-1": "eu-west-1",
-});
-
 export function multistepRegionForLocation(location: string): string | null {
-  return Object.hasOwn(MULTISTEP_REGIONS, location) ? MULTISTEP_REGIONS[location]! : null;
+  return typeof location === "string" && location.length > 0 && location.length <= 256
+    && !/[\u0000-\u001f\u007f]/.test(location) ? location : null;
 }
 
 export function isSceneExecutor(e: ExperimentExecutor): e is SceneExecutor {
@@ -254,9 +249,13 @@ export class SceneExecutor implements ExperimentExecutor {
     // Its unchanged deployed check configuration (captured in the bundle) is
     // the trusted location list; a patched checkly.config.ts for another check
     // may NOT relabel two executed regions as one.
-    const config = isMultiStep ? (bundle.config ?? ctx?.config ?? null) : (ctx?.config ?? bundle.config);
+    // Experiment conditions belong to the trusted bundle. Candidate project
+    // configuration must never lower regions or reproduction concurrency.
+    const config = bundle.config ?? ctx?.config ?? null;
     const allowed = effectiveConcurrency(config);
-    const concurrency = mode.kind === "live-concurrent" ? Math.max(1, Math.min(mode.concurrency, allowed)) : 1;
+    const locations = config?.locations.length ? config.locations : bundle.config?.locations ?? [];
+    const concurrency = mode.kind === "live-concurrent"
+      ? Math.max(1, Math.min(mode.concurrency, allowed, isMultiStep ? Math.max(1, locations.length) : mode.concurrency)) : 1;
     let environment = this.environmentLabel(bundle, scene, mode, concurrency);
 
     if (mode.kind === "unknown" || mode.kind === "pending") return this.uncertain(scene, `scene mode not runnable: ${mode.reason}`, 0, [], environment);
@@ -277,32 +276,41 @@ export class SceneExecutor implements ExperimentExecutor {
     if (replayBrowserAssets) environment = this.environmentLabel(bundle, scene, mode, concurrency, true);
     const failingHar = mode.kind === "inject" ? this.har(bundle, "failing.har") : null;
 
-    const locations = config?.locations.length ? config.locations : bundle.config?.locations ?? [];
     const baseEnv = { ...this.env, ...(scene.env ?? {}) };
     // A concurrency-one scene still executes both configured regions, one
     // after the other. Scheduling is independent of the account values.
-    const regions = isMultiStep
-      ? locations.map(multistepRegionForLocation)
-      : [];
-    if (isMultiStep && (regions.length !== 2 || regions[0] !== "us-east-1" || regions[1] !== "eu-west-1")) {
-      return this.uncertain(scene, "Multistep requires both trusted regions in canonical order — no runner was started", 0, [], environment);
+    const regions = isMultiStep ? locations.map(multistepRegionForLocation) : [];
+    if (isMultiStep && (!regions.length || regions.some((region) => region === null))) {
+      return this.uncertain(scene, "Multistep has no valid trusted region list — no runner was started", 0, [], environment);
     }
-    // A shared protected env-file also supplies browser/API credentials and
-    // the readiness bypass. Those unrelated names remain available to other
-    // scene types, but are NEVER sent to a Multistep child. Only the two
-    // regional identities cross the child boundary. A scene itself may not
-    // introduce extra names, and no caller may override trusted runner keys.
-    const multistepNames = ["MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1"];
+    const sourceFiles = new Map(Object.entries(ctx?.files ?? bundle.files));
+    sourceFiles.set(ctx?.checkFile ?? bundle.check.file, patchSource);
+    const sourceModel = isMultiStep ? parseMultiStepProject(sourceFiles, ctx?.checkFile ?? bundle.check.file) : null;
+    const policyEnv = bundle.protectedRequirements?.policy.fields.environmentVariableNames?.original;
+    const declaredEnvKeys = [
+      ...(bundle.config?.environmentVariables ?? []),
+      ...(policyEnv?.state === "known" && Array.isArray(policyEnv.value)
+        ? policyEnv.value.filter((value): value is string => typeof value === "string") : []),
+      ...(sourceModel?.construct?.environmentKeys ?? []),
+    ];
+    const mapping = isMultiStep
+      ? deriveRegionalAccountMapping(sourceFiles.entries(), locations, [...new Set(declaredEnvKeys)])
+      : null;
+    if (isMultiStep && !mapping) {
+      return this.uncertain(scene, "Multistep per-location account mapping is unsupported or unresolved — no runner was started", 0, [], environment);
+    }
+    // Only mapped account keys cross the child boundary. A scene may add no
+    // other user-provided names, and no caller may override trusted runners.
     const protectedRunnerKeys = ["REGION", "PATH", "HOME", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS",
       "LD_LIBRARY_PATH", "ENVIRONMENT_URL", "ENVIRONMENT_NAME", "SANDBOX_SEED", "CI"];
     if (isMultiStep && (Object.keys(baseEnv).some((key) => protectedRunnerKeys.includes(key.toUpperCase()))
-      || Object.keys(scene.env ?? {}).some((key) => !multistepNames.includes(key)))) {
+      || Object.keys(scene.env ?? {}).some((key) => !Object.values(mapping ?? {}).includes(key)
+        && key !== AUTOMATION_BYPASS_INPUT && key !== "REGION"))) {
       return this.uncertain(scene, "Multistep env-file overrides a trusted runner key — no runner was started", 0, [], environment);
     }
-    const accounts = isMultiStep ? trustedRegionalAccounts(baseEnv) : null;
-    if (isMultiStep && (!accounts || !trustedAutomationBypass(baseEnv)
-      || ["TEST_USER", "TEST_USER_US_EAST_1", "TEST_USER_EU_WEST_1"].some((key) =>
-        baseEnv[key] && (baseEnv[key] === accounts.east || baseEnv[key] === accounts.west)))) {
+    const accounts = isMultiStep && mapping
+      ? trustedRegionalAccounts(baseEnv, mapping, locations) : null;
+    if (isMultiStep && (!accounts || !trustedAutomationBypass(baseEnv))) {
       return this.uncertain(scene, "Multistep regional account or protected bypass inputs are unavailable or overlap — no runner was started", 0, [], environment);
     }
 
@@ -323,6 +331,9 @@ export class SceneExecutor implements ExperimentExecutor {
       checkRuns: 0,
       wallTimeMs: 0,
       phase: ctx?.phase ?? "candidate" as const,
+      maxConcurrentRuns: concurrency,
+      requiredRegions: [...locations],
+      executedRegions: [] as string[],
       ...(isMultiStep ? { multiStepBrowserCounts: [] as Array<number | null> } : {}),
     };
     this.cost.byScene.push(costRow);
@@ -338,20 +349,26 @@ export class SceneExecutor implements ExperimentExecutor {
     for (let rep = 0; rep < reps; rep++) {
       let repPassed = true;
       const allHits: ProxyHit[] = [];
-      const batches = isMultiStep && concurrency === 1 ? 2 : 1;
+      const batches = isMultiStep ? Math.ceil(locations.length / concurrency) : 1;
       for (let batch = 0; batch < batches; batch++) {
-        const urls = await this.proxy.arm({ mode, target: this.target, runs: concurrency, replayHar, replayBrowserAssetsFromTarget: replayBrowserAssets,
+        const batchStart = batch * concurrency;
+        const batchRuns = isMultiStep ? Math.min(concurrency, locations.length - batchStart) : concurrency;
+        const batchRegions = isMultiStep
+          ? locations.slice(batchStart, batchStart + batchRuns)
+          : Array.from({ length: batchRuns }, (_, runIndex) => locations[runIndex % Math.max(1, locations.length)]).filter((value): value is string => Boolean(value));
+        costRow.executedRegions!.push(...batchRegions.filter((region) => !costRow.executedRegions!.includes(region)));
+        const urls = await this.proxy.arm({ mode, target: this.target, runs: batchRuns, replayHar, replayBrowserAssetsFromTarget: replayBrowserAssets,
           failingHar, barrierTimeoutMs: this.barrierTimeoutMs,
           trustedMultiStepDetection: mode.kind === "multistep-detection"
             ? trustedMultiStepDetection(bundle, scene) ?? undefined : undefined });
         const startedAt = Date.now();
         const settled = await Promise.all(
           urls.map((url, runIndex) => {
-            const region = isMultiStep ? regions[batch * concurrency + runIndex]! : locations[runIndex % Math.max(1, locations.length)];
+            const globalRunIndex = batchStart + runIndex;
+            const region = isMultiStep ? regions[globalRunIndex]! : locations[runIndex % Math.max(1, locations.length)];
             const env = (isMultiStep ? {
               REGION: region!,
-              MULTISTEP_USER_US_EAST_1: baseEnv.MULTISTEP_USER_US_EAST_1,
-              MULTISTEP_USER_EU_WEST_1: baseEnv.MULTISTEP_USER_EU_WEST_1,
+              ...Object.fromEntries(locations.map((location) => [accounts!.keys[location]!, accounts!.values[location]!])),
               [AUTOMATION_BYPASS_INPUT]: baseEnv[AUTOMATION_BYPASS_INPUT],
             } : {
               ...baseEnv,
@@ -360,7 +377,7 @@ export class SceneExecutor implements ExperimentExecutor {
               CI: "1",
               ...(region ? { CHECKLY_REGION: region } : {}),
             }) as Record<string, string>;
-            return this.runCandidate(bundle, patchSource, ctx, url, env, repetitionSeed(scene.sceneId, rep, batch * concurrency + runIndex),
+            return this.runCandidate(bundle, patchSource, ctx, url, env, repetitionSeed(scene.sceneId, rep, globalRunIndex),
               mode.kind === "multistep-detection" ? scene : null)
               .then((outcome) => ({ ok: true as const, outcome }))
               .catch((err: Error) => ({ ok: false as const, err }))
@@ -368,10 +385,10 @@ export class SceneExecutor implements ExperimentExecutor {
           }),
         );
         const elapsed = Date.now() - startedAt;
-        costRow.checkRuns += concurrency;
+        costRow.checkRuns += batchRuns;
         costRow.wallTimeMs += elapsed;
-        this.cost.localRuns += concurrency;
-        if (bundle.playwright) this.cost.browserProcesses += concurrency * Math.max(1, bundle.playwright.projects.length);
+        this.cost.localRuns += batchRuns;
+        if (bundle.playwright) this.cost.browserProcesses += batchRuns * Math.max(1, bundle.playwright.projects.length);
         if (isMultiStep) {
           const samples = settled.map((result) => result.ok ? result.outcome.browserProcesses ?? null : null);
           costRow.multiStepBrowserCounts!.push(...samples);
@@ -379,13 +396,14 @@ export class SceneExecutor implements ExperimentExecutor {
           this.cost.browserProcesses += samples.reduce<number>((sum, n) => sum + (n ?? 0), 0);
         }
         this.cost.wallTimeMs += elapsed;
-        if (costRow.phase === "mutation") this.cost.mutationRuns += concurrency;
+        if (costRow.phase === "mutation") this.cost.mutationRuns += batchRuns;
         const hits = this.proxy.hits();
         allHits.push(...hits);
         for (let runIndex = 0; runIndex < settled.length; runIndex++) {
           const s = settled[runIndex];
           const runHits = hits.filter((h) => h.runIndex === runIndex);
-          const tag = isMultiStep ? `region ${regions[batch * concurrency + runIndex]}: ` : concurrency > 1 ? `run ${runIndex + 1}/${concurrency}: ` : "";
+          const globalRunIndex = batchStart + runIndex;
+          const tag = isMultiStep ? `region ${regions[globalRunIndex]}: ` : concurrency > 1 ? `run ${runIndex + 1}/${batchRuns}: ` : "";
           if (!s.ok) {
             // A Multistep exception may contain a project path or dependency
             // error from the host. It is not transaction evidence or report text.

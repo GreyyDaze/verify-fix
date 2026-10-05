@@ -60,6 +60,7 @@ import { parseMultiStepScript } from "./source.ts";
 import { AUTOMATION_BYPASS_INPUT, trustedAutomationBypass, trustedRegionalAccounts } from "./accounts.ts";
 import { multiStepDetectionShapeProblems, multiStepShapeProblems } from "./shape.ts";
 import { boundDetectionFailureAssertion, boundFailureAssertion } from "./binding.ts";
+import { deriveRegionalAccountMapping } from "./region-account-mapping.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -372,17 +373,26 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
     return inconclusive("Multistep detection lacks validated remote failing-side provenance — no runner was started");
   }
 
-  const permitted = new Set(["REGION", "MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1", AUTOMATION_BYPASS_INPUT]);
+  const trustedSourceFiles = new Map(Object.entries(ctx.originalFiles ?? ctx.files));
+  const trustedModel = parseMultiStepProject(trustedSourceFiles, checkFile);
+  const trustedLocations = trustedModel.construct?.locations ?? [];
+  const declaredKeys = trustedModel.construct?.environmentKeys ?? [];
+  const trustedMapping = deriveRegionalAccountMapping(trustedSourceFiles.entries(), trustedLocations, declaredKeys);
+  const candidateMapping = deriveRegionalAccountMapping(new Map(Object.entries(ctx.files)).entries(), trustedLocations, declaredKeys);
+  if (!trustedMapping || !candidateMapping || JSON.stringify(trustedMapping) !== JSON.stringify(candidateMapping)) {
+    return inconclusive("Multistep regional account mapping is unsupported or changed — no runner was started");
+  }
+  const permitted = new Set(["REGION", ...Object.values(trustedMapping), AUTOMATION_BYPASS_INPUT]);
   for (const [key, value] of Object.entries(ctx.env ?? {})) {
     if (RESERVED_ENV_KEYS.has(key.toUpperCase()) || !permitted.has(key)
       || typeof value !== "string" || value.length > 512 || value.includes("\0")) {
       return inconclusive("candidate environment is not a minimal approved Multistep environment — no runner was started");
     }
   }
-  if (ctx.env?.REGION !== "us-east-1" && ctx.env?.REGION !== "eu-west-1") {
+  if (!ctx.env?.REGION || !trustedLocations.includes(ctx.env.REGION)) {
     return inconclusive("Multistep REGION is not a trusted location — no runner was started");
   }
-  const accounts = trustedRegionalAccounts(ctx.env, ctx.env.REGION);
+  const accounts = trustedRegionalAccounts(ctx.env, trustedMapping, trustedLocations, ctx.env.REGION);
   if (!accounts) {
     return inconclusive("Multistep regional account values must both be present, trimmed and distinct — no runner was started");
   }
@@ -442,7 +452,7 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
           // Only the selected regional identity crosses into this child.
           REGION: ctx.env!.REGION,
           VERCEL_AUTOMATION_BYPASS_SECRET: bypass,
-          [ctx.env!.REGION === "us-east-1" ? "MULTISTEP_USER_US_EAST_1" : "MULTISTEP_USER_EU_WEST_1"]: selectedAccount,
+          [accounts.selectedKey!]: selectedAccount,
           PATH: process.env.PATH ?? "",
           HOME: freshHome,
           // fully replaced: the parent's NODE_OPTIONS is never inherited

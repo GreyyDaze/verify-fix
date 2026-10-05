@@ -8,6 +8,7 @@ import { readFileSync, existsSync, lstatSync, readdirSync, statSync } from "node
 import { join, relative, resolve } from "node:path";
 import type { ApiRecording, Bundle, BundleConfig, Scene } from "./types.ts";
 import type { ManifestV3 } from "./bundle/types.ts";
+import { assertProtectedPolicyEnvelope } from "./protected-requirements.ts";
 import { parseCheckConfig } from "./scene/config-diff.ts";
 import { MULTISTEP_DETECTION_MODE, parseMode } from "./scene/modes.ts";
 import { recordedNestedBookingConfirmed } from "./multistep/shape.ts";
@@ -207,6 +208,25 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
     runBudget: m.runBudget,
     oracleProvenance: m.oracleProvenance,
   };
+  if (!m.protectedRequirements) {
+    bundle.protectedRequirements = null;
+    bundle.protectedRequirementsIssue = "PROTECTED_POLICY_MISSING";
+  } else {
+    try {
+      assertProtectedPolicyEnvelope(m.protectedRequirements);
+      if (m.protectedRequirements.policy.check.id !== m.check.id
+        || m.protectedRequirements.policy.check.checkType !== m.check.checkType
+        || m.protectedRequirements.policy.check.logicalId !== (m.check.logicalId ?? null)) {
+        throw new Error("PROTECTED_POLICY_IDENTITY_MISMATCH");
+      }
+      bundle.protectedRequirements = m.protectedRequirements;
+      bundle.protectedRequirementsIssue = null;
+    } catch (error) {
+      bundle.protectedRequirements = null;
+      bundle.protectedRequirementsIssue = error instanceof Error && /^PROTECTED_POLICY_/.test(error.message)
+        ? error.message : "PROTECTED_POLICY_INVALID";
+    }
+  }
   bundle.multistep = null;
   if (m.check.checkType === "MULTI_STEP") {
     const problems: string[] = [];

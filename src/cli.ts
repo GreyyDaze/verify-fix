@@ -51,6 +51,8 @@ interface Args {
   reportMarkdown: string | null;
   envFile: string | null;
   envName: string | null;
+  requirementsMode: "shadow" | "migration" | "enforce";
+  requirementsDigest: string | null;
   /** Legacy direct-API flag. Parsed only so it can be rejected safely. */
   dryRun: boolean;
   json: boolean;
@@ -82,6 +84,8 @@ const VALUE_OPTIONS = new Set(["--patch", "--candidate-project", "--pr", "--base
   "--executor", "--target", "--target-revision", "--target-metadata", "--report-json", "--report-markdown",
   "--env-file", "--env-name", "--check", "--result", "--out", "--project", "--assets", "--measure",
   "--measure-overlap", "--target-url", "--bodies", "--history", "--runs", "--reports"]);
+VALUE_OPTIONS.add("--requirements-mode");
+VALUE_OPTIONS.add("--requirements-digest");
 
 /** A target identifies one origin, never a credentialed URL, app path,
  * query, fragment, or host chosen by command-line ambiguity. */
@@ -115,7 +119,7 @@ function readEnvInputs(file: string | null): Record<string, string> {
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
-    command: null, patch: null, candidateProject: null, pr: null, base: null, projectPath: ".", bundle: null, executor: "scene", target: null, targetRevision: null, targetMetadata: null, cloudApproved: false, allowForkCloud: false, reportJson: null, reportMarkdown: null, envFile: null, envName: null, dryRun: false, json: false, verbose: false,
+    command: null, patch: null, candidateProject: null, pr: null, base: null, projectPath: ".", bundle: null, executor: "scene", target: null, targetRevision: null, targetMetadata: null, cloudApproved: false, allowForkCloud: false, reportJson: null, reportMarkdown: null, envFile: null, envName: null, requirementsMode: "shadow", requirementsDigest: null, dryRun: false, json: false, verbose: false,
     check: null, result: null, out: null, project: null, assets: null, measure: 0, measureOverlap: 0, targetUrl: null,
     triggerRca: false, bodies: "api", keepRaw: false, history: 1000, runs: 20, reports: null,
   };
@@ -160,6 +164,8 @@ function parseArgs(argv: string[]): Args {
       case "--report-markdown": args.reportMarkdown = value(i, a); if (takes) i++; break;
       case "--env-file": args.envFile = value(i, a); if (takes) i++; break;
       case "--env-name": args.envName = value(i, a); if (takes) i++; break;
+      case "--requirements-mode": args.requirementsMode = value(i, a) as Args["requirementsMode"]; if (takes) i++; break;
+      case "--requirements-digest": args.requirementsDigest = value(i, a); if (takes) i++; break;
       case "--dry-run": args.dryRun = true; break;
       case "--json": args.json = true; break;
       case "--verbose": args.verbose = true; break;
@@ -186,7 +192,8 @@ function parseArgs(argv: string[]): Args {
       "--target-url", "--trigger-rca", "--bodies", "--keep-raw", "--history", "--json", "--verbose"]),
     verify: new Set(["--patch", "--candidate-project", "--pr", "--base", "--project-path", "--bundle",
       "--executor", "--target", "--target-revision", "--target-metadata", "--cloud-approved", "--allow-fork-cloud",
-      "--report-json", "--report-markdown", "--env-file", "--env-name", "--dry-run", "--json", "--verbose", "--project"]),
+      "--report-json", "--report-markdown", "--env-file", "--env-name", "--dry-run", "--json", "--verbose", "--project",
+      "--requirements-mode", "--requirements-digest"]),
     measure: new Set(["--bundle", "--target", "--project", "--runs", "--env-file", "--env-name", "--json", "--verbose"]),
     "cost-report": new Set(["--reports", "--json"]),
     help: new Set(["--help", "-h"]),
@@ -220,6 +227,7 @@ function usage(): string {
     "                    [--project-path <repo-relative-dir>] [--project <dependency-dir>]",
     "                    [--target-metadata <file>] [--cloud-approved] [--allow-fork-cloud]",
     "                    [--env-file <file>] [--env-name <name>] [--executor scene|hybrid]",
+    "                    [--requirements-mode shadow|migration|enforce] [--requirements-digest <sha256>]",
     "                    [--report-json <file>] [--report-markdown <file>] [--json] [--verbose]",
     "      Grades a candidate fix against a protected incident bundle. --patch remains for fixtures and small experiments.",
     "      Local mode snapshots HEAD plus staged, unstaged, and non-ignored untracked files before any check runs.",
@@ -401,6 +409,11 @@ async function runVerify(args: Args): Promise<ExitCode> {
     process.stderr.write("--target must be a bare http(s) origin without URL credentials\n");
     return 2;
   }
+  if (!["shadow", "migration", "enforce"].includes(args.requirementsMode)
+    || args.requirementsDigest !== null && !/^[a-f0-9]{64}$/.test(args.requirementsDigest)) {
+    process.stderr.write("protected requirements mode or digest is invalid\n");
+    return 2;
+  }
   if (args.executor === "hybrid" && (!args.target || !args.targetRevision)) {
     process.stderr.write("--executor hybrid requires the exact deployment --target <url> and --target-revision <sha>\n");
     return 2;
@@ -464,6 +477,8 @@ async function runVerify(args: Args): Promise<ExitCode> {
       candidateProject: revision?.metadata.sourceReference ?? null,
       candidateRevision: revision?.metadata ?? null,
       targetBinding: binding,
+      protectedRequirementsMode: args.requirementsMode,
+      protectedRequirementsDigest: args.requirementsDigest,
       env,
       environmentName: args.envName ?? undefined,
       projectDir: project,

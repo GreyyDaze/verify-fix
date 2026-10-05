@@ -68,7 +68,11 @@ export function loadCandidateProject(pathIn: string, bundle: Bundle): PatchSet {
   if (!statSync(requestedRoot).isDirectory()) throw new Error(`candidate project ${requestedRoot} is not a directory`);
   const root = realpathSync(requestedRoot);
   const files: Record<string, string> = {};
-  const pending = [...new Set([...Object.keys(bundle.files), bundle.check.file])];
+  const dependencyField = bundle.protectedRequirements?.policy.fields["execution.dependencyMetadata"]?.original;
+  const dependencyPaths = dependencyField?.state === "known" && dependencyField.value
+    && !Array.isArray(dependencyField.value) && typeof dependencyField.value === "object"
+    ? Object.keys(dependencyField.value) : [];
+  const pending = [...new Set([...Object.keys(bundle.files), bundle.check.file, ...dependencyPaths])];
   const visited = new Set<string>();
 
   const inside = (path: string): string => {

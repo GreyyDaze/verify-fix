@@ -5,6 +5,7 @@
 import type { SceneType } from "../types.ts";
 import type { AssertionInventory } from "../types.ts";
 import type { ReproductionMode } from "./rca-mode.ts";
+import type { ProtectedPolicyEnvelope } from "../protected-requirements.ts";
 
 export type SceneMode = "live" | "live-concurrent:2" | "replay:failing.har" | "replay:passing.har" | "replay:failing.api.json" | "replay:passing.api.json" | `inject:${string}` | "detect:POST /api/book -> 200:booking.confirmed=false";
 
@@ -194,6 +195,8 @@ export interface ManifestV3 {
   determinism: DeterminismV3;
   runBudget: { maxPerScene: number; used: number };
   oracleProvenance: { recorded: number; codeDerived: number };
+  /** Policy captured from the trusted provider/source snapshot, never the candidate. */
+  protectedRequirements?: ProtectedPolicyEnvelope | null;
   provenance: {
     accountIdHash: string;
     checkId: string;

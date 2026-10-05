@@ -78,6 +78,27 @@ export interface ChecklyCheck {
   [extra: string]: unknown;
 }
 
+/** Check group settings returned by Checkly's public Check Groups API. Unknown
+ * provider fields stay opaque; policy code only reads explicitly supported
+ * properties and never assumes a Checkly default. */
+export interface ChecklyCheckGroup {
+  id: number | string;
+  name?: string;
+  activated?: boolean;
+  muted?: boolean;
+  frequency?: number | null;
+  locations?: string[];
+  privateLocations?: string[];
+  runParallel?: boolean;
+  doubleCheck?: boolean;
+  retryStrategy?: ChecklyRetryStrategy | null;
+  environmentVariables?: ChecklyEnvVar[];
+  alertChannels?: unknown[];
+  alertEscalationPolicy?: unknown;
+  apiCheckDefaults?: Record<string, unknown>;
+  [extra: string]: unknown;
+}
+
 export interface CheckResultSummary {
   id: string;
   checkId?: string;

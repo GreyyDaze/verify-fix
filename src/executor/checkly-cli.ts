@@ -141,6 +141,9 @@ export class ChecklyCliExecutor implements ExperimentExecutor {
     if (isMultiStep) {
       const original = parseMultiStepProject(new Map(Object.entries(bundle.files)), bundle.check.file);
       const candidate = parseMultiStepProject(new Map(Object.entries(files)), checkFile);
+      if (!original || !candidate) {
+        return this.uncertain(scene, "Multistep trusted or candidate construct could not be resolved before a cloud run", 0, [], [], [], environment);
+      }
       const policy = evaluateMultiStepPolicy(original, candidate);
       const trustedLocations = original.construct?.locations ?? [];
       const declared = original.construct?.environmentKeys ?? [];

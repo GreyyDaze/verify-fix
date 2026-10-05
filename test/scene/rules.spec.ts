@@ -13,7 +13,7 @@ import { loadBundle } from "../../src/bundle.ts";
 import { loadCandidateProject, loadPatch, patchedConfig, patchedCheckSource, newFiles } from "../../src/patch.ts";
 import { parseInventory, inventoryDiff } from "../../src/assertion/inventory.ts";
 import { buildContract } from "../../src/contract/contract.ts";
-import { detectEnvScopeDodge, regionalUserEnvKey, SceneExecutor } from "../../src/executor/scene.ts";
+import { detectEnvScopeDodge, matchesTargetOrigin, regionalUserEnvKey, SceneExecutor } from "../../src/executor/scene.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const INCIDENT_DIR = join(ROOT, "fixtures/slots-booking/bundle/incidents/slots-booking-overlap");
@@ -144,6 +144,17 @@ describe("Playwright locator drift", () => {
   });
 });
 
+describe("Multistep target ownership", () => {
+  test("accepts only a bare env-file origin that matches the explicit target", () => {
+    assert.equal(matchesTargetOrigin("https://slots-booking-verify-fix.vercel.app/", "https://slots-booking-verify-fix.vercel.app"), true);
+    assert.equal(matchesTargetOrigin("https://other.example", "https://slots-booking-verify-fix.vercel.app"), false);
+    assert.equal(matchesTargetOrigin("https://user:pass@slots-booking-verify-fix.vercel.app", "https://slots-booking-verify-fix.vercel.app"), false);
+    assert.equal(matchesTargetOrigin("https://slots-booking-verify-fix.vercel.app/path", "https://slots-booking-verify-fix.vercel.app"), false);
+    assert.equal(matchesTargetOrigin("https://slots-booking-verify-fix.vercel.app?x=1", "https://slots-booking-verify-fix.vercel.app"), false);
+    assert.equal(matchesTargetOrigin("https://slots-booking-verify-fix.vercel.app", null), false);
+  });
+});
+
 describe("measured real bundles", () => {
   test("local measurements open the right determinism gate for overlap and persistent drift", () => {
     const overlap = loadBundle(join(ROOT, "fixtures/bundles/slots-booking-overlap")).bundle;
@@ -160,6 +171,29 @@ describe("measured real bundles", () => {
     const driftFix = loadPatch(join(ROOT, "fixtures/patches/slots-booking-drift/01-good-rename"), drift);
     assert.equal(buildContract(overlap, patchedCheckSource(overlap, overlapFix)).determinismGate.blocked, false);
     assert.equal(buildContract(drift, patchedCheckSource(drift, driftFix)).determinismGate.blocked, false);
+
+    const persistentMultiStep = {
+      ...drift,
+      check: { ...drift.check, checkType: "MULTI_STEP" },
+      determinism: {
+        ...drift.determinism,
+        achieved: 20,
+        targetRuns: 20,
+        sequentialPassRate: 0,
+        reproductionFailRate: 1,
+        baselinePassRate: 0,
+        method: "local-runner" as const,
+      },
+    };
+    assert.equal(buildContract(persistentMultiStep, patchedCheckSource(drift, driftFix)).determinismGate.blocked, false,
+      "a reproducible sequential Multistep failure has no healthy baseline requirement");
+
+    const intermittentMultiStep = {
+      ...persistentMultiStep,
+      determinism: { ...persistentMultiStep.determinism, sequentialPassRate: 0.5, baselinePassRate: 0.5 },
+    };
+    assert.equal(buildContract(intermittentMultiStep, patchedCheckSource(drift, driftFix)).determinismGate.blocked, true,
+      "an inconsistent sequential baseline must still block");
   });
 
   test("an API-only browser replay without --target is inconclusive before Playwright starts", async () => {

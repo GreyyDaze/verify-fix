@@ -1142,8 +1142,10 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     if (!entries.length || nextId === previousNextId) break;
     // Once both sides exist, older pages cannot improve the selected passing
     // control. Stop early while preserving the explicit bound.
-    const hasFailure = history.some((r) => !isOk(r));
-    const hasPass = history.some((r) => isOk(r));
+    const hasRequestedFailure = !opts.resultId || history.some((r) => r.id === opts.resultId);
+    const hasRequestedPass = !opts.passingResultId || history.some((r) => r.id === opts.passingResultId);
+    const hasFailure = opts.resultId ? hasRequestedFailure : history.some((r) => !isOk(r));
+    const hasPass = opts.passingResultId ? hasRequestedPass : history.some((r) => isOk(r));
     if (hasFailure && hasPass) break;
   } while (nextId !== null);
   history.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
@@ -1323,7 +1325,11 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
       const remote = assets.filter((item) => item.result === side && item.name === "test-results.json" && item.type === "remote-asset");
       const problem = multistepAssets?.[side] ? "MULTISTEP_MECHANICS_ONLY" : "MULTISTEP_CAPTURE_BINDING_INVALID";
       const record = !source || unsafeSource || remote.length !== 1 ? null : finalizeRemoteMultiStepRecording(draft.recording, {
-        side, checkId: check.id, result: fetched.summary, detail: fetched.detail,
+        side, checkId: check.id, result: fetched.summary,
+        // The exact FINAL summary came from authenticated paginated Checkly history.
+        // Some older Multistep runs have downloadable assets but no longer resolve
+        // through the per-result detail endpoint; bind against that exact summary.
+        detail: fetched.detail ?? fetched.summary,
         sourceFile: model?.script?.file ?? source.path, sourceText: source.content, sourceModel: model, asset: remote[0]!,
       });
       if (!record) {

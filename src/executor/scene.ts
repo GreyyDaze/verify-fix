@@ -71,6 +71,23 @@ interface CandidateOutcome {
   browserProcesses?: number | null;
 }
 
+export function matchesTargetOrigin(raw: string, target: string | null): boolean {
+  if (!target || raw.length === 0 || raw.length > 2048 || /[\x00-\x20\x7f\\]/.test(raw)) return false;
+  const bareOrigin = (value: string): URL | null => {
+    try {
+      const url = new URL(value);
+      if ((url.protocol !== "http:" && url.protocol !== "https:") || !url.hostname
+        || url.username || url.password || url.search || url.hash
+        || (url.pathname !== "/" && url.pathname !== "")
+        || (value !== url.origin && value !== url.origin + "/")) return null;
+      return url;
+    } catch { return null; }
+  };
+  const supplied = bareOrigin(raw);
+  const trusted = bareOrigin(target);
+  return supplied !== null && trusted !== null && supplied.origin === trusted.origin;
+}
+
 export function multistepRegionForLocation(location: string): string | null {
   return typeof location === "string" && location.length > 0 && location.length <= 256
     && !/[\u0000-\u001f\u007f]/.test(location) ? location : null;
@@ -277,6 +294,15 @@ export class SceneExecutor implements ExperimentExecutor {
     const failingHar = mode.kind === "inject" ? this.har(bundle, "failing.har") : null;
 
     const baseEnv = { ...this.env, ...(scene.env ?? {}) };
+    // ENVIRONMENT_URL commonly lives in the private project env-file. It is
+    // accepted only as a consistency check against the explicit --target, then
+    // discarded: this executor creates the per-run URL and remains its owner.
+    if (isMultiStep && Object.hasOwn(this.env, "ENVIRONMENT_URL")) {
+      if (!matchesTargetOrigin(this.env.ENVIRONMENT_URL!, this.target)) {
+        return this.uncertain(scene, "env-file ENVIRONMENT_URL does not match the explicit --target — no runner was started", 0, [], environment);
+      }
+      delete baseEnv.ENVIRONMENT_URL;
+    }
     // A concurrency-one scene still executes both configured regions, one
     // after the other. Scheduling is independent of the account values.
     const regions = isMultiStep ? locations.map(multistepRegionForLocation) : [];

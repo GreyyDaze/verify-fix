@@ -17,7 +17,7 @@ import type { ProxyHit } from "./scene/proxy.ts";
 import { parseMode } from "./scene/modes.ts";
 import { bundleReadme } from "./bundle/build.ts";
 
-interface MeasurementRecord {
+export interface MeasurementRecord {
   checkPassed: boolean;
   hits: ProxyHit[];
 }
@@ -48,10 +48,25 @@ function matchingHits(record: MeasurementRecord, req: NonNullable<ManifestV3["fa
   return record.hits.filter((h) => h.method === req.method && h.path === req.path);
 }
 
+/** Count the original check's healthy repetitions without confusing a Multistep
+ * HTTP 200 response with a passing assertion result. */
+export function countMeasuredPasses(
+  records: readonly MeasurementRecord[],
+  request: NonNullable<ManifestV3["failurePoint"]>["request"],
+  isMultiStep: boolean,
+): number {
+  return records.filter((record) => {
+    if (isMultiStep || !request) return record.checkPassed;
+    const hits = matchingHits(record, request);
+    return hits.length > 0 && hits.every((hit) => hit.status === request.passingStatus);
+  }).length;
+}
+
 export async function measureLocalDeterminism(opts: LocalMeasureOptions): Promise<LocalMeasureResult> {
   const { bundle } = opts;
   if (bundle.schemaVersion !== "v3") throw new Error("local measurement writes only generated v3 bundles");
-  if (!bundle.playwright) throw new Error("local measurement currently requires a Playwright bundle");
+  const isMultiStep = bundle.check.checkType === "MULTI_STEP";
+  if (!bundle.playwright && !isMultiStep) throw new Error("local measurement requires a Playwright or Multistep bundle");
   const manifestPath = join(bundle.dir, "manifest.json");
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as ManifestV3;
   const reproduction = bundle.scenes.find((s) => s.type === "REPRODUCTION");
@@ -83,25 +98,27 @@ export async function measureLocalDeterminism(opts: LocalMeasureOptions): Promis
   try {
     const sequentialScene = measuredScene(reproduction, "measure-sequential", "live");
     const seqStart = records.length;
-    await executor.runScene(bundle, bundle.checkSource, sequentialScene, ctx);
+    const sequentialObservation = await executor.runScene(bundle, bundle.checkSource, sequentialScene, ctx);
     const sequentialRecords = records.slice(seqStart);
-    if (sequentialRecords.length !== runs) throw new Error(`sequential measurement completed ${sequentialRecords.length}/${runs} runs`);
+    if (sequentialRecords.length !== runs) {
+      const reason = sequentialObservation.reason ? `: ${sequentialObservation.reason}` : "";
+      throw new Error(`sequential measurement completed ${sequentialRecords.length}/${runs} runs${reason}`);
+    }
 
     const request = manifest.failurePoint?.request ?? null;
-    const sequentialPassed = sequentialRecords.filter((r) => {
-      if (!request) return r.checkPassed;
-      const hits = matchingHits(r, request);
-      return hits.length > 0 && hits.every((h) => h.status === request.passingStatus);
-    }).length;
+    const sequentialPassed = countMeasuredPasses(sequentialRecords, request, isMultiStep);
 
     let overlap: LocalMeasureResult["overlap"] = null;
     if (parsed.kind === "live-concurrent") {
       const overlapStart = records.length;
-      await executor.runScene(bundle, bundle.checkSource, measuredScene(reproduction, "measure-reproduction", reproduction.mode), ctx);
+      const overlapObservation = await executor.runScene(bundle, bundle.checkSource, measuredScene(reproduction, "measure-reproduction", reproduction.mode), ctx);
       const overlapRecords = records.slice(overlapStart);
-      if (overlapRecords.length !== runs) throw new Error(`overlap measurement completed ${overlapRecords.length}/${runs} pairs`);
+      if (overlapRecords.length !== runs) {
+        const reason = overlapObservation.reason ? `: ${overlapObservation.reason}` : "";
+        throw new Error(`overlap measurement completed ${overlapRecords.length}/${runs} pairs${reason}`);
+      }
       const pairsWithFailure = overlapRecords.filter((r) => {
-        if (!request) return !r.checkPassed;
+        if (isMultiStep || !request) return !r.checkPassed;
         return matchingHits(r, request).some((h) => h.status === request.status);
       }).length;
       overlap = { pairs: runs, pairsWithFailure, failRate: rate(pairsWithFailure, runs), sessions: [] };

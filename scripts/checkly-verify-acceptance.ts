@@ -20,7 +20,7 @@ function required(name: string): string {
 }
 
 function safeOrigin(raw: string): boolean {
-  if (raw.length === 0 || raw.length > 2048 || /[\\x00-\\x20\\x7f\\\\]/.test(raw)) return false;
+  if (raw.length === 0 || raw.length > 2048 || /[\x00-\x20\x7f\\]/.test(raw)) return false;
   try {
     const url = new URL(raw);
     return (url.protocol === "https:" || url.protocol === "http:")
@@ -84,7 +84,7 @@ async function main(): Promise<void> {
       passingResultId,
       outDir,
       projectDir,
-      historyLimit: 100,
+      historyLimit: 10000,
       bodies: "api",
       keepRaw: false,
     }, { client, accountId: creds.accountId, toolVersion: "0.1.0" });
@@ -96,17 +96,38 @@ async function main(): Promise<void> {
   const manifest = outcome.manifest;
   if (manifest.results.failing?.id !== resultId) throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: requested failing result was not captured");
   if (manifest.results.passing?.id !== passingResultId) throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: requested passing result was not captured");
-  if (manifest.check.checkType !== "PLAYWRIGHT") {
-    throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_CONFIG: full verification acceptance currently targets the Playwright slots-booking check; got " + manifest.check.checkType);
-  }
-  if (!manifest.recordings.failing && !manifest.recordings.passing) {
-    throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: no real browser evidence was captured");
+  if (manifest.check.checkType === "MULTI_STEP") {
+    if (!manifest.recordings.multistepFailing || !manifest.recordings.multistepPassing) {
+      throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: real Multistep evidence is not bound for both selected results");
+    }
+  } else if (manifest.check.checkType === "PLAYWRIGHT") {
+    if (!manifest.recordings.failing && !manifest.recordings.passing) {
+      throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: no real browser evidence was captured");
+    }
+  } else {
+    throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_CONFIG: full verification acceptance supports Playwright and Multistep checks; got " + manifest.check.checkType);
   }
 
+  const loaded = loadBundle(outcome.outDir).bundle;
   const noOpPatch = join(outDir, "original-check.noop.ts");
-  writeFileSync(noOpPatch, manifest.checkSource, "utf8");
+  writeFileSync(noOpPatch, loaded.checkSource, "utf8");
   const reportDir = join(outDir, "reports");
   mkdirSync(reportDir, { recursive: true });
+
+  // Measure the captured baseline before candidate verification so the determinism gate
+  // has real repeated-run evidence instead of silently remaining at 0/20.
+  const measurement = await runCli([
+    "measure", "--bundle", outcome.outDir,
+    "--target", target, "--project", projectDir, "--env-file", envFile,
+    "--runs", "20", "--json",
+  ]);
+  assertCode("20-run determinism measurement", measurement.code, 0, measurement.stdout + measurement.stderr);
+  let determinism: Record<string, unknown>;
+  try {
+    determinism = JSON.parse(measurement.stdout) as Record<string, unknown>;
+  } catch {
+    throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: determinism measurement returned invalid JSON");
+  }
 
   const good = await runCli([
     "verify", "--patch", patchDir, "--bundle", outcome.outDir,
@@ -137,14 +158,14 @@ async function main(): Promise<void> {
   if (noOpJson?.verdict !== "FAILED" || noOpJson.exitCode !== 1) throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: no-op report is not FAILED/1");
   if (uncertainJson?.verdict !== "UNCERTAIN" || uncertainJson.exitCode !== 2) throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: missing-target report is not UNCERTAIN/2");
 
-  const loaded = loadBundle(outcome.outDir).bundle;
   const patch = loadPatch(patchDir, loaded);
   if (Object.keys(patch.files).length === 0) throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: known repair patch is empty");
 
   process.stdout.write(JSON.stringify({
     check: { id: manifest.check.id, name: manifest.check.name, type: manifest.check.checkType },
     results: { failing: resultId, passing: passingResultId },
-    evidence: { failingRecording: manifest.recordings.failing, passingRecording: manifest.recordings.passing, outDir: outcome.outDir },
+    evidence: { failingRecording: manifest.recordings.failing, passingRecording: manifest.recordings.passing, multistepFailing: manifest.recordings.multistepFailing ?? null, multistepPassing: manifest.recordings.multistepPassing ?? null, outDir: outcome.outDir },
+    determinism,
     verification: {
       goodRepair: { verdict: goodJson?.verdict, exitCode: goodJson?.exitCode },
       noOp: { verdict: noOpJson?.verdict, exitCode: noOpJson?.exitCode },

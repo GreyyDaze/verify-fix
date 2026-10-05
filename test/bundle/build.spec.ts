@@ -290,7 +290,7 @@ test("cli: `bundle` without credentials exits 2 with guidance; help lists both c
   }
 });
 
-test("MULTI_STEP accepts the live Checkly compressed asset descriptor and reaches download", async () => {
+test("contract: MULTI_STEP accepts a Checkly-shaped compressed asset descriptor and reaches download", async () => {
   const out = mkdtempSync(join(tmpdir(), "vf-multistep-content-encoding-"));
   try {
     const { client, downloads } = fakeClient();

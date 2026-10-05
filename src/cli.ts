@@ -238,7 +238,7 @@ function usage(): string {
     "      --env-file gives the check its own variables (KEY=VALUE lines, like `checkly test --env-file`).",
     "",
     "  verify-fix measure --bundle <dir> --target <url> --project <dir> [--runs 20] [--env-file <file>] [--verbose]",
-    "      Runs the original Playwright check locally through its reproduction mode, then writes measured",
+    "      Runs the original Playwright or Multistep check against its reproduction mode, then writes measured",
     "      determinism numbers to manifest.json with method local-runner. No Checkly credentials are used.",
     "",
     "  verify-fix cost-report --reports <dir> [--json]",
@@ -382,7 +382,13 @@ async function runMeasure(args: Args): Promise<ExitCode> {
     }
     return 0;
   } catch (err) {
-    process.stderr.write("measure unavailable: private input, bundle or local runner rejected\n");
+    const raw = err instanceof Error ? err.message : String(err);
+    const safe = raw
+      .replace(/https?:\/\/[^\s)\]}>"]+/g, "<redacted-url>")
+      .replace(/\b((?:CHECKLY_)?(?:SECRET|TOKEN|KEY|USER)[A-Z0-9_]*)\s*=\s*[^\s,;]+/gi, "$1=<redacted>")
+      .replace(/\/(?:Users|private|var|tmp)\/[^\s:]+/g, "<path>")
+      .slice(0, 300);
+    process.stderr.write(`measure unavailable: ${safe || "unknown measurement failure"}\n`);
     return 2;
   }
 }

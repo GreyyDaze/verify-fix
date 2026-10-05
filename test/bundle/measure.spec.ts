@@ -11,7 +11,7 @@ function fakeChecklyTest(script: Array<"Pass" | "Fail" | "crash">): { runner: Ru
     const outcome = script[n] ?? "Pass";
     n += 1;
     const id = n; // captured before the await: two overlapping runs must get distinct session ids
-    const invocation = { args, cwd, startedAt: Date.now() };
+    const invocation: { args: string[]; cwd: string; startedAt: number; finishedAt?: number } = { args, cwd, startedAt: Date.now() };
     invocations.push(invocation);
     await new Promise((r) => setTimeout(r, 20));
     invocation.finishedAt = Date.now();

@@ -305,22 +305,32 @@ export class SceneExecutor implements ExperimentExecutor {
     }
     // A concurrency-one scene still executes both configured regions, one
     // after the other. Scheduling is independent of the account values.
-    const regions = isMultiStep ? locations.map(multistepRegionForLocation) : [];
+    const regions = isMultiStep ? trustedLocations.map(multistepRegionForLocation) : [];
     if (isMultiStep && (!regions.length || regions.some((region) => region === null))) {
       return this.uncertain(scene, "Multistep has no valid trusted region list — no runner was started", 0, [], environment);
     }
     const sourceFiles = new Map(Object.entries(ctx?.files ?? bundle.files));
     sourceFiles.set(ctx?.checkFile ?? bundle.check.file, patchSource);
     const sourceModel = isMultiStep ? parseMultiStepProject(sourceFiles, ctx?.checkFile ?? bundle.check.file) : null;
+    const originalModel = isMultiStep
+      ? parseMultiStepProject(new Map(Object.entries(bundle.files)), bundle.check.file)
+      : null;
+    // Multistep locations are part of the executed construct, not a
+    // candidate project-level override. Candidate scheduling may change
+    // runParallel, but it cannot reduce or relabel the trusted regions.
+    const trustedLocations = isMultiStep
+      ? originalModel?.construct?.locations ?? []
+      : [];
     const policyEnv = bundle.protectedRequirements?.policy.fields.environmentVariableNames?.original;
     const declaredEnvKeys = [
       ...(bundle.config?.environmentVariables ?? []),
       ...(policyEnv?.state === "known" && Array.isArray(policyEnv.value)
         ? policyEnv.value.filter((value): value is string => typeof value === "string") : []),
+      ...(originalModel?.construct?.environmentKeys ?? []),
       ...(sourceModel?.construct?.environmentKeys ?? []),
     ];
     const mapping = isMultiStep
-      ? deriveRegionalAccountMapping(sourceFiles.entries(), locations, [...new Set(declaredEnvKeys)])
+      ? deriveRegionalAccountMapping(sourceFiles.entries(), trustedLocations, [...new Set(declaredEnvKeys)])
       : null;
     if (isMultiStep && !mapping) {
       return this.uncertain(scene, "Multistep per-location account mapping is unsupported or unresolved — no runner was started", 0, [], environment);

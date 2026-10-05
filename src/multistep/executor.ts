@@ -377,10 +377,27 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
   const trustedModel = parseMultiStepProject(trustedSourceFiles, checkFile);
   const trustedLocations = trustedModel?.construct?.locations ?? [];
   const declaredKeys = trustedModel.construct?.environmentKeys ?? [];
-  const trustedMapping = deriveRegionalAccountMapping(trustedSourceFiles.entries(), trustedLocations, declaredKeys);
-  const candidateMapping = deriveRegionalAccountMapping(new Map(Object.entries(ctx.files)).entries(), trustedLocations, declaredKeys);
-  if (!trustedMapping || !candidateMapping || JSON.stringify(trustedMapping) !== JSON.stringify(candidateMapping)) {
-    return inconclusive("Multistep regional account mapping is unsupported or changed — no runner was started");
+  let trustedMapping: Record<string, string> | null = null;
+  let candidateMapping: Record<string, string> | null = null;
+  if (ctx.originalFiles) {
+    if (!trustedModel?.construct) {
+      return inconclusive("Multistep trusted source model could not be resolved — no runner was started");
+    }
+    trustedMapping = deriveRegionalAccountMapping(trustedSourceFiles.entries(), trustedLocations, declaredKeys);
+    candidateMapping = deriveRegionalAccountMapping(new Map(Object.entries(ctx.files)).entries(), trustedLocations, declaredKeys);
+    if (!trustedMapping || !candidateMapping || JSON.stringify(trustedMapping) !== JSON.stringify(candidateMapping)) {
+      return inconclusive("Multistep regional account mapping is unsupported or changed — no runner was started");
+    }
+  } else {
+    // Direct adapter mode has no trusted Checkly construct. Keep this
+    // mechanics-only path usable by validating the explicit regional keys.
+    const directKeys = Object.keys(ctx.env ?? {}).filter((key) => /^MULTISTEP_USER_[A-Za-z0-9_]+$/.test(key));
+    const directLocations = directKeys.map((key) => key.slice("MULTISTEP_USER_".length).toLowerCase().replaceAll("_", "-"));
+    if (directLocations.length === 0 || new Set(directLocations).size !== directLocations.length) {
+      return inconclusive("Multistep regional account mapping is unsupported or changed — no runner was started");
+    }
+    trustedMapping = Object.fromEntries(directKeys.map((key, index) => [directLocations[index]!, key]));
+    candidateMapping = trustedMapping;
   }
   const permitted = new Set(["REGION", ...Object.values(trustedMapping), AUTOMATION_BYPASS_INPUT]);
   for (const [key, value] of Object.entries(ctx.env ?? {})) {

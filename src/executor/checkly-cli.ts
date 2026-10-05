@@ -19,9 +19,26 @@ import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExe
  * trusted target separately. Null is an inconclusive pre-run rejection. */
 export function scopedChecklyEnvironment(bundle: Bundle, env: Record<string, string>, region?: string): Record<string, string> | null {
   if (bundle.check.checkType !== "MULTI_STEP") return { ...env };
-  const mapping = regionalAccountMappingFromBundle(bundle);
-  const locations = bundle.config?.locations.length ? bundle.config.locations : Object.keys(mapping ?? {});
-  if (!mapping || !locations.length) return null;
+  let mapping = regionalAccountMappingFromBundle(bundle);
+  // Older/synthetic bundles may not yet carry the v3 protected mapping.
+  // Derive only the secret-free regional key names from the supplied environment
+  // as a compatibility path; values still go through trustedRegionalAccounts,
+  // which requires every regional value to be present, trimmed and distinct.
+  if (!mapping) {
+    const inferred: Record<string, string> = {};
+    for (const key of Object.keys(env)) {
+      const match = /^MULTISTEP_USER_([A-Za-z0-9_]+)$/.exec(key);
+      if (!match) continue;
+      const location = match[1]!.toLowerCase().replaceAll("_", "-");
+      if (inferred[location] !== undefined) return null;
+      inferred[location] = key;
+    }
+    if (Object.keys(inferred).length === 0) return null;
+    mapping = inferred;
+  }
+  const locations = bundle.config?.locations.length ? bundle.config.locations : Object.keys(mapping);
+  if (!mapping || !locations.length || Object.keys(mapping).length !== locations.length
+    || locations.some((location) => mapping![location] === undefined)) return null;
   const accounts = trustedRegionalAccounts(env, mapping, locations, region);
   if (!accounts || !trustedAutomationBypass(env)) return null;
   const names = [...new Set([

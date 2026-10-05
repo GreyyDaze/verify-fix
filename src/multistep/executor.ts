@@ -375,8 +375,8 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
 
   const trustedSourceFiles = new Map(Object.entries(ctx.originalFiles ?? ctx.files));
   const trustedModel = parseMultiStepProject(trustedSourceFiles, checkFile);
-  const trustedLocations = trustedModel?.construct?.locations ?? [];
-  const declaredKeys = trustedModel.construct?.environmentKeys ?? [];
+  let trustedLocations = trustedModel?.construct?.locations ?? [];
+  const declaredKeys = trustedModel?.construct?.environmentKeys ?? [];
   let trustedMapping: Record<string, string> | null = null;
   let candidateMapping: Record<string, string> | null = null;
   if (ctx.originalFiles) {
@@ -396,6 +396,7 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
     if (directLocations.length === 0 || new Set(directLocations).size !== directLocations.length) {
       return inconclusive("Multistep regional account mapping is unsupported or changed — no runner was started");
     }
+    trustedLocations = directLocations;
     trustedMapping = Object.fromEntries(directKeys.map((key, index) => [directLocations[index]!, key]));
     candidateMapping = trustedMapping;
   }

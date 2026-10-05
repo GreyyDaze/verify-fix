@@ -10,8 +10,8 @@ import {
 } from "../src/protected-requirements.ts";
 
 const policy: ProtectedRequirementsPolicy = {
-  schemaVersion: "protected-requirements-v1",
-  policyVersion: 1,
+  schemaVersion: "protected-requirements-v2",
+  policyVersion: 2,
   check: { id: "check-1", logicalId: "booking-flow", checkType: "MULTI_STEP" },
   sources: [{ kind: "checkly-api", identity: "check-1", sha256: "a".repeat(64) }],
   fields: {

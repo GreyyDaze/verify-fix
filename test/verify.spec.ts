@@ -474,7 +474,8 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
   test("12-good-one-location → FAILED before execution under Phase 9", async () => {
     const r = await run("12-good-one-location");
     assert.equal(r.decision.verdict, "FAILED", r.decision.reasons.join("\n"));
-    assert.ok(r.protectedRequirements.reasonCodes.includes("PROTECTED_REQUIREMENT_CHANGED"));\n    assert.equal(r.cost.runs, 0, "location reduction must block before any run");
+    assert.ok(r.protectedRequirements.reasonCodes.includes("PROTECTED_REQUIREMENT_CHANGED"));
+    assert.equal(r.cost.runs, 0, "location reduction must block before any run");
   });
 
   test("weak-oracle bundle: a behaving patch never PASSes", async () => {

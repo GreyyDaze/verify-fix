@@ -311,6 +311,9 @@ export class SceneExecutor implements ExperimentExecutor {
     }
     // A concurrency-one scene still executes both configured regions, one
     // after the other. Scheduling is independent of the account values.
+    const trustedLocations = isMultiStep
+      ? trustedConstruct?.locations ?? []
+      : [];
     const regions = isMultiStep ? trustedLocations.map(multistepRegionForLocation) : [];
     if (isMultiStep && (!regions.length || regions.some((region) => region === null))) {
       return this.uncertain(scene, "Multistep has no valid trusted region list — no runner was started", 0, [], environment);
@@ -319,12 +322,6 @@ export class SceneExecutor implements ExperimentExecutor {
     sourceFiles.set(ctx?.checkFile ?? bundle.check.file, patchSource);
     const sourceModel = isMultiStep ? parseMultiStepProject(sourceFiles, ctx?.checkFile ?? bundle.check.file) : null;
     const originalModel = trustedConstruct ? { construct: trustedConstruct } : null;
-    // Multistep locations are part of the executed construct, not a
-    // candidate project-level override. Candidate scheduling may change
-    // runParallel, but it cannot reduce or relabel the trusted regions.
-    const trustedLocations = isMultiStep
-      ? originalModel?.construct?.locations ?? []
-      : [];
     const policyEnv = bundle.protectedRequirements?.policy.fields.environmentVariableNames?.original;
     const declaredEnvKeys = [
       ...(bundle.config?.environmentVariables ?? []),

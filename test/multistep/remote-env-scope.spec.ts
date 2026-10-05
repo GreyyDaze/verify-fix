@@ -84,6 +84,7 @@ process.exitCode = isolated ? 0 : 1
     const run = (env: typeof regionalEnv) => new ChecklyCliExecutor({ projectDir: project,
       target: "https://synthetic-target.example", env });
     const ctx = { phase: "candidate" as const, config: captured.config,
+      checkFile: captured.check.file, checkName: captured.check.name,
       files: { ...captured.files, [captured.check.file]: repaired } };
     const executor = run(regionalEnv);
     const observed = await executor.runScene(captured, repaired, scene, ctx);

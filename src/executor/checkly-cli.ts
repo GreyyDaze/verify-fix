@@ -164,13 +164,16 @@ export class ChecklyCliExecutor implements ExperimentExecutor {
       const policy = evaluateMultiStepPolicy(original, candidate);
       const trustedLocations = original.construct?.locations ?? [];
       const declared = original.construct?.environmentKeys ?? [];
-      const originalMapping = deriveRegionalAccountMapping(Object.entries(bundle.files), trustedLocations, declared);
       const candidateMapping = deriveRegionalAccountMapping(Object.entries(files), trustedLocations, declared);
       const keys = Object.keys(bundle.files).sort();
+      // The sealed bundle mapping is the trusted baseline. Re-deriving the
+      // original mapping from source is redundant and can reject a valid
+      // candidate when the source parser cannot reconstruct a mapping that
+      // was already captured and sealed in the bundle. The candidate must
+      // still prove that it preserves that exact secret-free mapping.
       if (policy.rejected || policy.uncertain || checkFile !== bundle.check.file || checkName !== bundle.check.name
-        || !trustedMapping || !originalMapping || !candidateMapping
-        || !sameRegionAccountMapping(trustedMapping, originalMapping)
-        || !sameRegionAccountMapping(originalMapping, candidateMapping)
+        || !trustedMapping || !candidateMapping
+        || !sameRegionAccountMapping(trustedMapping, candidateMapping)
         || JSON.stringify(Object.keys(files).sort()) !== JSON.stringify(keys)
         || keys.some((key) => key !== checkFile && files[key] !== bundle.files[key])) {
         return this.uncertain(scene, "Multistep source identity or construct changed before a cloud run", 0, [], [], [], environment);

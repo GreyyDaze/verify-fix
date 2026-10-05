@@ -208,7 +208,7 @@
       {
         "kind": "project-default",
         "identity": "fixture:checkly.config.ts",
-        "sha256": "4517fd0ad861c6155e82c72b677d4db454913204"
+        "sha256": "102689bbe6e2478f8460359a1c98b67845702f1fa6208a61201a1ddad12b59da"
       }
     ],
     "fields": {
@@ -359,6 +359,6 @@
         }
       }
     },
-    "sha256": "7e54a7a13fc503c66d911e109d1580c053330b1c9f5428667dcbd12212545b69"
+    "sha256": "31950e360088e98768ac9599096a8b662c0b10eaa3a8d502ac144ad7361d578b"
   }
 }

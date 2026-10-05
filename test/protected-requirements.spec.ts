@@ -33,7 +33,7 @@ const unchanged = candidate({
     { id: "assert-1", subject: "booking.confirmed", matcher: "toBe", target: "CONFIRMED" },
     { id: "assert-2", subject: "session.user", matcher: "toBeDefined", target: true },
   ] },
-  frequency: { state: "known", value: 10 },
+  frequency: { state: "known", value: 5 },
 });
 
 const unchangedCandidate = unchanged;

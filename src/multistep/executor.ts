@@ -375,10 +375,7 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
 
   const trustedSourceFiles = new Map(Object.entries(ctx.originalFiles ?? ctx.files));
   const trustedModel = parseMultiStepProject(trustedSourceFiles, checkFile);
-  if (!trustedModel) {
-    return inconclusive("Multistep trusted source model could not be resolved — no runner was started");
-  }
-  const trustedLocations = trustedModel.construct?.locations ?? [];
+  const trustedLocations = trustedModel?.construct?.locations ?? [];
   const declaredKeys = trustedModel.construct?.environmentKeys ?? [];
   const trustedMapping = deriveRegionalAccountMapping(trustedSourceFiles.entries(), trustedLocations, declaredKeys);
   const candidateMapping = deriveRegionalAccountMapping(new Map(Object.entries(ctx.files)).entries(), trustedLocations, declaredKeys);

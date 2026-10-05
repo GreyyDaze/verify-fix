@@ -115,7 +115,7 @@ test("contract: synthetic remote manifest validation preserves rejection categor
     ["bad source", () => [{
       name: "test-results.json", type: "report", url: "https://assets.example/result.zip",
       source: "other", archive: { entryName: "test-results.json" },
-    } as AssetManifestEntry], /MULTISTEP_ASSET_TYPE_INVALID/],
+    } as unknown as AssetManifestEntry], /MULTISTEP_ASSET_TYPE_INVALID/],
     ["bad content type", () => [{
       name: "test-results.json", type: "report", url: "https://assets.example/result.zip",
       source: "check-result", contentType: 513 as unknown as string,

@@ -88,9 +88,16 @@ export function matchesTargetOrigin(raw: string, target: string | null): boolean
   return supplied !== null && trusted !== null && supplied.origin === trusted.origin;
 }
 
+const SUPPORTED_MULTISTEP_REGIONS = new Set([
+  "us-east-1",
+  "eu-west-1",
+]);
+
 export function multistepRegionForLocation(location: string): string | null {
-  return typeof location === "string" && location.length > 0 && location.length <= 256
-    && !/[\u0000-\u001f\u007f]/.test(location) ? location : null;
+  return typeof location === "string"
+    && SUPPORTED_MULTISTEP_REGIONS.has(location)
+    ? location
+    : null;
 }
 
 export function isSceneExecutor(e: ExperimentExecutor): e is SceneExecutor {

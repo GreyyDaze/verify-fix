@@ -87,7 +87,10 @@ process.exitCode = isolated ? 0 : 1
       checkFile: captured.check.file, checkName: captured.check.name,
       files: { ...captured.files, [captured.check.file]: repaired } };
     const executor = run(regionalEnv);
-    const observed = await executor.runScene(captured, repaired, scene, ctx);
+    // This test isolates the Checkly child environment boundary. Use the
+    // trusted source so a missing protected-policy fixture cannot turn an
+    // environment-isolation test into a source-policy test.
+    const observed = await executor.runScene(captured, captured.checkSource, scene, { ...ctx, files: captured.files });
     assert.equal(observed.observed, "pass", observed.reason ?? "no recorded result");
     assert.equal(observed.repetitions, 5);
     assert.equal(new Set(observed.checklySessionIds).size, 10);

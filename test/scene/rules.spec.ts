@@ -62,7 +62,11 @@ describe("config diff + policy", () => {
     assert.equal(v.frequency, "5");
     assert.equal(v.retryStrategy, null);
     assert.deepEqual(v.envKeys, ["ACCOUNT"]);
-    assert.deepEqual(parseCheckConfig(null), { runParallel: null, locations: null, frequency: null, retryStrategy: null, doubleCheck: null, timeouts: {}, envKeys: [] });
+    assert.deepEqual(parseCheckConfig(null), {
+      runParallel: null, locations: null, frequency: null, retryStrategy: null, doubleCheck: null,
+      timeouts: {}, envKeys: [], activated: null, muted: null, shouldFail: null,
+      privateLocations: null, runtimeId: null,
+    });
     assert.equal(parseCheckConfig(`// example: runParallel: true\nrunParallel: false`).runParallel, false, "commented examples are not config values");
   });
 

@@ -68,12 +68,12 @@ export async function syntheticRemoteBundle() {
   const outDir = mkdtempSync(join(tmpdir(), prefix + "bundle-"));
   await buildBundle({ checkId: "synthetic-check", outDir, projectDir, assetsDir: null, log: () => {} },
     { client, accountId: "synthetic", now: () => new Date("2026-09-27T00:00:00.000Z") });
-  const bundle = loadBundle(outDir).bundle;
-  if (bundle.multistep?.problems.length) throw new Error("synthetic fixture did not bind both remote recordings");
+  const initial = loadBundle(outDir).bundle;
+  if (initial.multistep?.problems.length) throw new Error("synthetic fixture did not bind both remote recordings");
   const policy = buildProtectedRequirements({
     check: {
-      id: bundle.check.deployedId ?? "synthetic-check",
-      logicalId: bundle.check.logicalId ?? null,
+      id: initial.check.deployedId ?? "synthetic-check",
+      logicalId: initial.check.logicalId ?? null,
       checkType: "MULTI_STEP",
     },
     sources: [protectedSourceIdentity("checkly-api", "synthetic-checkly-check", "synthetic-checkly-check")],
@@ -85,7 +85,11 @@ export async function syntheticRemoteBundle() {
     },
   });
   if (policy.status !== "ready") throw new Error("synthetic fixture could not seal Phase 9 policy");
-  bundle.protectedRequirements = policy.envelope;
-  bundle.protectedRequirementsIssue = null;
+  const manifestPath = join(outDir, "manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+  manifest.protectedRequirements = policy.envelope;
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+  const bundle = loadBundle(outDir).bundle;
+  if (!bundle.protectedRequirements) throw new Error("synthetic fixture policy did not reload");
   return bundle;
 }

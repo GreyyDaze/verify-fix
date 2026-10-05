@@ -44,7 +44,7 @@ const ENV = { ACCOUNT: "demo" };
 
 /** Expected verdict per seeded patch, as documented in each patch header. */
 const SEEDED: Array<{ name: string; exit: 0 | 1 | 2 | "never-pass" }> = [
-  { name: "01-good-run-parallel-false", exit: 0 },
+  { name: "01-good-run-parallel-false", exit: 1 },
   { name: "02-mutation-d-weakened-good", exit: 1 },
   { name: "03-weaken-assertion.ts", exit: 1 },
   { name: "04-catch-ignore.ts", exit: 1 },
@@ -55,7 +55,7 @@ const SEEDED: Array<{ name: string; exit: 0 | 1 | 2 | "never-pass" }> = [
   { name: "09-remove-step.ts", exit: 1 },
   { name: "10-regression-symptom-fix.ts", exit: 1 },
   { name: "11-flaky.ts", exit: "never-pass" },
-  { name: "12-good-one-location", exit: 0 },
+  { name: "12-good-one-location", exit: 1 },
   { name: "13-config-retry-only", exit: 1 },
 ];
 
@@ -418,42 +418,26 @@ test("PR-10: an inconclusive mutation cannot be a kill or a survivor, even when 
 describe("seeded slots-booking suite keeps its oracle verdicts against the real app", () => {
   const run = (name: string) => {
     const { bundle } = loadBundle(INCIDENT_DIR);
-    return verify({ bundle, patch: loadPatch(join(PATCH_DIR, name), bundle), target: app.url, env: ENV });
+    if (!bundle.protectedRequirements) throw new Error("seeded fixture must carry a trusted Phase 9 policy");
+    return verify({
+      bundle,
+      patch: loadPatch(join(PATCH_DIR, name), bundle),
+      target: app.url,
+      env: ENV,
+      protectedRequirementsMode: "enforce",
+      protectedRequirementsDigest: bundle.protectedRequirements.sha256,
+    });
   };
 
-  test("good config patch PASSes (exit 0): every scene observed with evidence, scene-c fails under injection, stable across re-runs", async () => {
+  test("01-good-run-parallel-false → FAILED before execution under Phase 9", async () => {
     const a = await run("01-good-run-parallel-false");
-    assert.equal(a.decision.verdict, "PASS", a.decision.reasons.join("\n"));
-    assert.equal(a.decision.exitCode, 0);
-    assert.equal(a.envDodge, null);
+    assert.equal(a.decision.verdict, "FAILED", a.decision.reasons.join("\n"));
+    assert.equal(a.decision.exitCode, 1);
     assert.equal(a.configPolicy.rejected, null);
-    assert.deepEqual(a.configPolicy.changes.map((c) => `${c.family}:${c.key}`), ["scheduling:runParallel"]);
-    assert.equal(a.patchedConfig?.runParallel, false);
-    for (const row of a.decision.rows) {
-      assert.notEqual(row.observed, "uncertain", `${row.experiment} must be observed`);
-      assert.equal(row.matched, true, `${row.experiment} must match its oracle`);
-      assert.match(row.environment, /^target 127\.0\.0\.1:\d+/, `${row.experiment} names the host it ran against`);
-    }
-    const sceneC = a.observations.get("scene-c-auth-failure")!;
-    assert.equal(sceneC.observed, "fail");
-    assert.equal(sceneC.repetitions, 5);
-    assert.ok(sceneC.trace.some((t) => t.what === "fetch POST /api/book → 401"));
-    for (const o of a.observations.values()) {
-      assert.ok(o.trace.some((t) => t.kind === "step" && /^fetch /.test(t.what) && /→ \d{3}$/.test(t.what)), `${o.sceneId}: trace proves contact with the app`);
-    }
-    assert.ok(a.mutants.length > 0);
-    assert.ok(a.mutants.every((m) => !m.survived), "every seeded mutant is killed by the verifier");
-    assert.ok(a.cost.localRuns > 0);
-    assert.equal(a.cost.browserProcesses, 0, "the seeded DSL suite starts no browser process");
-    assert.ok(a.cost.wallTimeMs > 0);
-    assert.match(a.report.markdown, /\*\*Cost:\*\*/);
-    assert.deepEqual(a.report.json.cost, a.cost);
-
-    const b = await run("01-good-run-parallel-false");
-    assert.deepEqual(b.decision.rows, a.decision.rows, "deterministic scenes: identical evidence on re-run");
-    assert.equal(b.decision.verdict, "PASS");
+    assert.ok(a.protectedRequirements.reasonCodes.includes("PROTECTED_REQUIREMENT_CHANGED"));
+    assert.equal(a.protectedRequirements.staticVerdict, "FAILED");
+    assert.equal(a.cost.runs, 0, "protected scheduling reduction must block before any run");
   });
-
   test("the unpatched check with its original config FAILS: the overlap is reproduced from the real app, not assumed", async () => {
     const { bundle } = loadBundle(INCIDENT_DIR);
     const r = await verify({ bundle, patch: bundle.checkSource, target: app.url, env: ENV });
@@ -488,10 +472,10 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
     });
   }
 
-  test("12-good-one-location PASSes: a single location cannot overlap itself", async () => {
+  test("12-good-one-location → FAILED before execution under Phase 9", async () => {
     const r = await run("12-good-one-location");
-    assert.equal(r.decision.verdict, "PASS", r.decision.reasons.join("\n"));
-    assert.deepEqual(r.configPolicy.changes.map((c) => `${c.family}:${c.key}`), ["scheduling:locations"]);
+    assert.equal(r.decision.verdict, "FAILED", r.decision.reasons.join("\n"));
+    assert.ok(r.protectedRequirements.reasonCodes.includes("PROTECTED_REQUIREMENT_CHANGED"));\n    assert.equal(r.cost.runs, 0, "location reduction must block before any run");
   });
 
   test("weak-oracle bundle: a behaving patch never PASSes", async () => {
@@ -500,7 +484,7 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
     assert.notEqual(r.decision.verdict, "PASS", r.decision.reasons.join("\n"));
   });
 
-  test("CLI: --target + --env-file, directory patch, exit code from the verdict (good patch → 0), environment column", async () => {
+  test("CLI: Phase 9 scheduling reduction is FAILED before any run", async () => {
     const dir = mkdtempSync(join(tmpdir(), "verify-fix-env-"));
     const envFile = join(dir, ".env");
     writeFileSync(envFile, "# the check's own variable, as `checkly test --env-file` would pass it\nACCOUNT=demo\n", { mode: 0o600 });
@@ -508,7 +492,7 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
     const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
       const child = spawn(
         process.execPath,
-        ["--no-warnings", join(ROOT, "src/cli.ts"), "verify", "--patch", join(PATCH_DIR, "01-good-run-parallel-false"), "--bundle", INCIDENT_DIR, "--target", app.url, "--env-file", envFile, "--env-name", "ci"],
+        ["--no-warnings", join(ROOT, "src/cli.ts"), "verify", "--patch", join(PATCH_DIR, "01-good-run-parallel-false"), "--bundle", INCIDENT_DIR, "--target", app.url, "--env-file", envFile, "--env-name", "ci", "--requirements-mode", "enforce", "--requirements-digest", "7e54a7a13fc503c66d911e109d1580c053330b1c9f5428667dcbd12212545b69"],
         { cwd: ROOT }
       );
       let stdout = "";
@@ -517,8 +501,8 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
       child.stderr.on("data", (d) => (stderr += String(d)));
       child.on("close", (code) => resolve({ code, stdout, stderr }));
     });
-    assert.equal(result.code, 0, result.stdout + result.stderr);
-    assert.match(result.stdout, /\*\*Verdict:\*\* PASS \(exit 0\)/);
+    assert.equal(result.code, 1, result.stdout + result.stderr);
+    assert.match(result.stdout, /\*\*Verdict:\*\* FAILED \(exit 1\)/);
     assert.match(result.stdout, /\| experiment \| environment \| oracle \|/);
     assert.match(result.stdout, /\| scene-c-auth-failure \| target 127\.0\.0\.1:\d+ \+ inject POST \/api\/book -> 401 \| [^|]+ \| fail \| fail \| ✓ \|/);
     assert.match(result.stdout, /Live rows ran against 127\.0\.0\.1:\d+/);

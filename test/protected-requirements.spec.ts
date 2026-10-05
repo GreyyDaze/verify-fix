@@ -15,15 +15,33 @@ const policy: ProtectedRequirementsPolicy = {
   check: { id: "check-1", logicalId: "booking-flow", checkType: "MULTI_STEP" },
   sources: [{ kind: "checkly-api", identity: "check-1", sha256: "a".repeat(64) }],
   fields: {
+    "check.name": { effect: "metadata", comparison: "exact", original: { state: "known", value: "booking-flow" } },
     activated: { effect: "protected", comparison: "exact", original: { state: "known", value: true } },
+    muted: { effect: "protected", comparison: "exact", original: { state: "known", value: false } },
+    shouldFail: { effect: "protected", comparison: "exact", original: { state: "known", value: false } },
+    frequency: { effect: "protected", comparison: "exact", original: { state: "known", value: 5 } },
     locations: { effect: "protected", comparison: "set-equal", original: { state: "known", value: ["us-east-1", "eu-west-1"] } },
-    assertions: { effect: "protected", comparison: "required-tuples", original: { state: "known", value: [{ id: "assert-1", subject: "booking.confirmed", matcher: "toBe", target: "CONFIRMED" }] } },
-    frequency: { effect: "metadata", comparison: "exact", original: { state: "known", value: 5 } },
+    privateLocations: { effect: "protected", comparison: "set-equal", original: { state: "known", value: [] } },
+    runParallel: { effect: "protected", comparison: "exact", original: { state: "known", value: true } },
+    retryStrategy: { effect: "protected", comparison: "exact", original: { state: "known", value: null } },
+    alertBehavior: { effect: "protected", comparison: "exact", original: { state: "known", value: "default" } },
+    environmentVariableNames: { effect: "protected", comparison: "set-equal", original: { state: "known", value: ["ENVIRONMENT_URL"] } },
+    targetResolution: { effect: "protected", comparison: "exact", original: { state: "known", value: "code" } },
+    "execution.dependencyMetadata": { effect: "protected", comparison: "exact", original: { state: "known", value: {} } },
+    "multistep.orderedSteps": { effect: "protected", comparison: "exact", original: { state: "known", value: ["book"] } },
+    "multistep.routesAndMethods": { effect: "protected", comparison: "exact", original: { state: "known", value: ["POST /book"] } },
+    "multistep.assertions": { effect: "protected", comparison: "required-tuples", original: { state: "known", value: [{ id: "assert-1", subject: "booking.confirmed", matcher: "toBe", target: "CONFIRMED" }] } },
+    "multistep.environmentMapping": { effect: "protected", comparison: "exact", original: { state: "known", value: { "us-east-1": "REGION_EAST", "eu-west-1": "REGION_WEST" } } },
+    "multistep.runtimeTransaction": { effect: "protected", comparison: "exact", original: { state: "known", value: "booking" } },
+    "multistep.runtime": { effect: "protected", comparison: "exact", original: { state: "known", value: "node" } },
   },
 };
 
 function candidate(fields: CandidateEffectiveRequirements["fields"]): CandidateEffectiveRequirements {
-  return { check: { ...policy.check }, fields };
+  const defaults = Object.fromEntries(
+    Object.entries(policy.fields).map(([name, field]) => [name, field.original]),
+  ) as CandidateEffectiveRequirements["fields"];
+  return { check: { ...policy.check }, fields: { ...defaults, ...fields } };
 }
 
 const unchanged = candidate({
@@ -73,9 +91,10 @@ test("unclassified candidate settings are uncertain instead of silently accepted
 });
 
 test("metadata-only differences are reported without blocking", () => {
-  const result = compareProtectedRequirements(sealProtectedRequirements(policy), unchangedCandidate);
+  const result = compareProtectedRequirements(sealProtectedRequirements(policy),
+    candidate({ ...unchanged.fields, "check.name": { state: "known", value: "renamed" } }));
   assert.equal(result.verdict, "PASS");
-  assert.deepEqual(result.changedMetadata, ["frequency"]);
+  assert.deepEqual(result.changedMetadata, ["check.name"]);
 });
 
 test("tampered policy content fails its pinned digest", () => {

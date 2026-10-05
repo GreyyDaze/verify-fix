@@ -36,6 +36,8 @@ const unchanged = candidate({
   frequency: { state: "known", value: 10 },
 });
 
+const unchangedCandidate = unchanged;
+
 test("protected policy digest seals a normalized versioned policy", () => {
   const sealed = sealProtectedRequirements(policy);
   assert.match(sealed.sha256, /^[a-f0-9]{64}$/);

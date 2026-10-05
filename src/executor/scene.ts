@@ -270,7 +270,13 @@ export class SceneExecutor implements ExperimentExecutor {
     // configuration must never lower regions or reproduction concurrency.
     const config = bundle.config ?? ctx?.config ?? null;
     const allowed = effectiveConcurrency(config);
-    const locations = config?.locations.length ? config.locations : bundle.config?.locations ?? [];
+    const candidateLocations = config?.locations.length ? config.locations : bundle.config?.locations ?? [];
+    const trustedConstruct = isMultiStep
+      ? parseMultiStepProject(new Map(Object.entries(bundle.files)), bundle.check.file)?.construct
+      : null;
+    const locations = isMultiStep && trustedConstruct?.locations.length
+      ? trustedConstruct.locations
+      : candidateLocations;
     const concurrency = mode.kind === "live-concurrent"
       ? Math.max(1, Math.min(mode.concurrency, allowed, isMultiStep ? Math.max(1, locations.length) : mode.concurrency)) : 1;
     let environment = this.environmentLabel(bundle, scene, mode, concurrency);
@@ -312,9 +318,7 @@ export class SceneExecutor implements ExperimentExecutor {
     const sourceFiles = new Map(Object.entries(ctx?.files ?? bundle.files));
     sourceFiles.set(ctx?.checkFile ?? bundle.check.file, patchSource);
     const sourceModel = isMultiStep ? parseMultiStepProject(sourceFiles, ctx?.checkFile ?? bundle.check.file) : null;
-    const originalModel = isMultiStep
-      ? parseMultiStepProject(new Map(Object.entries(bundle.files)), bundle.check.file)
-      : null;
+    const originalModel = trustedConstruct ? { construct: trustedConstruct } : null;
     // Multistep locations are part of the executed construct, not a
     // candidate project-level override. Candidate scheduling may change
     // runParallel, but it cannot reduce or relabel the trusted regions.

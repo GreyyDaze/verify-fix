@@ -10,7 +10,8 @@
     "repo": "slots-booking",
     "file": "booking.check.ts",
     "logicalId": "slots-booking",
-    "deployedId": null
+    "deployedId": "fixture-slots-booking",
+    "checkType": "BROWSER"
   },
   "recordedOrigin": null,
   "scenes": [
@@ -189,5 +190,175 @@
   "oracleProvenance": {
     "recorded": 3,
     "codeDerived": 5
+  },
+  "protectedRequirements": {
+    "schemaVersion": "protected-requirements-v2",
+    "policyVersion": 2,
+    "check": {
+      "id": "fixture-slots-booking",
+      "logicalId": "slots-booking",
+      "checkType": "BROWSER"
+    },
+    "sources": [
+      {
+        "kind": "checkly-api",
+        "identity": "fixture-checkly-api:slots-booking",
+        "sha256": "67f78cb2d3ef19f6879a9b9c8826a87c748f01823925c77586b730b54d759bc4"
+      },
+      {
+        "kind": "project-default",
+        "identity": "fixture:checkly.config.ts",
+        "sha256": "4517fd0ad861c6155e82c72b677d4db454913204"
+      }
+    ],
+    "fields": {
+      "check.name": {
+        "effect": "metadata",
+        "comparison": "exact",
+        "original": {
+          "state": "known",
+          "value": "slots-booking flow"
+        }
+      },
+      "activated": {
+        "effect": "protected",
+        "comparison": "exact",
+        "original": {
+          "state": "known",
+          "value": true
+        }
+      },
+      "muted": {
+        "effect": "protected",
+        "comparison": "exact",
+        "original": {
+          "state": "known",
+          "value": false
+        }
+      },
+      "shouldFail": {
+        "effect": "protected",
+        "comparison": "exact",
+        "original": {
+          "state": "known",
+          "value": null
+        }
+      },
+      "frequency": {
+        "effect": "protected",
+        "comparison": "exact",
+        "original": {
+          "state": "known",
+          "value": 5
+        }
+      },
+      "locations": {
+        "effect": "protected",
+        "comparison": "set-equal",
+        "original": {
+          "state": "known",
+          "value": [
+            "eu-west-1",
+            "us-east-1"
+          ]
+        }
+      },
+      "privateLocations": {
+        "effect": "protected",
+        "comparison": "set-equal",
+        "original": {
+          "state": "known",
+          "value": []
+        }
+      },
+      "runParallel": {
+        "effect": "protected",
+        "comparison": "exact",
+        "original": {
+          "state": "known",
+          "value": true
+        }
+      },
+      "retryStrategy": {
+        "effect": "protected",
+        "comparison": "exact",
+        "original": {
+          "state": "known",
+          "value": null
+        }
+      },
+      "alertBehavior": {
+        "effect": "protected",
+        "comparison": "exact",
+        "original": {
+          "state": "known",
+          "value": null
+        }
+      },
+      "environmentVariableNames": {
+        "effect": "protected",
+        "comparison": "set-equal",
+        "original": {
+          "state": "known",
+          "value": [
+            "ACCOUNT"
+          ]
+        }
+      },
+      "targetResolution": {
+        "effect": "protected",
+        "comparison": "exact",
+        "original": {
+          "state": "known",
+          "value": "code"
+        }
+      },
+      "execution.dependencyMetadata": {
+        "effect": "protected",
+        "comparison": "exact",
+        "original": {
+          "state": "known",
+          "value": {}
+        }
+      },
+      "browser.entrypoint": {
+        "effect": "protected",
+        "comparison": "exact",
+        "original": {
+          "state": "known",
+          "value": "booking.check.ts"
+        }
+      },
+      "browser.runtime": {
+        "effect": "protected",
+        "comparison": "exact",
+        "original": {
+          "state": "known",
+          "value": null
+        }
+      },
+      "browser.assertions": {
+        "effect": "protected",
+        "comparison": "required-tuples",
+        "original": {
+          "state": "known",
+          "value": [
+            "0c8749c88422a7dafd5632604b12483cd2a0682224b4df6902e8501e3e048e6c",
+            "5e93bbc00874525faa28b54f798d22187bfbb167f8bf9dc23ac0abf984774d69",
+            "e8e2b45e7f7b6bcede3bea15f573d00d56e7bad1ddfc6bea0c048be3891cef18",
+            "fee69c63a3841f65cbc51e5530dd54081de779e8b3d23f92f31423cffa7ae940"
+          ]
+        }
+      },
+      "browser.target": {
+        "effect": "protected",
+        "comparison": "exact",
+        "original": {
+          "state": "known",
+          "value": "code"
+        }
+      }
+    },
+    "sha256": "7e54a7a13fc503c66d911e109d1580c053330b1c9f5428667dcbd12212545b69"
   }
 }

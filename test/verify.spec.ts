@@ -417,7 +417,22 @@ test("PR-10: an inconclusive mutation cannot be a kill or a survivor, even when 
 describe("seeded slots-booking suite keeps its oracle verdicts against the real app", () => {
   const run = (name: string) => {
     const { bundle } = loadBundle(INCIDENT_DIR);
-    if (!bundle.protectedRequirements) throw new Error("seeded fixture must carry a trusted Phase 9 policy");
+
+    return verify({
+      bundle,
+      patch: loadPatch(join(PATCH_DIR, name), bundle),
+      target: app.url,
+      env: ENV,
+    });
+  };
+
+  const runPhase9 = (name: string) => {
+    const { bundle } = loadBundle(INCIDENT_DIR);
+
+    if (!bundle.protectedRequirements) {
+      throw new Error("seeded fixture must carry a trusted Phase 9 policy");
+    }
+
     return verify({
       bundle,
       patch: loadPatch(join(PATCH_DIR, name), bundle),
@@ -429,7 +444,7 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
   };
 
   test("01-good-run-parallel-false → FAILED before execution under Phase 9", async () => {
-    const a = await run("01-good-run-parallel-false");
+    const a = await runPhase9("01-good-run-parallel-false");
     assert.equal(a.decision.verdict, "FAILED", a.decision.reasons.join("\n"));
     assert.equal(a.decision.exitCode, 1);
     assert.equal(a.configPolicy.rejected, null);
@@ -472,7 +487,7 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
   }
 
   test("12-good-one-location → FAILED before execution under Phase 9", async () => {
-    const r = await run("12-good-one-location");
+    const r = await runPhase9("12-good-one-location");
     assert.equal(r.decision.verdict, "FAILED", r.decision.reasons.join("\n"));
     assert.ok(r.protectedRequirements.reasonCodes.includes("PROTECTED_REQUIREMENT_CHANGED"));
     assert.equal(r.cost.runs, 0, "location reduction must block before any run");

@@ -83,6 +83,8 @@ export interface ProtectedRequirementsAssessment {
   staticVerdict: "PASS" | "FAILED" | "UNCERTAIN";
   reasonCodes: string[];
   changedMetadata: string[];
+  /** Phase 9 task 9.5: new settings that are understood and non-weakening. */
+  supportedAdditions: string[];
   originalValues: Record<string, ResolvedPolicyValue>;
   candidateValues: Record<string, ResolvedPolicyValue>;
   trustedConcurrency: number | null;
@@ -403,6 +405,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     staticVerdict: protectedStaticVerdict,
     reasonCodes: protectedReasonCodes,
     changedMetadata: protectedComparison?.changedMetadata ?? [],
+    supportedAdditions: protectedComparison?.supportedAdditions ?? [],
     originalValues: protectedEnvelope ? Object.fromEntries(Object.entries(protectedEnvelope.policy.fields).map(([name, field]) => [name, field.original])) : {},
     candidateValues: protectedCandidate?.fields ?? {},
     trustedConcurrency: trustedRequirementConcurrency(bundle, protectedEnvelope),

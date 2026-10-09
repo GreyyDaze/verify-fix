@@ -46,6 +46,7 @@ export interface ReportDetails {
     staticVerdict: "PASS" | "FAILED" | "UNCERTAIN";
     reasonCodes: string[];
     changedMetadata: string[];
+    supportedAdditions?: string[];
     originalValues: Record<string, ResolvedPolicyValue>;
     candidateValues: Record<string, ResolvedPolicyValue>;
     trustedConcurrency: number | null;
@@ -154,6 +155,7 @@ export function buildReport(contract: ContractReport, decision: Decision, observ
     lines.push(`- Policy version: ${p.policyVersion ?? "unknown"}`);
     lines.push(`- Policy digest: ${p.digest ? `sha256:${p.digest}` : "missing"}; caller pin: ${p.expectedDigestMatched === null ? "not supplied" : p.expectedDigestMatched ? "matched" : "missing or mismatched"}`);
     lines.push(`- Changed metadata: ${p.changedMetadata.length ? p.changedMetadata.join(", ") : "none"}`);
+    lines.push(`- Supported new settings (analysed, non-weakening, continue to experiments): ${p.supportedAdditions?.length ? p.supportedAdditions.join(", ") : "none"}`);
     lines.push(`- Assessment reason codes: ${p.reasonCodes.length ? p.reasonCodes.join(", ") : "none"}`);
     lines.push(`- Reproduction concurrency: trusted ${p.trustedConcurrency ?? "unknown"}; measured ${p.measuredConcurrency ?? "not run"}`);
     lines.push(`- Regions: required ${p.requiredRegions === null ? "unknown" : p.requiredRegions.length ? p.requiredRegions.join(", ") : "none"}; executed ${p.executedRegions.length ? p.executedRegions.join(", ") : "none"}`);

@@ -142,10 +142,45 @@ export interface CandidateEffectiveRequirements {
   identityResolved?: boolean;
 }
 
+/**
+ * Phase 9 task 9.5: a setting is NOT rejected merely for being new.
+ *
+ * "Do not reject a setting merely because it is new. Determine what it
+ * changes. A new setting that preserves protected guarantees continues to
+ * experiments. A setting that definitely weakens a protected guarantee
+ * returns FAILED. An unsupported or ambiguous effect returns UNCERTAIN."
+ *
+ * These are settings whose effect is understood and which cannot weaken a
+ * protected guarantee. They are ADDITIVE: enabling one keeps every protected
+ * field intact, so the candidate continues to positive/falsification/regression
+ * experiments rather than being stopped by an unclassified-setting code.
+ *
+ * Anything NOT listed here stays UNCERTAIN. This list is deliberately short:
+ * an entry must be a setting that adds capability without changing what is
+ * monitored, when it runs, where it runs, or how failures are reported.
+ */
+const SUPPORTED_ADDITIVE_SETTINGS = new Set([
+  // Presentation and bookkeeping only. None of these can change what a run
+  // observes, when it runs, or whether a failure is reported.
+  "check.name",
+  "check.description",
+  "check.tags",
+  "check.group",
+  "config.tags",
+]);
+
+/** Settings whose effect on monitoring strength is NOT understood. UNCERTAIN. */
+export function classifyNewSetting(name: string): "supported-addition" | "unsupported" {
+  return SUPPORTED_ADDITIVE_SETTINGS.has(name) ? "supported-addition" : "unsupported";
+}
+
 export interface ProtectedRequirementsComparison {
   verdict: "PASS" | "FAILED" | "UNCERTAIN";
   reasonCodes: string[];
   changedMetadata: string[];
+  /** New settings that are understood and cannot weaken a protected guarantee.
+   *  Phase 9 task 9.5. Reported, never blocking. */
+  supportedAdditions: string[];
 }
 
 export function policyKnown(value: JsonValue): ResolvedPolicyValue {
@@ -328,6 +363,7 @@ export function compareProtectedRequirements(
   const { policy } = envelope;
   const reasonCodes = new Set<string>();
   const changedMetadata: string[] = [];
+  const supportedAdditions: string[] = [];
   if (candidate.identityResolved === false) reasonCodes.add("PROTECTED_CHECK_IDENTITY_UNRESOLVED");
   else if (candidate.check.id !== policy.check.id || candidate.check.logicalId !== policy.check.logicalId
     || candidate.check.checkType !== policy.check.checkType) reasonCodes.add("PROTECTED_CHECK_IDENTITY_CHANGED");
@@ -346,8 +382,13 @@ export function compareProtectedRequirements(
       else changedMetadata.push(name);
     }
   }
+  // Phase 9 task 9.5. A new setting is analysed, not reflexively rejected:
+  // a supported addition is reported and the candidate continues to the
+  // experiments; only an unsupported or ambiguous effect is UNCERTAIN.
   for (const name of Object.keys(candidate.fields)) {
-    if (!(name in policy.fields)) reasonCodes.add("CANDIDATE_SETTING_UNCLASSIFIED");
+    if (name in policy.fields) continue;
+    if (classifyNewSetting(name) === "supported-addition") supportedAdditions.push(name);
+    else reasonCodes.add("CANDIDATE_SETTING_UNCLASSIFIED");
   }
   const codes = [...reasonCodes].sort();
   return {
@@ -355,5 +396,6 @@ export function compareProtectedRequirements(
       ? "FAILED" : codes.length ? "UNCERTAIN" : "PASS",
     reasonCodes: codes,
     changedMetadata: changedMetadata.sort(),
+    supportedAdditions: supportedAdditions.sort(),
   };
 }

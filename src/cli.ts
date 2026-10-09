@@ -25,6 +25,10 @@ import {
 import { parseEnvFile } from "./scene/env.ts";
 import { measureLocalDeterminism } from "./measure-local.ts";
 import { buildCostMatrix, costMatrixMarkdown } from "./cost-report.ts";
+import { initConfirmation, mergePackageScripts, planInit } from "./init.ts";
+import { mkdirSync, statSync } from "node:fs";
+
+const isFile = (path: string): boolean => { try { return statSync(path).isFile(); } catch { return false; } };
 import { resolveCredentials, CREDENTIALS_HELP } from "./checkly/credentials.ts";
 import { ChecklyClient, ChecklyApiError } from "./checkly/client.ts";
 import { buildBundle } from "./bundle/build.ts";
@@ -74,12 +78,14 @@ interface Args {
   runs: number;
   // cost-report
   reports: string | null;
+  // init
+  yes: boolean;
 }
 
 /** No option value, extra positional argument or misspelled flag is ever
  * silently ignored. In particular a token-looking argument is never echoed. */
 const FLAG_OPTIONS = new Set(["--help", "-h", "--dry-run", "--json", "--verbose", "--cloud-approved",
-  "--allow-fork-cloud", "--trigger-rca", "--keep-raw"]);
+  "--allow-fork-cloud", "--trigger-rca", "--keep-raw", "--yes", "-y"]);
 const VALUE_OPTIONS = new Set(["--patch", "--candidate-project", "--pr", "--base", "--project-path", "--bundle",
   "--executor", "--target", "--target-revision", "--target-metadata", "--report-json", "--report-markdown",
   "--env-file", "--env-name", "--check", "--result", "--out", "--project", "--assets", "--measure",
@@ -121,7 +127,7 @@ function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: null, patch: null, candidateProject: null, pr: null, base: null, projectPath: ".", bundle: null, executor: "scene", target: null, targetRevision: null, targetMetadata: null, cloudApproved: false, allowForkCloud: false, reportJson: null, reportMarkdown: null, envFile: null, envName: null, requirementsMode: "shadow", requirementsDigest: null, dryRun: false, json: false, verbose: false,
     check: null, result: null, out: null, project: null, assets: null, measure: 0, measureOverlap: 0, targetUrl: null,
-    triggerRca: false, bodies: "api", keepRaw: false, history: 1000, runs: 20, reports: null,
+    triggerRca: false, bodies: "api", keepRaw: false, history: 1000, runs: 20, reports: null, yes: false,
   };
   const seen = new Set<string>();
   const value = (i: number, a: string): string => {
@@ -180,6 +186,7 @@ function parseArgs(argv: string[]): Args {
       case "--trigger-rca": args.triggerRca = true; break;
       case "--bodies": args.bodies = value(i, a) as BodyPolicy; if (takes) i++; break;
       case "--keep-raw": args.keepRaw = true; break;
+      case "--yes": case "-y": args.yes = true; break;
       case "--history": args.history = Number(value(i, a)); if (takes) i++; break;
       case "--runs": args.runs = Number(value(i, a)); if (takes) i++; break;
       case "--reports": args.reports = value(i, a); if (takes) i++; break;
@@ -196,6 +203,7 @@ function parseArgs(argv: string[]): Args {
       "--requirements-mode", "--requirements-digest"]),
     measure: new Set(["--bundle", "--target", "--project", "--runs", "--env-file", "--env-name", "--json", "--verbose"]),
     "cost-report": new Set(["--reports", "--json"]),
+    init: new Set(["--yes", "-y"]),
     help: new Set(["--help", "-h"]),
   };
   if (args.command && perCommand[args.command] && [...seen].some((key) =>
@@ -241,7 +249,13 @@ function usage(): string {
     "      Runs the original Playwright or Multistep check against its reproduction mode, then writes measured",
     "      determinism numbers to manifest.json with method local-runner. No Checkly credentials are used.",
     "",
-    "  verify-fix cost-report --reports <dir> [--json]",
+    "  verify-fix init [--yes]",
+  "      Prepares verify-fix inside an EXISTING Checkly project. Detects the project files, then writes",
+  "      only the agreed CLI configuration and package scripts after confirmation. It never creates or",
+  "      copies the example project, never provisions a service, and never reads or stores a credential.",
+  "      To copy the worked example instead, use: npm create verify-fix@latest <dir> -- --template slots-booking-live",
+  "",
+  "  verify-fix cost-report --reports <dir> [--json]",
     "      Aggregates saved verification JSON reports by candidate and verdict. It reports runs and wall time.",
     "",
     "Exit codes: 0 = PASS/ok · 1 = FAILED · 2 = UNCERTAIN / usage error",
@@ -526,6 +540,47 @@ function runCostReport(args: Args): ExitCode {
   }
 }
 
+/**
+ * `verify-fix init` — Phase 8 task 8.1.
+ *
+ * Prepares verify-fix inside an EXISTING Checkly project. It never creates or
+ * copies the example, never provisions a service, and never reads or stores a
+ * credential. Nothing is written until the user confirms.
+ */
+function runInit(args: Args): ExitCode {
+  const plan = planInit(process.cwd());
+  if (!plan.project.configFile) {
+    for (const note of plan.notes) process.stderr.write(`${note}\n`);
+    return 2;
+  }
+  process.stdout.write(`${initConfirmation(plan)}\n`);
+  for (const note of plan.notes) process.stdout.write(`- ${note}\n`);
+  if (!plan.actions.length) return 0;
+
+  if (!args.yes && !process.stdin.isTTY) {
+    process.stderr.write("refusing to write without confirmation. Re-run with --yes.\n");
+    return 2;
+  }
+  if (!args.yes) {
+    process.stderr.write("refusing to write without an interactive confirmation. Re-run with --yes.\n");
+    return 2;
+  }
+
+  try {
+    for (const action of plan.actions) {
+      if (action.path === "incidents/") mkdirSync(action.path, { recursive: true });
+      else if (action.path === "package.json" && isFile(action.path)) {
+        writeFileSync(action.path, mergePackageScripts(readFileSync(action.path, "utf8")), "utf8");
+      }
+    }
+  } catch (error) {
+    process.stderr.write(`init failed: ${(error as Error).message}\n`);
+    return 2;
+  }
+  process.stdout.write("\nWrote the actions listed above.\n");
+  return 0;
+}
+
 async function main(): Promise<ExitCode> {
   let args: Args;
   try { args = parseArgs(process.argv.slice(2)); }
@@ -538,6 +593,7 @@ async function main(): Promise<ExitCode> {
   if (args.command === "measure") return runMeasure(args);
   if (args.command === "verify") return runVerify(args);
   if (args.command === "cost-report") return runCostReport(args);
+  if (args.command === "init") return runInit(args);
   process.stderr.write("unknown command\n\n" + usage());
   return 2;
 }

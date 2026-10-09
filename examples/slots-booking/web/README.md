@@ -203,3 +203,136 @@ then obtain protected exact-revision PASS and later observe repaired scheduled
 green in both regions. No real Phase 7 deploy, status registration or RCA
 trigger was attempted here; Phase 8 stays blocked. See
 [`../../../docs/PLAN.md`](../../../docs/PLAN.md) for the stage table.
+
+---
+
+# Learner workshop — GitHub → Vercel → Upstash → Checkly → incident → repair → gate
+
+This section is what a **copied** project teaches. `npm create verify-fix@latest <dir> -- --template slots-booking-live`
+copies this file, so you own the whole loop on your own accounts. Nothing below
+is pre-captured: you cause your own incident and capture it yourself.
+
+Credentials stay in **your** environment. verify-fix never provisions a service,
+never reads or stores a credential, and never runs `checkly deploy` itself.
+Leave **Rocky Automatic Repair** OFF — its analysis is passive evidence, and the
+verifier never follows it blindly.
+
+## 1. Create the GitHub repository
+
+```bash
+git init && git add -A && git commit -m "slots-booking live workshop"
+git remote add origin https://github.com/<you>/<repo>.git
+git push -u origin main
+```
+
+## 2. Deploy the app to Vercel
+
+1. Vercel → **Add New → Project** → import the repository (framework Next.js).
+2. Deploy once so a production domain exists.
+3. Copy `.env.example` to `.env.local` and fill it in (below), then redeploy.
+
+## 3. Attach Upstash
+
+The app keeps booking sessions in Redis. Create a free Upstash database and set:
+
+| Variable | Meaning |
+| --- | --- |
+| `UPSTASH_REDIS_REST_URL` | Upstash REST endpoint |
+| `UPSTASH_REDIS_REST_TOKEN` | Upstash token |
+| `VERCEL_OIDC_TOKEN` | Short-lived Vercel OIDC token used for preview access |
+| `CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET` | Bypass for Vercel Deployment Protection |
+| `ENVIRONMENT_URL` | The origin the checks target |
+| `API_TOKEN` | Bearer token the booking API requires |
+| `TEST_USER_US_EAST_1` / `TEST_USER_EU_WEST_1` | One stable browser-check user **per location** |
+| `MULTISTEP_USER_US_EAST_1` / `MULTISTEP_USER_EU_WEST_1` | **Separate** Multistep accounts per region |
+
+Use **different values** for the browser users and the Multistep users. Sharing
+one account between them lets the two scheduled checks invalidate each other's
+sessions — which is exactly the incident you are about to create.
+
+## 4. Authenticate Checkly and deploy the scheduled check
+
+```bash
+npx checkly login
+npx checkly deploy
+```
+
+You should see `slots availability API`, `slots booking flow`, and
+`slots booking multistep transaction`. Let all three run green for a few
+minutes before continuing. A green baseline is what makes the later repair
+provable.
+
+## 5. Cause your own incident
+
+Both browser locations deliberately share one `TEST_USER`. Two overlapping runs
+log in with the same account; the second login supersedes the first session, and
+the first run's booking returns `401`. Sequential runs always pass. That is a
+real concurrency incident, produced by you, not shipped with the project.
+
+## 6. Capture it
+
+```bash
+npx verify-fix bundle --check <check-id> --out ./incidents/overlap
+```
+
+This writes a **sanitized** bundle: check config, sources, the failing and last
+passing result, the trace as HAR, the error group and Rocky's RCA. Tokens,
+cookies and authorization headers are stripped before anything is written.
+
+## 7. Repair and verify against the exact preview
+
+```bash
+git checkout -b repair/serialise-logins
+# ...make the repair...
+npx verify-fix verify \
+  --candidate-project . --base origin/main \
+  --bundle ./incidents/overlap \
+  --target <preview-url> --project .
+```
+
+Exit codes: **0** PASS · **1** FAILED · **2** UNCERTAIN.
+
+A real repair PASSes. A fake does not: deleting the assertion, weakening it,
+wrapping it in `try/catch`, hard-coding a value, switching accounts, or retrying
+until green are all convicted. The report shows every experiment with what was
+expected and what was observed.
+
+## 8. Open a pull request and let the gate decide
+
+The reusable workflow runs the **pinned** verifier against the exact preview
+revision. The agent cannot edit the verifier, the incident, the policy, or the
+gate — those are loaded from protected base-controlled inputs. Only after a
+protected PASS do you merge, deploy to production, verify production, and run
+`checkly deploy` yourself.
+
+## 9. If setup fails
+
+| Symptom | Cause |
+| --- | --- |
+| `401` on the API | `API_TOKEN` missing or different on preview and production |
+| `HTTP 302` from Vercel | Deployment Protection — configure the bypass, or verify the stable alias |
+| `UNAUTHORIZED` in the Multistep check | The two `MULTISTEP_USER_*` values must be distinct and non-empty |
+| Verdict `UNCERTAIN` not `PASS` | Evidence is missing. Read the report's reason codes; do not force a PASS |
+
+`UNCERTAIN` is a correct answer, not a bug: it means verify-fix could not prove
+the repair. Only `PASS` is a merge.
+
+## 10. Alerts, usage and cost
+
+Checks run on a schedule from two regions. The Hobby plan caps how many run
+locations you may use and **which regions are allowed** — if a deploy is refused
+with "Selected locations are not part of the current plan", switch to a region
+from the allowed list (for example `eu-central-1` or `eu-west-2` instead of
+`eu-west-1`). `checkly checks list` and `checkly checks stats` show current
+status and availability.
+
+## 11. Remove every external resource
+
+1. `npx checkly checks delete <id>` for each check, or remove them from the
+   project code and `npx checkly deploy`.
+2. Delete the Vercel project (this removes the domain and deployments).
+3. Delete the Upstash database.
+4. Delete the GitHub repository.
+5. Remove `.env.local` and rotate anything that was stored in it.
+
+You now know whether the tool works on your own accounts, on your own incident.

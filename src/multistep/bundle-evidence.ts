@@ -12,13 +12,19 @@ import { multiStepSourcePath } from "./files.ts";
 import { recordedNestedBookingConfirmed } from "./shape.ts";
 import { MULTISTEP_DETECTION_MODE } from "../scene/modes.ts";
 import { MULTISTEP_CHECK_NAME, storedMultiStepIdentityProblem } from "./identity.ts";
+import { isSyntacticallyValidRegion, trustedMultistepScope } from "./trusted-scope.ts";
 
 const ASSET_NAMES = new Set(["test-results.json", "check-run-data.json", "logs.txt"]);
 const API_OPERATIONS = new Set(["asset", "get-check", "list-results", "list-assets", "get-result", "error-group", "rca"]);
 const SAFE_ASSUMPTIONS = new Set(["locations", "run-parallel", "env-vars", "target-resolution", "overlapping-run"]);
-const TRUSTED_LOCATIONS = new Set(["us-east-1", "eu-west-1"]);
-const TRUSTED_ENV_KEYS = new Set(["ENVIRONMENT_URL", "MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1", "VERCEL_AUTOMATION_BYPASS_SECRET"]);
-const safeLocation = (value: string): string => TRUSTED_LOCATIONS.has(value) ? value : "<unknown-location>";
+// Trust is derived from THIS manifest's own recorded configuration, never from
+// a hardcoded region list. A manifest that declares no usable locations derives
+// an empty trusted set, so every location renders as <unknown-location>.
+// Redaction of an unrecognised provider location string. This is NOT a trust
+// decision (that is `TRUSTED` below) — it only keeps a malformed or hostile
+// location name out of the manifest.
+const safeLocation = (value: unknown): string =>
+  isSyntacticallyValidRegion(value) ? value : "<unknown-location>";
 const safeId = (value: unknown): string | null => typeof value === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(value) ? value : null;
 const safeDate = (value: unknown): string | null => {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(value)) return null;
@@ -105,6 +111,10 @@ export function constrainMultiStepManifest(m: ManifestV3,
   recordings: Partial<Record<"failing" | "passing", MultiStepRecording>> = {},
   sources: Map<string, string> = new Map()): ManifestV3 {
   if (m.check.checkType !== "MULTI_STEP") return m;
+  // Trust is derived from THIS manifest's own recorded configuration, never
+  // from a hardcoded region list. A manifest that declares no usable locations
+  // derives an empty trusted set, so nothing is admitted as trusted.
+  const TRUSTED = trustedMultistepScope(m.config);
   const failing = ref(m.results.failing);
   const passing = ref(m.results.passing);
   const paths = m.check.files.filter((file) => multiStepSourcePath(file) === file).slice(0, 32);
@@ -174,7 +184,7 @@ export function constrainMultiStepManifest(m: ManifestV3,
       retryStrategy: null, doubleCheck: typeof m.config.doubleCheck === "boolean" ? m.config.doubleCheck : null,
       activated: m.config.activated === true, muted: m.config.muted === true,
       tags: sourceModel?.construct?.tags ?? [], runtimeId: null,
-      environmentVariables: m.config.environmentVariables.filter((entry) => TRUSTED_ENV_KEYS.has(entry.key))
+      environmentVariables: m.config.environmentVariables.filter((entry) => TRUSTED.envKeys.has(entry.key))
         .map((entry) => ({ key: entry.key, secret: entry.secret === true })),
       playwright: null, apiRequest: null,
       repair: { intent: null, aiAutoRepairEnabled: typeof m.config.repair.aiAutoRepairEnabled === "boolean" ? m.config.repair.aiAutoRepairEnabled : null },
@@ -203,7 +213,7 @@ export function constrainMultiStepManifest(m: ManifestV3,
       method: m.determinism.method === "checkly-cloud" || m.determinism.method === "local-runner" ? m.determinism.method : null,
       history: { window: count(history.window), finalRuns: count(history.finalRuns), passed: count(history.passed), failed: count(history.failed),
         passRate: rate(history.passRate), byLocation: Object.fromEntries(Object.entries(history.byLocation)
-          .filter(([loc]) => TRUSTED_LOCATIONS.has(loc))
+          .filter(([loc]) => TRUSTED.locations.has(loc))
           .map(([loc, value]) => [loc, { runs: count(value.runs), passed: count(value.passed) }])),
         from: safeDate(history.from), to: safeDate(history.to) },
       sequential: m.determinism.sequential ? { runs: count(m.determinism.sequential.runs), passed: count(m.determinism.sequential.passed),

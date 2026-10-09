@@ -3,6 +3,7 @@
 // v3 schema contains only fixed routes/steps/enums, bounded numbers and the
 // opaque account/token labels. Missing/tampered evidence becomes UNCERTAIN.
 import { MULTISTEP_RECORDING_SCHEMA, MECHANICS_ONLY_NOTE, type MultiStepRecording } from "./capture.ts";
+import { isSyntacticallyValidRegion } from "./trusted-scope.ts";
 import { extractTransaction } from "./transaction.ts";
 import { MULTISTEP_ROUTES, MULTISTEP_STEP_TITLES, type MultiStepRoute } from "./routes.ts";
 import type { MultiStepCapture } from "./normalize.ts";
@@ -87,7 +88,7 @@ export function validMultiStepStoredRecording(value: unknown, side: "failing" | 
     "testResultsSha256", "testResultsBytes", "assetManifestSha256", "assetType", "reporter", "bridge", "failureAssertion"])
     || !binding || Object.keys(binding).length !== 15 || binding.side !== side
     || !/^[a-zA-Z0-9_-]{1,128}$/.test(binding.checkId) || !/^[a-zA-Z0-9_-]{1,128}$/.test(binding.resultId)
-    || !["us-east-1", "eu-west-1"].includes(binding.runLocation)
+    || !isSyntacticallyValidRegion(binding.runLocation)
     || typeof binding.startedAt !== "string" || !Number.isFinite(Date.parse(binding.startedAt))
     || typeof binding.stoppedAt !== "string" || !Number.isFinite(Date.parse(binding.stoppedAt))
     || Date.parse(binding.stoppedAt) < Date.parse(binding.startedAt)

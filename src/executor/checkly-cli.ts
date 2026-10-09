@@ -220,6 +220,7 @@ export class ChecklyCliExecutor implements ExperimentExecutor {
         targetRevision: this.targetRevision,
         env: isMultiStep ? scopedChecklyEnvironment(bundle, combinedEnv, location)! : scopedEnv,
         location,
+        regionAccountMapping: isMultiStep ? regionalAccountMappingFromBundle(bundle) : null,
         checkName,
         checkType: bundle.check.checkType,
         testSessionName: `verify-fix ${bundle.incidentId} ${scene.sceneId} ${repetition + 1}/${repetitions} ${location}`,

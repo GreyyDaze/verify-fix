@@ -133,7 +133,14 @@ test("unknown or conflicting region is UNCERTAIN before a runner starts; CI is r
   const dirty = new SceneExecutor({ target: app.origin, projectDir: WEB,
     env: { ...identities, MULTISTEP_USER_US_EAST_1: `${EAST} `, MULTISTEP_USER_EU_WEST_1: EAST } });
   try {
-    assert.equal(multistepRegionForLocation("ap-south-1"), null);
+    // A malformed region is still rejected outright.
+    assert.equal(multistepRegionForLocation("ap-south-1/../etc"), null);
+    assert.equal(multistepRegionForLocation(""), null);
+    // A syntactically valid region that this bundle does NOT declare is no longer
+    // rejected by syntax. It is rejected by the on-disk remote authority check
+    // below, which is the real trust decision (Phase 9 task 9.2: do not hardcode
+    // regions).
+    assert.equal(multistepRegionForLocation("ap-south-1"), "ap-south-1");
     const altered = await syntheticRemoteBundle();
     altered.config!.locations = ["ap-south-1", "eu-west-1"];
     const a = await unknown.runScene(altered, SPEC, scene(altered));

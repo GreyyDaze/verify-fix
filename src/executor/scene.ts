@@ -27,6 +27,7 @@ import { multiStepDiskRebound } from "../multistep/rebind.ts";
 import { runMultiStepSandbox } from "../multistep/executor.ts";
 import { parseMultiStepProject } from "../multistep/source.ts";
 import { deriveRegionalAccountMapping } from "../multistep/region-account-mapping.ts";
+import { isSyntacticallyValidRegion } from "../multistep/trusted-scope.ts";
 import { knownRoute } from "../multistep/routes.ts";
 import { sceneExpected } from "../contract/contract.ts";
 import { fnv1a } from "../assertion/id.ts";
@@ -88,16 +89,16 @@ export function matchesTargetOrigin(raw: string, target: string | null): boolean
   return supplied !== null && trusted !== null && supplied.origin === trusted.origin;
 }
 
-const SUPPORTED_MULTISTEP_REGIONS = new Set([
-  "us-east-1",
-  "eu-west-1",
-]);
-
+/**
+ * Recognise a Multistep run location generically.
+ *
+ * This no longer pins the example project's regions. It only rejects
+ * malformed provider strings; whether a region is actually TRUSTED is decided
+ * against the incident bundle's own declared locations
+ * (`trustedMultistepScope`). Phase 9 task 9.2 forbids hardcoding regions.
+ */
 export function multistepRegionForLocation(location: string): string | null {
-  return typeof location === "string"
-    && SUPPORTED_MULTISTEP_REGIONS.has(location)
-    ? location
-    : null;
+  return isSyntacticallyValidRegion(location) ? location : null;
 }
 
 export function isSceneExecutor(e: ExperimentExecutor): e is SceneExecutor {

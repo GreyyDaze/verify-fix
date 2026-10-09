@@ -16,6 +16,10 @@ import { rawJsonUniqueKeys, rawTreeBounded } from "./multistep/raw-evidence.ts";
 import { trustedAutomationBypass } from "./multistep/accounts.ts";
 
 export interface ChecklySandboxContext {
+  /** Trusted region -> account-env-key NAME mapping. Names only, never values.
+   *  Derived from the incident bundle; never hardcoded. A Multistep run without
+   *  this mapping receives no account and fails closed. */
+  regionAccountMapping?: Record<string, string> | null;
   projectDir: string;
   files: Record<string, string>;
   assets?: Record<string, Uint8Array>;
@@ -200,8 +204,14 @@ export async function runChecklySandbox(ctx: ChecklySandboxContext): Promise<Che
     || !/^https:\/\/[^\s]+$/.test(ctx.target)) return unavailable;
   if (ctx.checkType === "MULTI_STEP") {
     const env = ctx.env ?? {};
-    const selected = ctx.location === "us-east-1" ? "MULTISTEP_USER_US_EAST_1"
-      : ctx.location === "eu-west-1" ? "MULTISTEP_USER_EU_WEST_1" : null;
+    // The region -> account-key mapping is supplied by the trusted caller
+    // (derived from the bundle's own source by
+    // `deriveRegionalAccountMapping`), never inferred from a hardcoded region
+    // list. Without a trusted mapping the child gets no account at all.
+    const mapping = ctx.regionAccountMapping;
+    const selected = mapping && Object.prototype.hasOwnProperty.call(mapping, ctx.location)
+      ? (mapping[ctx.location] ?? null)
+      : null;
     const approved = new Set([selected, "CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET", "ENVIRONMENT_NAME"]);
     if (!selected || typeof env[selected] !== "string" || !env[selected]
       || env[selected] !== env[selected].trim() || env[selected].length > 512

@@ -43,6 +43,16 @@ env:
   NODE_VERSION: "24.21.0"
   CANDIDATE_PROJECT_PATH: examples/slots-booking/web
   VERIFY_FIX_BUNDLE: ${{ vars.VERIFY_FIX_BUNDLE || 'incidents/slots-availability-api' }}
+  # Phase 9 Stage 2 — the expected digest of the trusted bundle's sealed
+  # protected-requirements policy. Pinned by the caller from the reviewed
+  # bundle commit. Empty means "no pin", which the verifier reports as
+  # PROTECTED_POLICY_PIN_MISSING instead of silently accepting the bundle.
+  VERIFY_FIX_REQUIREMENTS_DIGEST: ${{ vars.VERIFY_FIX_REQUIREMENTS_DIGEST || '' }}
+  # Rollout mode for the protected gate. Shadow reports and cannot block
+  # (Phase 9 Stage 1/2); enforcement is Stage 3 and requires the migrated
+  # bundles to resolve alertBehaviour, dependencyMetadata and runtime from the
+  # live Checkly API. See docs/VERIFICATION-PLAN.md.
+  VERIFY_FIX_REQUIREMENTS_MODE: ${{ vars.VERIFY_FIX_REQUIREMENTS_MODE || 'shadow' }}
 
 jobs:
   candidate-preflight:
@@ -177,6 +187,8 @@ jobs:
             --pr "$PULL_URL" \
             --project-path "$CANDIDATE_PROJECT_PATH" \
             --project "candidate-runtime/$CANDIDATE_PROJECT_PATH" \
+            --requirements-mode "$VERIFY_FIX_REQUIREMENTS_MODE" \
+            --requirements-digest "$VERIFY_FIX_REQUIREMENTS_DIGEST" \
             --executor scene \
             --report-json artifacts/verify-fix-preflight.json \
             --report-markdown artifacts/verify-fix-preflight.md
@@ -675,6 +687,8 @@ jobs:
             --target-metadata "$VERIFY_FIX_TARGET_METADATA" \
             --env-name production \
             --env-file "$VERIFY_FIX_ENV_FILE" \
+            --requirements-mode "$VERIFY_FIX_REQUIREMENTS_MODE" \
+            --requirements-digest "$VERIFY_FIX_REQUIREMENTS_DIGEST" \
             --executor hybrid \
             --report-json artifacts/verify-fix-production.json \
             --report-markdown artifacts/verify-fix-production.md

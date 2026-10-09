@@ -26,6 +26,7 @@ verify-fix/
 | 6 | Authenticated booking API + Checkly `ApiCheck` in the existing Next.js and Checkly project: `{{ENVIRONMENT_URL}}` with no fallback, real setup, exact contract, real field-rename incident, sanitized API evidence, deterministic API scenes, and complete-candidate verification | real Vercel deployment and Checkly API check produce a fresh `availability` → `status` incident; strict direct and imported-helper repairs PASS; weakening, redirect, response rewriting, retry, and timeout candidates FAIL; missing input is UNCERTAIN | **done** — real authenticated booking API and `ApiCheck` shipped in the existing project; the app-only `availability` → `status` rename produced the fresh incident; the packed CLI captured the sanitized bundle `incidents/slots-availability-api` (2 passing + 2 failing scheduled results, 20/20 recurring failures, Rocky RCA); the strict repair passed HEALTHY/REPRODUCTION/DETECTION with 15 completed requests/replays and oracle strength 1.000; local verification 158/158 (API 35/35) with root build, Next build, complete local candidate, and packed-CLI proof; protected preview proof (run `36059967113`), merge `f8bf9f06`, then production proof (run `36119394291`) through the manually verified stable alias after the generated-URL attempt (run `36109648763`) failed on HTTP 302 Deployment Protection; `checkly deploy` ran only after PASS and the real repaired run is green |
 | 7 | One canonical five-step Multistep booking check in the same project, strict remote v3 admission and bounded semantic detection, exact-revision protected gate | real passing/failing scheduled capture, sanitized bundle, recorded parity, protected PASS and repaired scheduled green | **local/pre-real-account work staged** — source/construct and synthetic-only verifier tests exist; secret-free URL-role preflight and protected production wiring are staged in the reusable workflow, **not active** while `gate.yml` stays pinned to the old reviewed snapshot. No real Multistep bundle, cloud PASS, scheduled run or protected-bypass proof has occurred. |
 | 8 | CLI initialization plus a copied live learning project: `verify-fix init` prepares the CLI inside an existing Checkly project. The separate create command copies the maintained slots-booking example into a standalone directory. The copied README teaches the complete learner-owned setup and workflow. | packed `verify-fix init` configures an external customer project; the packed creator copies the real example outside this repo; a learner completes GitHub → Vercel → Upstash → Checkly → incident → bundle → repair → PR gate with no mock inside the copied project | blocked on Phase 7 |
+| 9 | Protected monitoring guarantees and two-sided verification: resolve the check's final *effective* Checkly configuration into a versioned, sealed requirements model stored in the trusted bundle, then gate the candidate on it before any run (static protected gate), then prove the repair positively (HEALTHY/REPRODUCTION), by falsification (DETECTION + mutation), and by regression (every affected monitor) under candidate-independent conditions. Roll out shadow → migration → enforcement. | requirements come from trusted effective config; candidate cannot alter policy or evidence; `01`/`12`/`13` FAILED at 0 runs; `14` PASSes at original concurrency with distinct regional accounts and still detects the forced failure; unknown effects UNCERTAIN; no secret in bundles, logs or reports; assertion identity and the deterministic verdict law unchanged | **partial — Stage 1 only.** `src/protected-requirements.ts` implements the sealed envelope (`protected-requirements-v2`), common requirements, the API/Browser/Playwright/Multistep adapters, and `compareProtectedRequirements` (`exact` / `set-equal` / `required-tuples`); wired through `src/cli.ts` as `--requirements-mode shadow\|migration\|enforce` + `--requirements-digest`. **The default is `shadow` (report-only), so nothing blocks yet** (`src/verify.ts` fails masking only when mode is `enforce`). Stages 2 (bundle migration + digest pinning) and 3 (CI enforcement) have not started. Local suite green at 499/499; no real-account enforcement run has occurred. |
 
 ## Phase 5.5 — Complete candidate revisions from local work or a pull request
 
@@ -309,6 +310,330 @@ incident. `verify-fix bundle` captures its fresh incident. A real repair passes.
 A bad repair fails. The pull-request gate binds the verdict to the exact preview
 revision. No mock, secret, generated duplicate implementation, or
 repository-relative dependency exists inside the copied project.
+
+## Phase 9 — Protected monitoring guarantees and two-sided verification
+
+Phase 9 starts after Phase 8 is complete.
+
+| Task | Technical detail |
+| --- | --- |
+| 9.1 Effective Checkly model | At incident capture, resolve the check's final effective configuration from the Checkly API, project defaults, groups, check-specific settings, imported configuration, and check-type settings. Do not compare only `checkly.config.ts`, and do not rely on assumed defaults. Checkly configuration supplies the facts; `verify-fix` supplies the protection rules. |
+| 9.2 General protected-requirements model | Convert the effective configuration into a versioned, normalized model stored in the trusted incident bundle. Protect stable check identity, activation, mute state, `shouldFail`, locations, private locations, `runParallel`, frequency, retry strategy, alert behavior, target resolution, execution selectors, and required assertion tuples. Use common requirements plus adapters for API, Browser, Playwright, and Multistep checks. Do not hardcode fixture names, regions, routes, or account-variable names. |
+| 9.3 Protected bundle trust | Keep the incident bundle outside the candidate project. Record its schema version, source identities, and digest. Pin the expected digest in protected CI. The candidate cannot add, remove, or edit its own policy. A missing, malformed, unsupported, or untrusted policy produces `UNCERTAIN`. |
+| 9.4 Candidate effective configuration | Resolve the complete candidate configuration using the same model as the original. Include project defaults, group overrides, check-level overrides, `browserChecks`, `multiStepChecks`, `playwrightChecks`, `playwrightConfig`, `playwrightConfigPath`, imported helpers, package files, and lockfiles. Compare final behavior, not only textual differences. |
+| 9.5 New-setting impact analysis | Do not reject a setting merely because it is new. Determine what it changes. A new setting that preserves protected guarantees continues to experiments. A setting that definitely weakens a protected guarantee returns `FAILED`. An unsupported or ambiguous effect returns `UNCERTAIN`. Metadata-only changes may be reported without blocking. |
+| 9.6 Static protected gate | Before any browser, local scene, or cloud run, compare the candidate's effective settings with the bundle. Protected change or known masking behavior returns `FAILED` with zero runs. Missing evidence or unresolved executable configuration returns `UNCERTAIN`. Preserve the existing assertion identity function and compare required assertions using complete tuples. |
+| 9.7 Candidate-independent experiments | Take trusted experiment conditions from the bundle. Candidate configuration cannot reduce reproduction concurrency, remove required regions, change the target, alter failure injection, or rewrite expected outcomes. Candidate code and safe new settings are executed under those fixed conditions. |
+| 9.8 Positive verification | Run `HEALTHY` and `REPRODUCTION` experiments. Healthy behavior must still pass. The repaired candidate must pass under the original incident concurrency, regions, target, and transaction conditions. New safe settings must actually be exercised during these runs. |
+| 9.9 Falsification verification | Deliberately try to disprove the repair. `DETECTION` injects a genuine recorded failure and requires the candidate check to detect it. Continue deterministic mutation tests for weakened, removed, skipped, caught, hardcoded, retried, or redirected assertions. Do not use an LLM to create verdict evidence. |
+| 9.10 Regression verification | Determine which other monitors and behaviors the candidate can affect. Generate regression scenes for affected production checks. Project-wide configuration changes must test every affected monitor. If affected resources cannot be enumerated or executed, return `UNCERTAIN`. |
+| 9.11 Regional-account isolation | Support per-location accounts as a general verified repair operator. Derive required account keys from the bundle's regions. Require each value to be present, non-empty, and different. Prove the trusted region selects the matching account. Compare values only in memory and never store or print them. |
+| 9.12 Deliberate policy changes | Reduced monitoring is not approved inside a repair run. Disabling parallel execution, removing a location, reducing frequency, muting the check, changing alert sensitivity, or adding masking retries returns `FAILED` under the current policy. A deliberate reduction requires a separate human-reviewed policy revision with a new version or digest. No interactive override can convert the current repair to `PASS`. |
+| 9.13 Reporting and security | Report policy version and digest, original and candidate effective values, fixed reason codes, trusted and measured concurrency, required and executed regions, affected monitors, target binding, scenes, and cost. Never include secrets, account values, tokens, cookies, signed URLs, or raw secret-bearing errors. Run the pinned verifier outside the candidate checkout. |
+| 9.14 Production rollout | Roll out the new verifier feature in three stages: shadow reporting without blocking, migration of active incident bundles, then CI enforcement. Shadow mode evaluates the feature; it does not weaken candidate testing. CI remains non-interactive. |
+| 9.15 Proof matrix | Test inheritance, overrides, new settings, unknown settings, location changes, concurrency changes, retries, activation, alert behavior, new monitor discovery, imported configuration, sibling impact, policy tampering, missing and duplicate accounts, candidate-controlled reproduction, positive testing, falsification, regression, and secret leakage. |
+
+### Decision rules
+
+```text
+Protected guarantee definitely changed → FAILED
+Known masking behavior                 → FAILED
+Required evidence missing              → UNCERTAIN
+Configuration effect unsupported       → UNCERTAIN
+Protected guarantees preserved         → run experiments
+All required experiments match         → PASS
+```
+
+### Configuration comparison rules
+
+#### Common fields
+
+Protect across supported check types:
+
+```text
+stable logical identity
+activated
+muted
+shouldFail
+frequency
+locations
+privateLocations
+runParallel
+retry strategy
+alert behavior
+environment-variable names
+target resolution
+```
+
+#### Type-specific fields
+
+Use deterministic adapters:
+
+```text
+API:
+  request method
+  URL structure
+  assertions
+  setup and teardown
+
+Browser:
+  entrypoint
+  runtime
+  assertions
+  target
+
+Playwright:
+  config path
+  projects
+  tags
+  test selection
+  retries
+  target
+
+Multistep:
+  ordered steps
+  routes and methods
+  assertions
+  environment mapping
+  runtime transaction
+```
+
+#### Comparison operators
+
+Use fixed operators:
+
+```text
+exact value
+exact unordered set
+required subset
+unchanged assertion tuple
+supported addition
+```
+
+Unknown operators or unresolved values produce `UNCERTAIN`.
+
+### Important cases
+
+#### Project default overridden by candidate
+
+```ts
+// Trusted project default
+locations: ['us-east-1', 'eu-west-1']
+runParallel: true
+```
+
+```ts
+// Candidate check override
+locations: ['us-east-1']
+runParallel: false
+```
+
+Final effective behavior is one sequential location.
+
+Result:
+
+```text
+FAILED before execution
+```
+
+#### New configuration section
+
+```ts
+playwrightConfigPath: './playwright.config.ts'
+```
+
+If the resolved file keeps the protected target, assertions, test selection, retries, locations, and concurrency:
+
+```text
+continue to positive, falsification, and regression experiments
+```
+
+If it skips the incident test or masks failure:
+
+```text
+FAILED
+```
+
+If it cannot be resolved safely:
+
+```text
+UNCERTAIN
+```
+
+#### New check definition
+
+If the candidate adds `browserChecks`, `multiStepChecks`, or `playwrightChecks`:
+
+1. Resolve the monitors created.
+2. Confirm the incident check remains.
+3. Determine which existing checks are affected.
+4. Run applicable experiments.
+5. Return `UNCERTAIN` if the impact cannot be bounded.
+
+#### Location change
+
+```text
+Original:  [USA, Europe]
+Candidate: [USA]
+Result:    FAILED
+```
+
+```text
+Original:  [USA, Europe]
+Candidate: [USA, Europe, Asia]
+Result:    FAILED until separately approved
+```
+
+```text
+Original:  [USA, Europe]
+Candidate: [Europe, USA]
+Result:    unchanged
+```
+
+#### Candidate lowers concurrency
+
+The bundle records:
+
+```text
+reproduction concurrency: 2
+```
+
+The candidate sets:
+
+```text
+runParallel: false
+```
+
+Result:
+
+```text
+FAILED during the static gate
+```
+
+The reproduction must never silently drop to one run.
+
+#### Positive experiment
+
+```text
+Run the repaired candidate with:
+- original target
+- original regions
+- original concurrency
+- original incident transaction
+
+Expected: repaired behavior passes
+```
+
+#### Falsification experiment
+
+```text
+Inject the recorded genuine failure.
+
+Expected: candidate check detects it and fails internally.
+```
+
+If the candidate check passes the forced failure, the candidate verdict is `FAILED`.
+
+#### Regression experiment
+
+Run unaffected behavior and every monitor affected by global configuration.
+
+Unknown project-wide impact produces `UNCERTAIN`.
+
+#### Per-location accounts
+
+```text
+Region A → account A
+Region B → account B
+```
+
+Rules:
+
+```text
+missing account       → UNCERTAIN
+empty account         → UNCERTAIN
+equal account values  → FAILED
+unsupported mapping   → UNCERTAIN
+distinct proven values → run experiments
+```
+
+#### Intentional monitoring reduction
+
+A human-approved reduction is a separate policy change.
+
+It cannot receive:
+
+```text
+PASS — incident repaired
+```
+
+under the old policy.
+
+### Expected fixture results
+
+| Candidate | Expected verdict | Runs |
+|---|---:|---:|
+| Original broken candidate | `FAILED` | Reproduction runs |
+| `01-good-run-parallel-false` | `FAILED`, exit 1 | 0 |
+| `12-good-one-location` | `FAILED`, exit 1 | 0 |
+| `13-config-retry-only` | `FAILED`, exit 1 | 0 |
+| `14`, missing regional value | `UNCERTAIN`, exit 2 | 0 |
+| `14`, equal regional values | `FAILED`, exit 1 | 0 |
+| `14`, valid distinct values | `PASS`, exit 0 | Full experiment set |
+| App-side session repair | `PASS`, exit 0 | Full experiment set |
+
+### Production rollout
+
+#### Stage 1 — Shadow
+
+Run the new logic without changing CI verdicts.
+
+Record:
+
+- Previous results that would change.
+- Bundles missing protected requirements.
+- Unsupported configuration patterns.
+- False positives and false uncertainty.
+
+#### Stage 2 — Migration
+
+- Add versioned requirements to active bundles.
+- Review effective settings.
+- Pin bundle digests.
+- Add missing regression requirements.
+- Do not infer requirements from candidate files.
+
+#### Stage 3 — Enforcement
+
+Enable blocking CI behavior:
+
+```text
+proven violation → FAILED
+missing evidence → UNCERTAIN
+requirements preserved → experiments
+```
+
+### Done when
+
+- Protected requirements come from trusted effective Checkly configuration.
+- Requirements are stored in a versioned trusted bundle.
+- The candidate cannot change its policy or evidence.
+- The design works across supported check types and incidents.
+- New settings are evaluated and tested rather than rejected only for being new.
+- Unknown effects return `UNCERTAIN`.
+- Candidate settings cannot lower trusted experiment difficulty.
+- Positive verification proves the repair works.
+- Falsification proves the alarm still detects real failure.
+- Regression covers every affected monitor.
+- `01` and `12` return `FAILED` before execution.
+- `13` remains `FAILED`.
+- `14` runs with two distinct regional accounts at original concurrency.
+- `14` detects the forced genuine failure.
+- Valid app-side repairs can still pass.
+- No secret enters bundles, logs, or reports.
+- Existing assertion identity remains unchanged.
+- Existing deterministic verdict law remains unchanged.
+- Shadow rollout and bundle migration complete before CI enforcement.
 
 How the `REPRODUCTION` mode is decided (learned from the real bundle, where
 Rocky classified the overlap incident as `INFRASTRUCTURE_ERROR / DO_NOT_REPAIR`):

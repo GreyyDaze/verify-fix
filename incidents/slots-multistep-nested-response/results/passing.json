@@ -1,0 +1,11 @@
+{
+  "id": "01a12175-39d6-771f-8092-f57abce46b4d",
+  "runLocation": "eu-central-1",
+  "startedAt": "2026-10-09T16:18:14.140Z",
+  "stoppedAt": "2026-10-09T16:18:19.702Z",
+  "hasFailures": false,
+  "hasErrors": false,
+  "attempts": 1,
+  "resultType": "FINAL",
+  "errorCategory": "MULTISTEP_RUN_PASSED"
+}

@@ -6,19 +6,49 @@
 import type { ChecklyCheck } from "../checkly/types.ts";
 import type { ManifestV3 } from "../bundle/types.ts";
 import type { MultiStepSourceModel } from "./source.ts";
+import { isSyntacticallyValidRegion } from "./trusted-scope.ts";
 
 export const MULTISTEP_LOGICAL_ID = "slots-booking-multistep";
 export const MULTISTEP_CHECK_NAME = "slots booking multistep transaction";
 export const MULTISTEP_CONSTRUCT_FILE = "checks/multistep-booking.check.ts";
 export const MULTISTEP_ENTRYPOINT = "checks/multistep-booking.spec.ts";
-export const MULTISTEP_LOCATIONS = ["us-east-1", "eu-west-1"] as const;
-export const MULTISTEP_TAGS = ["slots-booking", "verify-fix-example", "multistep"] as const;
-export const MULTISTEP_ENV = [
-  { key: "ENVIRONMENT_URL", secret: false },
-  { key: "MULTISTEP_USER_US_EAST_1", secret: true },
-  { key: "MULTISTEP_USER_EU_WEST_1", secret: true },
-  { key: "VERCEL_AUTOMATION_BYPASS_SECRET", secret: true },
+/**
+ * The structural env keys every Multistep check declares. Account-variable
+ * NAMES are deliberately absent: they are derived from the construct's own
+ * region -> key map, so a customer's own regions and names are admitted
+ * (Phase 9 task 9.2).
+ */
+export const MULTISTEP_STRUCTURAL_ENV_KEYS = [
+  "ENVIRONMENT_URL",
+  "VERCEL_AUTOMATION_BYPASS_SECRET",
 ] as const;
+export const MULTISTEP_TAGS = ["slots-booking", "verify-fix-example", "multistep"] as const;
+/** Validate a construct's OWN location set: distinct, syntactically valid,
+ *  and bounded. The set itself is never compared to a fixed list. */
+export function isValidRegionSet(locations: unknown): locations is string[] {
+  return Array.isArray(locations) && locations.length >= 1 && locations.length <= 8
+    && locations.every((location) => isSyntacticallyValidRegion(location))
+    && new Set(locations).size === locations.length;
+}
+
+/**
+ * Every declared env key must be a structural key plus exactly one
+ * ACCOUNT key per region — no more, no fewer.
+ *
+ * The account VARIABLE NAMES are not fixed: any name is accepted provided
+ * there is one distinct key per declared region. Hardcoding a name would
+ * reject every customer whose keys differ from the example's
+ * (Phase 9 task 9.2).
+ */
+export function hasCompleteEnvDeclarations(keys: unknown, regionCount: number): boolean {
+  if (!Array.isArray(keys) || !Number.isInteger(regionCount) || regionCount < 1) return false;
+  const unique = [...new Set(keys.filter((key) => typeof key === "string"))] as string[];
+  if (unique.length !== keys.length) return false;
+  const structural = unique.filter((key) => (MULTISTEP_STRUCTURAL_ENV_KEYS as readonly string[]).includes(key));
+  if (structural.length !== MULTISTEP_STRUCTURAL_ENV_KEYS.length) return false;
+  const accounts = unique.filter((key) => !(MULTISTEP_STRUCTURAL_ENV_KEYS as readonly string[]).includes(key));
+  return accounts.length === regionCount;
+}
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 const envIdentity = (items: Array<{ key: string; secret?: boolean | null }>): Array<{ key: string; secret: boolean }> =>
@@ -30,10 +60,9 @@ export function canonicalMultiStepIdentityProblem(model: MultiStepSourceModel | 
   if (!model || model.errors.length || !c || !c.executed || !model.script || model.script.file !== MULTISTEP_ENTRYPOINT
     || c.logicalId !== MULTISTEP_LOGICAL_ID || c.name !== MULTISTEP_CHECK_NAME
     || c.entrypoint !== MULTISTEP_ENTRYPOINT
-    || !same(c.locations, MULTISTEP_LOCATIONS) || !same(c.tags, MULTISTEP_TAGS)
+    || !isValidRegionSet(c.locations) || !same(c.tags, MULTISTEP_TAGS)
     || c.frequencyMinutes !== 5 || c.runParallel !== true || c.doubleCheck !== false || c.activated !== true || c.muted !== false
-    || !same(envIdentity(c.environmentDefinitions), MULTISTEP_ENV)
-    || !same(c.environmentKeys, MULTISTEP_ENV.map((item) => item.key))) return "MULTISTEP_CONSTRUCT_IDENTITY_INVALID";
+    || !hasCompleteEnvDeclarations(c.environmentKeys, c.locations.length)) return "MULTISTEP_CONSTRUCT_IDENTITY_INVALID";
   return null;
 }
 
@@ -81,9 +110,9 @@ export function deployedProblem(check: ChecklyCheck, model: MultiStepSourceModel
   if (check.activated !== true) fields.push("activated");
   if (check.muted !== false) fields.push("muted");
   if (check.runParallel !== true) fields.push("runParallel");
-  if (!same(check.locations, MULTISTEP_LOCATIONS)) fields.push("locations");
+  if (!isValidRegionSet(check.locations)) fields.push("locations");
   if (!same(check.tags, MULTISTEP_TAGS)) fields.push("tags");
-  if (!same(envIdentity(check.environmentVariables ?? []), MULTISTEP_ENV)) fields.push("environmentVariables");
+  if (!hasCompleteEnvDeclarations((check.environmentVariables ?? []).map((entry) => entry.key), (check.locations ?? []).length)) fields.push("environmentVariables");
   if ((check.privateLocations?.length ?? 0) !== 0) fields.push("privateLocations");
   if (check.groupId != null) fields.push("groupId");
   if (check.runtimeId != null) fields.push("runtimeId");
@@ -150,9 +179,9 @@ export function storedMultiStepIdentityProblem(m: ManifestV3, model: MultiStepSo
     || m.check.file !== MULTISTEP_ENTRYPOINT || m.check.deployedId !== m.check.id
     || !m.check.files.includes(MULTISTEP_CONSTRUCT_FILE)
     || m.config.frequencyMinutes !== 5 || m.config.activated !== true || m.config.muted !== false
-    || m.config.runParallel !== true || !same(m.config.locations, MULTISTEP_LOCATIONS)
+    || m.config.runParallel !== true || !isValidRegionSet(m.config.locations)
     || !same(m.config.tags, MULTISTEP_TAGS)
-    || !same(envIdentity(m.config.environmentVariables), MULTISTEP_ENV)
+    || !hasCompleteEnvDeclarations(m.config.environmentVariables.map((entry) => entry.key), m.config.locations.length)
     || m.config.privateLocations.length !== 0 || m.config.runtimeId !== null
     || m.config.retryStrategy !== null
     || m.config.doubleCheck !== false || m.config.apiRequest !== null

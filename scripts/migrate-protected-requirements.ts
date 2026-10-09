@@ -26,6 +26,7 @@ const BUNDLES = [
   "fixtures/bundles/slots-booking-overlap",
   "fixtures/bundles/slots-booking-drift",
   "incidents/slots-availability-api",
+  "incidents/slots-multistep-nested-response",
 ];
 
 const known = (value: unknown): ResolvedPolicyValue =>

@@ -17,7 +17,9 @@ import { runMultiStepSandbox } from "../../src/multistep/executor.ts";
 
 const WEB = new URL("../../examples/slots-booking/web/", import.meta.url).pathname;
 // Byte-exact canonical source — read from disk, never edited by these tests.
-const CANONICAL_SPEC = readFileSync(join(WEB, "checks", "multistep-booking.spec.ts"), "utf8");
+// The STALE incident contract is committed as a fixture so these tests do not
+// depend on whether the live example has been repaired.
+const CANONICAL_SPEC = readFileSync(new URL("./fixtures/canonical-stale-multistep.spec.ts", import.meta.url), "utf8");
 
 const ACCOUNT = "user-fixture-001";
 const TOKEN = "tok-fixture-canonical-0001";

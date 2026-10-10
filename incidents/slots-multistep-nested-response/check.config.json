@@ -1,0 +1,66 @@
+{
+  "check": {
+    "id": "c68a06fe-6062-4d02-b31c-9ab4331f8cbe",
+    "deployedId": "c68a06fe-6062-4d02-b31c-9ab4331f8cbe",
+    "name": "slots booking multistep transaction",
+    "checkType": "MULTI_STEP",
+    "repo": null,
+    "file": "checks/multistep-booking.spec.ts",
+    "files": [
+      "checkly.config.ts",
+      "checks/multistep-booking.check.ts",
+      "checks/multistep-booking.spec.ts"
+    ],
+    "logicalId": "slots-booking-multistep",
+    "projectCommit": "f64a08a005470cf9e326eca5d361f1f6d7c22ac6"
+  },
+  "config": {
+    "frequencyMinutes": 5,
+    "locations": [
+      "us-east-1",
+      "eu-central-1"
+    ],
+    "privateLocations": [],
+    "runParallel": true,
+    "retryStrategy": null,
+    "doubleCheck": false,
+    "activated": true,
+    "muted": false,
+    "tags": [
+      "slots-booking",
+      "verify-fix-example",
+      "multistep"
+    ],
+    "runtimeId": null,
+    "environmentVariables": [
+      {
+        "key": "ENVIRONMENT_URL",
+        "secret": false
+      },
+      {
+        "key": "MULTISTEP_USER_US_EAST_1",
+        "secret": true
+      },
+      {
+        "key": "MULTISTEP_USER_EU_CENTRAL_1",
+        "secret": true
+      },
+      {
+        "key": "VERCEL_AUTOMATION_BYPASS_SECRET",
+        "secret": true
+      }
+    ],
+    "playwright": null,
+    "apiRequest": null,
+    "repair": {
+      "intent": null,
+      "aiAutoRepairEnabled": null
+    }
+  },
+  "target": {
+    "resolution": "code",
+    "variable": "ENVIRONMENT_URL",
+    "recordedOrigin": null,
+    "note": "The runner derives ENVIRONMENT_URL from the explicit target; no recorded origin is retained."
+  }
+}

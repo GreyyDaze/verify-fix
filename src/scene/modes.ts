@@ -6,14 +6,19 @@
 //                          request at the proxy (the overlap the incident had)
 //   replay:<file>.har      answer from the recording, no target needed
 //   inject:<M> <path> -> <status>
-//                          pass through, but answer one request with a failure
-//                          (the detection scene: the check must still catch it)
+//                          generic recorded-response injection (non-Multistep)
+//   detect:POST /api/book -> 200:booking.confirmed=false
+//                          trusted Multistep-only, fixed nested-field mutation;
+//                          never a caller-supplied path, response or status
 //
 // Deterministic string parsing only; unknown modes are an error at load time,
 // never a silent "live".
 
+export const MULTISTEP_DETECTION_MODE = "detect:POST /api/book -> 200:booking.confirmed=false" as const;
+
 export type ParsedMode =
   | { kind: "live"; concurrency: 1 }
+  | { kind: "multistep-detection" }
   | { kind: "live-concurrent"; concurrency: number }
   | { kind: "replay"; har: string }
   | { kind: "inject"; rule: InjectRule }
@@ -32,6 +37,7 @@ export interface InjectRule {
 export function parseMode(mode: string | undefined | null): ParsedMode {
   const raw = (mode ?? "").trim();
   if (raw === "live") return { kind: "live", concurrency: 1 };
+  if (raw === MULTISTEP_DETECTION_MODE) return { kind: "multistep-detection" };
   const conc = /^live-concurrent:(\d+)$/.exec(raw);
   if (conc) {
     const n = Number(conc[1]);
@@ -61,7 +67,7 @@ export function parseInjectRule(text: string): InjectRule | null {
 
 /** Does this mode need a live target (`--target`)? */
 export function needsTarget(mode: ParsedMode): boolean {
-  return mode.kind === "live" || mode.kind === "live-concurrent" || mode.kind === "inject";
+  return mode.kind === "live" || mode.kind === "live-concurrent" || mode.kind === "inject" || mode.kind === "multistep-detection";
 }
 
 /**

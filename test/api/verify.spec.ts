@@ -105,7 +105,7 @@ test("strict API field repair passes HEALTHY, REPRODUCTION, DETECTION, mutation,
   assert.match(result.decision.reasons.join(" "), /availability to status/);
 });
 
-test("real Checkly API bundle passes the strict field repair without trusting Rocky's RCA", async () => {
+test("captured Checkly API incident bundle passes the strict field repair without trusting Rocky's RCA", async () => {
   const captured = loadBundle("incidents/slots-availability-api").bundle;
   const repaired = captured.checkSource.replace('jsonBody("availability")', 'jsonBody("status")');
   const result = await verify({ bundle: captured, patch: repaired, target, env: { API_TOKEN: token } });

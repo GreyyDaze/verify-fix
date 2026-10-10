@@ -21,6 +21,14 @@ import { join } from "node:path";
 import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExecutor, type ObservationValue, type RunContext, type Scene, type SceneObservation, type TraceStep } from "../types.ts";
 import { runSandbox } from "../sandbox.ts";
 import { runPlaywrightSandbox } from "../playwright-sandbox.ts";
+import { AUTOMATION_BYPASS_INPUT, trustedAutomationBypass, trustedRegionalAccounts } from "../multistep/accounts.ts";
+import { trustedMultiStepDetection } from "../multistep/detection.ts";
+import { multiStepDiskRebound } from "../multistep/rebind.ts";
+import { runMultiStepSandbox } from "../multistep/executor.ts";
+import { parseMultiStepProject } from "../multistep/source.ts";
+import { deriveRegionalAccountMapping } from "../multistep/region-account-mapping.ts";
+import { isSyntacticallyValidRegion } from "../multistep/trusted-scope.ts";
+import { knownRoute } from "../multistep/routes.ts";
 import { sceneExpected } from "../contract/contract.ts";
 import { fnv1a } from "../assertion/id.ts";
 import { effectiveConcurrency, needsTarget, parseMode, type ParsedMode } from "../scene/modes.ts";
@@ -60,6 +68,37 @@ interface CandidateOutcome {
   inconclusive: boolean;
   reason: string | null;
   trace: TraceStep[];
+  /** Null if the run never yielded a browser-process measurement. */
+  browserProcesses?: number | null;
+}
+
+export function matchesTargetOrigin(raw: string, target: string | null): boolean {
+  if (!target || raw.length === 0 || raw.length > 2048 || /[\x00-\x20\x7f\\]/.test(raw)) return false;
+  const bareOrigin = (value: string): URL | null => {
+    try {
+      const url = new URL(value);
+      if ((url.protocol !== "http:" && url.protocol !== "https:") || !url.hostname
+        || url.username || url.password || url.search || url.hash
+        || (url.pathname !== "/" && url.pathname !== "")
+        || (value !== url.origin && value !== url.origin + "/")) return null;
+      return url;
+    } catch { return null; }
+  };
+  const supplied = bareOrigin(raw);
+  const trusted = bareOrigin(target);
+  return supplied !== null && trusted !== null && supplied.origin === trusted.origin;
+}
+
+/**
+ * Recognise a Multistep run location generically.
+ *
+ * This no longer pins the example project's regions. It only rejects
+ * malformed provider strings; whether a region is actually TRUSTED is decided
+ * against the incident bundle's own declared locations
+ * (`trustedMultistepScope`). Phase 9 task 9.2 forbids hardcoding regions.
+ */
+export function multistepRegionForLocation(location: string): string | null {
+  return isSyntacticallyValidRegion(location) ? location : null;
 }
 
 export function isSceneExecutor(e: ExperimentExecutor): e is SceneExecutor {
@@ -114,6 +153,7 @@ export class SceneExecutor implements ExperimentExecutor {
       runs: this.cost.localRuns + api.localRuns,
       localRuns: this.cost.localRuns + api.localRuns,
       browserProcesses: this.cost.browserProcesses + api.browserProcesses,
+      ...(this.cost.multiStepBrowserCounts ? { multiStepBrowserCounts: [...this.cost.multiStepBrowserCounts] } : {}),
       httpRequests: (this.cost.httpRequests ?? 0) + (api.httpRequests ?? 0),
       mutationRuns: this.cost.mutationRuns + api.mutationRuns,
       wallTimeMs: this.cost.wallTimeMs + api.wallTimeMs,
@@ -138,6 +178,8 @@ export class SceneExecutor implements ExperimentExecutor {
         return `target ${host} (live-concurrent:${concurrency}${concurrency < mode.concurrency ? ` of ${mode.concurrency}, schedule allows ${concurrency}` : ""})`;
       case "inject":
         return `target ${host} + inject ${mode.rule.raw}`;
+      case "multistep-detection":
+        return `target ${host} + trusted HTTP-200 nested booking confirmation mutation`;
       case "replay":
         return replayBrowserAssets && this.target
           ? `recording ${mode.har} + target ${new URL(this.target).host} (browser assets)`
@@ -167,8 +209,27 @@ export class SceneExecutor implements ExperimentExecutor {
     return { sceneId: scene.sceneId, observed: "uncertain", repetitions, trace, source: "scene", reason, environment };
   }
 
-  private async runCandidate(bundle: Bundle, patchSource: string, ctx: RunContext | undefined, url: string, env: Record<string, string>, seed: number): Promise<CandidateOutcome> {
+  private async runCandidate(bundle: Bundle, patchSource: string, ctx: RunContext | undefined, url: string, env: Record<string, string>, seed: number,
+    detectionScene: Scene | null = null): Promise<CandidateOutcome> {
     const checkFile = ctx?.checkFile ?? bundle.check.file;
+    if (bundle.check.checkType === "MULTI_STEP") {
+      // The Multistep runner uses Playwright's API request fixture only —
+      // the adapter never configures or launches a browser.
+      if (!this.projectDir) throw new Error(`Multistep check needs --project <dir> so @playwright/test can be resolved`);
+      const out = await runMultiStepSandbox({
+        baseUrl: url,
+        environmentName: this.environmentName,
+        env,
+        timeoutMs: this.sandboxTimeoutMs,
+        projectDir: this.projectDir,
+        files: { ...(ctx?.files ?? bundle.files), [checkFile]: patchSource },
+        originalFiles: bundle.files,
+        checkFile,
+        seed,
+        ...(detectionScene ? { detection: { bundle, scene: detectionScene } } : {}),
+      });
+      return { passed: out.passed, inconclusive: out.inconclusive, reason: out.reason, trace: out.trace, browserProcesses: out.browserProcesses };
+    }
     if (bundle.playwright && /\.(?:spec|test)\.[cm]?[jt]sx?$/.test(checkFile)) {
       if (!this.projectDir) throw new Error(`Playwright check needs --project <dir> so @playwright/test can be resolved`);
       const out = await runPlaywrightSandbox({
@@ -205,12 +266,38 @@ export class SceneExecutor implements ExperimentExecutor {
       return observation;
     }
     const mode = parseMode(scene.mode);
-    const config = ctx?.config ?? bundle.config;
+    const isMultiStep = bundle.check.checkType === "MULTI_STEP";
+    if (isMultiStep && bundle.schemaVersion === "v3" && !multiStepDiskRebound(bundle)) {
+      return this.uncertain(scene, "Multistep on-disk remote authority changed or is unresolved", 0, [], "target");
+    }
+    // A MultiStepCheck construct overrides project-level Checkly scheduling.
+    // Its unchanged deployed check configuration (captured in the bundle) is
+    // the trusted location list; a patched checkly.config.ts for another check
+    // may NOT relabel two executed regions as one.
+    // Experiment conditions belong to the trusted bundle. Candidate project
+    // configuration must never lower regions or reproduction concurrency.
+    // The caller supplies the effective experiment config. verify() passes the
+    // trusted bundle config so candidate scheduling cannot reduce experiment
+    // difficulty; direct executor tests may supply an explicit config to test
+    // scheduling mechanics in isolation.
+    const config = ctx?.config ?? bundle.config ?? null;
     const allowed = effectiveConcurrency(config);
-    const concurrency = mode.kind === "live-concurrent" ? Math.max(1, Math.min(mode.concurrency, allowed)) : 1;
+    const candidateLocations = config?.locations.length ? config.locations : bundle.config?.locations ?? [];
+    const trustedConstruct = isMultiStep
+      ? parseMultiStepProject(new Map(Object.entries(bundle.files)), bundle.check.file)?.construct
+      : null;
+    const locations = isMultiStep && trustedConstruct?.locations.length
+      ? trustedConstruct.locations
+      : candidateLocations;
+    const concurrency = mode.kind === "live-concurrent"
+      ? Math.max(1, Math.min(mode.concurrency, allowed, isMultiStep ? Math.max(1, locations.length) : mode.concurrency)) : 1;
     let environment = this.environmentLabel(bundle, scene, mode, concurrency);
 
     if (mode.kind === "unknown" || mode.kind === "pending") return this.uncertain(scene, `scene mode not runnable: ${mode.reason}`, 0, [], environment);
+    if ((isMultiStep && scene.type === "DETECTION" && mode.kind !== "multistep-detection")
+      || (mode.kind === "multistep-detection" && (!isMultiStep || !trustedMultiStepDetection(bundle, scene)))) {
+      return this.uncertain(scene, "Multistep detection lacks validated failing-side remote provenance and fixed nested booking facts", 0, [], environment);
+    }
     if (needsTarget(mode) && !this.target) {
       const recorded = bundle.recordedOrigin ? `the recorded origin ${bundle.recordedOrigin}` : "a recorded origin";
       return this.uncertain(scene, `live scene needs a target: pass --target <url> (${recorded} is never used implicitly)`, 0, [], environment);
@@ -223,6 +310,58 @@ export class SceneExecutor implements ExperimentExecutor {
     }
     if (replayBrowserAssets) environment = this.environmentLabel(bundle, scene, mode, concurrency, true);
     const failingHar = mode.kind === "inject" ? this.har(bundle, "failing.har") : null;
+
+    const baseEnv = { ...this.env, ...(scene.env ?? {}) };
+    // ENVIRONMENT_URL commonly lives in the private project env-file. It is
+    // accepted only as a consistency check against the explicit --target, then
+    // discarded: this executor creates the per-run URL and remains its owner.
+    if (isMultiStep && Object.hasOwn(this.env, "ENVIRONMENT_URL")) {
+      if (!matchesTargetOrigin(this.env.ENVIRONMENT_URL!, this.target)) {
+        return this.uncertain(scene, "env-file ENVIRONMENT_URL does not match the explicit --target — no runner was started", 0, [], environment);
+      }
+      delete baseEnv.ENVIRONMENT_URL;
+    }
+    // A concurrency-one scene still executes both configured regions, one
+    // after the other. Scheduling is independent of the account values.
+    const trustedLocations = isMultiStep
+      ? trustedConstruct?.locations ?? []
+      : [];
+    const regions = isMultiStep ? trustedLocations.map(multistepRegionForLocation) : [];
+    if (isMultiStep && (!regions.length || regions.some((region) => region === null))) {
+      return this.uncertain(scene, "Multistep has no valid trusted region list — no runner was started", 0, [], environment);
+    }
+    const sourceFiles = new Map(Object.entries(ctx?.files ?? bundle.files));
+    sourceFiles.set(ctx?.checkFile ?? bundle.check.file, patchSource);
+    const sourceModel = isMultiStep ? parseMultiStepProject(sourceFiles, ctx?.checkFile ?? bundle.check.file) : null;
+    const originalModel = trustedConstruct ? { construct: trustedConstruct } : null;
+    const policyEnv = bundle.protectedRequirements?.policy.fields.environmentVariableNames?.original;
+    const declaredEnvKeys = [
+      ...(bundle.config?.environmentVariables ?? []),
+      ...(policyEnv?.state === "known" && Array.isArray(policyEnv.value)
+        ? policyEnv.value.filter((value): value is string => typeof value === "string") : []),
+      ...(originalModel?.construct?.environmentKeys ?? []),
+      ...(sourceModel?.construct?.environmentKeys ?? []),
+    ];
+    const mapping = isMultiStep
+      ? deriveRegionalAccountMapping(sourceFiles.entries(), trustedLocations, [...new Set(declaredEnvKeys)])
+      : null;
+    if (isMultiStep && !mapping) {
+      return this.uncertain(scene, "Multistep per-location account mapping is unsupported or unresolved — no runner was started", 0, [], environment);
+    }
+    // Only mapped account keys cross the child boundary. A scene may add no
+    // other user-provided names, and no caller may override trusted runners.
+    const protectedRunnerKeys = ["REGION", "PATH", "HOME", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS",
+      "LD_LIBRARY_PATH", "ENVIRONMENT_URL", "ENVIRONMENT_NAME", "SANDBOX_SEED", "CI"];
+    if (isMultiStep && (Object.keys(baseEnv).some((key) => protectedRunnerKeys.includes(key.toUpperCase()))
+      || Object.keys(scene.env ?? {}).some((key) => !Object.values(mapping ?? {}).includes(key)
+        && key !== AUTOMATION_BYPASS_INPUT && key !== "REGION"))) {
+      return this.uncertain(scene, "Multistep env-file overrides a trusted runner key — no runner was started", 0, [], environment);
+    }
+    const accounts = isMultiStep && mapping
+      ? trustedRegionalAccounts(baseEnv, mapping, locations) : null;
+    if (isMultiStep && (!accounts || !trustedAutomationBypass(baseEnv))) {
+      return this.uncertain(scene, "Multistep regional account or protected bypass inputs are unavailable or overlap — no runner was started", 0, [], environment);
+    }
 
     const budget = this.budgetFor(bundle);
     const wantedRuns = Math.min(scene.experiments[0]?.repetitions ?? 1, budget);
@@ -241,6 +380,10 @@ export class SceneExecutor implements ExperimentExecutor {
       checkRuns: 0,
       wallTimeMs: 0,
       phase: ctx?.phase ?? "candidate" as const,
+      maxConcurrentRuns: concurrency,
+      requiredRegions: [...locations],
+      executedRegions: [] as string[],
+      ...(isMultiStep ? { multiStepBrowserCounts: [] as Array<number | null> } : {}),
     };
     this.cost.byScene.push(costRow);
 
@@ -253,59 +396,118 @@ export class SceneExecutor implements ExperimentExecutor {
     }
 
     for (let rep = 0; rep < reps; rep++) {
-      const urls = await this.proxy.arm({ mode, target: this.target, runs: concurrency, replayHar, replayBrowserAssetsFromTarget: replayBrowserAssets, failingHar, barrierTimeoutMs: this.barrierTimeoutMs });
-      const baseEnv = { ...this.env, ...(scene.env ?? {}) };
-      const locations = config?.locations.length ? config.locations : bundle.config?.locations ?? [];
-      const startedAt = Date.now();
-      const settled = await Promise.all(
-        urls.map((url, runIndex) => {
-          const region = locations[runIndex % Math.max(1, locations.length)];
-          const env = {
-            ...baseEnv,
-            CHECKLY: "1",
-            CHECKLY_RUN_SOURCE: "TEST_RECORD",
-            CI: "1",
-            ...(region ? { CHECKLY_REGION: region } : {}),
-          };
-          return this.runCandidate(bundle, patchSource, ctx, url, env, repetitionSeed(scene.sceneId, rep, runIndex))
-            .then((outcome) => ({ ok: true as const, outcome }))
-            .catch((err: Error) => ({ ok: false as const, err }))
-            .finally(() => this.proxy.runFinished(runIndex));
-        }),
-      );
-      const elapsed = Date.now() - startedAt;
-      costRow.repetitions += 1;
-      costRow.checkRuns += concurrency;
-      costRow.wallTimeMs += elapsed;
-      this.cost.localRuns += concurrency;
-      if (bundle.playwright) this.cost.browserProcesses += concurrency * Math.max(1, bundle.playwright.projects.length);
-      this.cost.wallTimeMs += elapsed;
-      if (costRow.phase === "mutation") this.cost.mutationRuns += concurrency;
-      const hits = this.proxy.hits();
       let repPassed = true;
-      for (let runIndex = 0; runIndex < settled.length; runIndex++) {
-        const s = settled[runIndex];
-        const runHits = hits.filter((h) => h.runIndex === runIndex);
-        const tag = concurrency > 1 ? `run ${runIndex + 1}/${concurrency}: ` : "";
-        if (!s.ok) {
-          const msg = s.err?.message ?? String(s.err);
-          push({ kind: "step", what: `${tag}sandbox error: ${msg.split("\n")[0].slice(0, 200)}`, outcome: "failed" });
-          return this.uncertain(scene, `sandbox could not run the check: ${msg.split("\n")[0].slice(0, 200)}`, rep, mergedTrace, environment);
+      const allHits: ProxyHit[] = [];
+      const batches = isMultiStep ? Math.ceil(locations.length / concurrency) : 1;
+      for (let batch = 0; batch < batches; batch++) {
+        const batchStart = batch * concurrency;
+        const batchRuns = isMultiStep ? Math.min(concurrency, locations.length - batchStart) : concurrency;
+        const batchRegions = isMultiStep
+          ? locations.slice(batchStart, batchStart + batchRuns)
+          : Array.from({ length: batchRuns }, (_, runIndex) => locations[runIndex % Math.max(1, locations.length)]).filter((value): value is string => Boolean(value));
+        costRow.executedRegions!.push(...batchRegions.filter((region) => !costRow.executedRegions!.includes(region)));
+        const urls = await this.proxy.arm({ mode, target: this.target, runs: batchRuns, replayHar, replayBrowserAssetsFromTarget: replayBrowserAssets,
+          failingHar, barrierTimeoutMs: this.barrierTimeoutMs,
+          trustedMultiStepDetection: mode.kind === "multistep-detection"
+            ? trustedMultiStepDetection(bundle, scene) ?? undefined : undefined });
+        const startedAt = Date.now();
+        const settled = await Promise.all(
+          urls.map((url, runIndex) => {
+            const globalRunIndex = batchStart + runIndex;
+            const region = isMultiStep ? regions[globalRunIndex]! : locations[runIndex % Math.max(1, locations.length)];
+            const env = (isMultiStep ? {
+              REGION: region!,
+              ...Object.fromEntries(locations.map((location) => [accounts!.keys[location]!, accounts!.values[location]!])),
+              [AUTOMATION_BYPASS_INPUT]: baseEnv[AUTOMATION_BYPASS_INPUT],
+            } : {
+              ...baseEnv,
+              CHECKLY: "1",
+              CHECKLY_RUN_SOURCE: "TEST_RECORD",
+              CI: "1",
+              ...(region ? { CHECKLY_REGION: region } : {}),
+            }) as Record<string, string>;
+            return this.runCandidate(bundle, patchSource, ctx, url, env, repetitionSeed(scene.sceneId, rep, globalRunIndex),
+              mode.kind === "multistep-detection" ? scene : null)
+              .then((outcome) => ({ ok: true as const, outcome }))
+              .catch((err: Error) => ({ ok: false as const, err }))
+              .finally(() => this.proxy.runFinished(runIndex));
+          }),
+        );
+        const elapsed = Date.now() - startedAt;
+        costRow.checkRuns += batchRuns;
+        costRow.wallTimeMs += elapsed;
+        this.cost.localRuns += batchRuns;
+        if (bundle.playwright) this.cost.browserProcesses += batchRuns * Math.max(1, bundle.playwright.projects.length);
+        if (isMultiStep) {
+          const samples = settled.map((result) => result.ok ? result.outcome.browserProcesses ?? null : null);
+          costRow.multiStepBrowserCounts!.push(...samples);
+          (this.cost.multiStepBrowserCounts ??= []).push(...samples);
+          this.cost.browserProcesses += samples.reduce<number>((sum, n) => sum + (n ?? 0), 0);
         }
-        const outcome = s.outcome;
-        for (const t of outcome.trace) push({ ...t, what: tag ? `${tag}${t.what}` : t.what });
-        push({ kind: "step", what: `${tag}${runHits.length} request(s) reached the proxy → ${runHits.length ? summarize(runHits) : "none"}`, outcome: runHits.length ? "ok" : "skipped" });
-        if (runHits.length === 0) {
-          // The executor's own count, independent of anything inside the sandbox.
-          return this.uncertain(scene, `${tag}no request reached ENVIRONMENT_URL — nothing was observed in this scene state`, rep + 1, mergedTrace, environment);
+        this.cost.wallTimeMs += elapsed;
+        if (costRow.phase === "mutation") this.cost.mutationRuns += batchRuns;
+        const hits = this.proxy.hits();
+        allHits.push(...hits);
+        for (let runIndex = 0; runIndex < settled.length; runIndex++) {
+          const s = settled[runIndex];
+          const runHits = hits.filter((h) => h.runIndex === runIndex);
+          const globalRunIndex = batchStart + runIndex;
+          const tag = isMultiStep ? `region ${regions[globalRunIndex]}: ` : concurrency > 1 ? `run ${runIndex + 1}/${batchRuns}: ` : "";
+          if (!s.ok) {
+            // A Multistep exception may contain a project path or dependency
+            // error from the host. It is not transaction evidence or report text.
+            const msg = isMultiStep ? "Multistep sandbox execution unavailable"
+              : (s.err?.message ?? String(s.err)).split("\n")[0].slice(0, 200);
+            push({ kind: "step", what: `${tag}sandbox error: ${msg}`, outcome: "failed" });
+            return this.uncertain(scene, `sandbox could not run the check: ${msg}`, rep, mergedTrace, environment);
+          }
+          const outcome = s.outcome;
+          for (const t of outcome.trace) push({ ...t, what: tag ? `${tag}${t.what}` : t.what });
+          if (isMultiStep && !outcome.inconclusive && outcome.browserProcesses == null) {
+            return this.uncertain(scene, "Multistep browser-process measurement unavailable — no zero-browser claim", rep + 1, mergedTrace, environment);
+          }
+          if (isMultiStep && !outcome.inconclusive && (outcome.browserProcesses ?? 0) > 0) {
+            return this.uncertain(scene, "Multistep browser process observed — API-only execution not proven", rep + 1, mergedTrace, environment);
+          }
+          const traffic = isMultiStep
+            ? runHits.slice(0, 4).map((hit) => `${hit.method === "GET" || hit.method === "POST" ? hit.method : "OTHER"} ${knownRoute(hit.path) ?? "<unknown-route>"} ${hit.status}`).join(", ")
+            : summarize(runHits);
+          push({ kind: "step", what: `${tag}${runHits.length} request(s) reached the proxy → ${runHits.length ? traffic : "none"}`, outcome: runHits.length ? "ok" : "skipped" });
+          if (bundle.check.checkType === "MULTI_STEP") {
+            // Completed requests of the structured transaction — counted from
+            // the scene proxy (the executor's own evidence, not child stderr).
+            this.cost.httpRequests = (this.cost.httpRequests ?? 0) + runHits.length;
+          }
+          if (runHits.length === 0) {
+            // The executor's own count, independent of anything inside the sandbox.
+            return this.uncertain(scene, `${tag}no request reached ENVIRONMENT_URL — nothing was observed in this scene state`, rep + 1, mergedTrace, environment);
+          }
+          if (mode.kind === "multistep-detection") {
+            const expected = [["POST", "/api/login"], ["GET", "/api/session"],
+              ["GET", "/api/slots"], ["POST", "/api/book"]] as const;
+            if (runHits.length !== 4 || runHits.some((hit, i) => hit.ordinal !== i + 1
+              || hit.method !== expected[i]![0] || hit.path !== expected[i]![1]
+              || hit.status !== 200 || hit.source !== (i === 3 ? "injected" : "target"))) {
+              return this.uncertain(scene, `${tag}the fixed HTTP-200 nested booking mutation did not occur exactly once after three completed requests`,
+                rep + 1, mergedTrace, environment);
+            }
+          }
+          if (outcome.inconclusive) return this.uncertain(scene, `${tag}${outcome.reason ?? "runner produced no admissible result"}`, rep + 1, mergedTrace, environment);
+          if (!outcome.passed) repPassed = false;
         }
-        if (outcome.inconclusive) return this.uncertain(scene, `${tag}${outcome.reason ?? "runner produced no admissible result"}`, rep + 1, mergedTrace, environment);
-        if (!outcome.passed) repPassed = false;
       }
+      if (isMultiStep && bundle.schemaVersion === "v3" && !multiStepDiskRebound(bundle)) {
+        return this.uncertain(scene, "Multistep on-disk authority changed during execution", rep + 1, mergedTrace, environment);
+      }
+      if (mode.kind === "multistep-detection" && !trustedMultiStepDetection(bundle, scene)) {
+        return this.uncertain(scene, "Multistep failing-side evidence changed during the scene", rep + 1, mergedTrace, environment);
+      }
+      costRow.repetitions += 1;
       observedOutcomes.push(repPassed ? "pass" : "fail");
-      this.onRepetition?.({ sceneId: scene.sceneId, repetition: rep, checkPassed: repPassed, hits: [...hits] });
+      this.onRepetition?.({ sceneId: scene.sceneId, repetition: rep, checkPassed: repPassed,
+        hits: isMultiStep ? allHits.map((hit) => ({ ...hit, path: knownRoute(hit.path) ?? "<unknown-route>" })) : allHits });
       if (this.verbose) {
-        console.error(`[scene] ${scene.sceneId} rep=${rep + 1}/${reps} concurrency=${concurrency} observed=${repPassed ? "pass" : "fail"} expected=${sceneExpected(scene).observed} hits=${hits.length} (${environment})`);
+        console.error(`[scene] ${scene.sceneId} rep=${rep + 1}/${reps} concurrency=${concurrency} observed=${repPassed ? "pass" : "fail"} expected=${sceneExpected(scene).observed} hits=${allHits.length} (${environment})`);
       }
     }
 

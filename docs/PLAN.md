@@ -1,4 +1,4 @@
-# verify-fix — build plan (updated 2026-09-24)
+# verify-fix — build plan (updated 2026-09-28)
 
 Goal: test the tool the way a Checkly customer works. Real app, real Checkly
 check, real deploy, real incident — captured by the tool's own command, never
@@ -8,9 +8,9 @@ collected by hand. Everything lives in this repo.
 verify-fix/
 ├── src/                       the tool
 ├── packages/create-verify-fix/ Phase 8: standalone live-learning project generator
-├── examples/slots-booking/    Next.js app + Playwright suite + ApiCheck, one project (web/)
+├── examples/slots-booking/    Next.js app + browser suite + ApiCheck + Multistep, one project (web/)
 ├── fixtures/bundles/          sanitized bundles produced by `verify-fix bundle`
-└── .github/workflows/         ci.yml (tests), gate.yml (Phase 5)
+└── .github/workflows/         gate.yml (immutable caller) + staged protected-gate.yml
 ```
 
 | Phase | What | Done when | Status |
@@ -23,9 +23,10 @@ verify-fix/
 | 4 | Playwright runner (`src/playwright-sandbox.ts`): copies the captured check tree plus the patch, resolves the customer's `@playwright/test` from `--project`, forces one worker/no retries/JSON report, and runs every browser through the Phase 3 proxy. Browser assets bypass the concurrency barrier; API/fetch calls enter it. `verify-fix measure --bundle --target --project --runs 20` records local determinism with `method: local-runner`. Playwright locator mutations and exact locator-renaming rules are included; candidate fixtures live in `fixtures/patches/`. | overlap: `runParallel:false` + one location PASS, fakes FAILED, flaky never PASS; drift: correct rename PASS, four fakes FAILED; real browser hits the local app | **done** — 103/103 automated tests; both bundles measured locally (overlap sequential 20/20 + reproduction 20/20, drift reproduction 20/20); all candidate fixtures plus a replay scene graded through Chromium against `next start` |
 | 5 | Live loop + CI gate: hybrid executor sends HEALTHY/REGRESSION to the customer project's `checkly test --record --reporter json --retries 0`; REPRODUCTION/DETECTION stay in the local scene proxy. `--candidate-project` reads PR monitoring files. `gate.yml` binds verification to the exact Vercel deployment SHA/URL. PRs only test. Production runs `checkly deploy --force` after PASS. Every report records cloud/local/mutation runs, browser processes, and wall time. | gate blocks a bad fix on a real PR; three real alternatives PASS; ten fakes FAIL on the real account | **done** — local matrix passed; the protected exact-revision Checkly/Vercel gate passed at commit `01f71b8` in run `36041826149`. |
 | 5.5 | Candidate revision intake: replace the production idea of one agent patch with the complete final project state. Support both a local working tree and a pull request URL. Treat every agent change as untrusted. Bind PR verification to the exact preview revision. | the same multi-file candidate is verified from a fixed local snapshot and from an exact PR head; reports record source identity and all file changes; the candidate cannot replace the verifier, incident, policy, or gate | **done** — immutable dirty-tree and exact GitHub PR snapshots, stable logical-ID matching, rename/deletion/import handling, complete source reports, target metadata binding, fork/approval controls, protected two-stage workflow, package proof, 123/123 local tests, and the successful protected proof at exact commit `01f71b8`. |
-| 6 | Authenticated booking API + Checkly `ApiCheck` in the existing Next.js and Checkly project: `{{ENVIRONMENT_URL}}` with no fallback, real setup, exact contract, real field-rename incident, sanitized API evidence, deterministic API scenes, and complete-candidate verification | real Vercel deployment and Checkly API check produce a fresh `availability` → `status` incident; strict direct and imported-helper repairs PASS; weakening, redirect, response rewriting, retry, and timeout candidates FAIL; missing input is UNCERTAIN | **real incident captured; final gate pending** — the baseline passed, the app-only rename failed on the exact field assertion, the CLI bundle captured 2 passing and 2 failing scheduled results plus 20/20 recurring failures and Rocky RCA, and the strict repair passed HEALTHY/REPRODUCTION/DETECTION with 15 completed requests/replays; the exact-revision protected account gate is next |
-| 7 | Multistep Check support starts only after API support is complete | a meaningful booking workflow incident is captured and verified with the same protected boundaries | blocked on Phase 6 |
-| 8 | CLI initialization plus a copied live learning project: `verify-fix init` prepares the CLI inside an existing Checkly project. The separate create command copies the maintained slots-booking example into a standalone directory. The copied README teaches the complete learner-owned setup and workflow. | packed `verify-fix init` configures an external customer project; the packed creator copies the real example outside this repo; a learner completes GitHub → Vercel → Upstash → Checkly → incident → bundle → repair → PR gate with no mock inside the copied project | blocked on Phase 7 |
+| 6 | Authenticated booking API + Checkly `ApiCheck` in the existing Next.js and Checkly project: `{{ENVIRONMENT_URL}}` with no fallback, real setup, exact contract, real field-rename incident, sanitized API evidence, deterministic API scenes, and complete-candidate verification | real Vercel deployment and Checkly API check produce a fresh `availability` → `status` incident; strict direct and imported-helper repairs PASS; weakening, redirect, response rewriting, retry, and timeout candidates FAIL; missing input is UNCERTAIN | **done** — real authenticated booking API and `ApiCheck` shipped in the existing project; the app-only `availability` → `status` rename produced the fresh incident; the packed CLI captured the sanitized bundle `incidents/slots-availability-api` (2 passing + 2 failing scheduled results, 20/20 recurring failures, Rocky RCA); the strict repair passed HEALTHY/REPRODUCTION/DETECTION with 15 completed requests/replays and oracle strength 1.000; local verification 158/158 (API 35/35) with root build, Next build, complete local candidate, and packed-CLI proof; protected preview proof (run `36059967113`), merge `f8bf9f06`, then production proof (run `36119394291`) through the manually verified stable alias after the generated-URL attempt (run `36109648763`) failed on HTTP 302 Deployment Protection; `checkly deploy` ran only after PASS and the real repaired run is green |
+| 7 | One canonical five-step Multistep booking check in the same project, strict remote v3 admission and bounded semantic detection, exact-revision protected gate | real passing/failing scheduled capture, sanitized bundle, recorded parity, protected PASS and repaired scheduled green | **local/pre-real-account work staged** — source/construct and synthetic-only verifier tests exist; secret-free URL-role preflight and protected production wiring are staged in the reusable workflow, **not active** while `gate.yml` stays pinned to the old reviewed snapshot. No real Multistep bundle, cloud PASS, scheduled run or protected-bypass proof has occurred. |
+| 8 | `verify-fix init` (`src/init.ts`, `--yes` required to write) + `create-verify-fix` copying the maintained example; learner workshop README | packed `verify-fix init` configures an external customer project; the packed creator copies the real example outside this repo | **local done; real workshop pending** — `src/init.ts` and `packages/create-verify-fix` implemented; packed-tarball proof passed against temp projects outside this repo (init refuses without `--yes`; creator refuses a non-empty destination; copy carries no repo-relative import, secret, or incident). Learner README documents the full loop incl. the Hobby region restriction. Account-backed workshop not yet run |: `verify-fix init` prepares the CLI inside an existing Checkly project. The separate create command copies the maintained slots-booking example into a standalone directory. The copied README teaches the complete learner-owned setup and workflow. | packed `verify-fix init` configures an external customer project; the packed creator copies the real example outside this repo; a learner completes GitHub → Vercel → Upstash → Checkly → incident → bundle → repair → PR gate with no mock inside the copied project | blocked on Phase 7 |
+| 9 | Protected monitoring guarantees and two-sided verification: resolve the check's final *effective* Checkly configuration into a versioned, sealed requirements model stored in the trusted bundle, then gate the candidate on it before any run (static protected gate), then prove the repair positively (HEALTHY/REPRODUCTION), by falsification (DETECTION + mutation), and by regression (every affected monitor) under candidate-independent conditions. Roll out shadow → migration → enforcement. | requirements come from trusted effective config; candidate cannot alter policy or evidence; `01`/`12`/`13` FAILED at 0 runs; `14` PASSes at original concurrency with distinct regional accounts and still detects the forced failure; unknown effects UNCERTAIN; no secret in bundles, logs or reports; assertion identity and the deterministic verdict law unchanged | **Stage 1 + local proof done; stages 2–3 pending account.** `src/protected-requirements.ts` implements the sealed envelope (`protected-requirements-v2`), common requirements, the API/Browser/Playwright/Multistep adapters, and `compareProtectedRequirements` (`exact` / `set-equal` / `required-tuples`); wired through `src/cli.ts` as `--requirements-mode shadow\|migration\|enforce` + `--requirements-digest`. **The default is `shadow` (report-only), so nothing blocks yet** (`src/verify.ts` fails masking only when mode is `enforce`). 9.5 new-setting analysis (supported additions continue to experiments) and the 9.15 proof matrix (26 cases) are implemented and green. Still pending: Stage 2 bundle migration + digest pinning, Stage 3 flipping the default to `enforce`, and any real-account shadow run. Suite green at 565/565. |
 
 ## Phase 5.5 — Complete candidate revisions from local work or a pull request
 
@@ -120,16 +121,54 @@ and authorization value.
 Rocky classified the incident as `CONFIGURATION_ERROR / DO_NOT_REPAIR`. Its
 analysis says the API still returned `availability`, but the captured failing
 response actually contains `status`. The classification is retained as real
-evidence, not accepted as runtime truth. The deterministic verifier uses the
-recorded responses and exact assertions instead. The strict field repair passed
-HEALTHY, REPRODUCTION, and DETECTION with 15 completed API requests/replays and
-oracle strength 1.000.
+evidence, not accepted as runtime truth: the RCA contradicted the captured
+response, so the deterministic verifier used the recorded evidence — the
+recorded responses and exact assertions — instead. Rocky Automatic Repair
+stayed off throughout; the RCA is passive evidence only. The strict field
+repair passed HEALTHY, REPRODUCTION, and DETECTION with 15 completed API
+requests/replays and oracle strength 1.000.
 
 The live capture also exposed parity details that fixtures had missed. Checkly
 records the sanitized origin as `[REDACTED]`, an empty GET body as `""`, and the
 slot query with percent encoding. The executor now recognizes that safe origin
 marker, normalizes only the empty-body representation and query encoding, and
 continues to compare the route, query, method, body, and setup identity.
+
+### Final Phase 6 proof chain
+
+- Sanitized bundle: `incidents/slots-availability-api`, created by the packed
+  CLI (`npm pack` tarball), never by hand.
+- Strict repair commit: `48c9f68d1aeee54d73e0c7004e9802835d8c1ecb` (the check
+  asserts the current `status` contract).
+- Pinned candidate: `2bb324a09f269d74e648c59baf2f0d6fde617384` — the exact PR
+  head the gate verified.
+- Protected preview proof: run `36059967113` — PASS on that exact candidate.
+- Merge: `f8bf9f06babb2ca04f7edb765348c4187a897fb9` — merged only after the
+  preview PASS.
+- First production attempt: run `36109648763` — FAILED, solely because Vercel
+  Deployment Protection answered HTTP 302 before the Next.js route. In both
+  Vercel failures (this run and the pre-exception preview attempt) REPRODUCTION
+  and DETECTION behaved correctly against recorded evidence; only the live
+  HEALTHY scene received the Vercel HTTP 302 redirect. The application and the
+  assertion were not broken during the 302s, and nothing in the verdict law
+  changed.
+- Production proof: run `36119394291` — PASS against the manually verified
+  stable alias (the preview's temporary exact-domain exception was not used and
+  has since been removed; future protected previews must use the planned
+  approved bypass after it is configured and proven through real parity).
+  `checkly deploy` ran only after this PASS, and the real repaired run is
+  green.
+
+### Phase 6 verification results (final)
+
+- `npm run typecheck` and the root `npm run build` pass; the example's
+  Next.js `npm run build` passes.
+- `npm test`: 158/158 tests pass, including the API suite at 35/35, with no
+  new skips.
+- One complete local candidate verification: PASS — HEALTHY pass,
+  REPRODUCTION pass, DETECTION fail-as-expected, oracle strength 1.000.
+- Packed-CLI proof: passed — the `npm pack` tarball's `verify-fix` produced
+  the Phase 6 evidence outside the source tree.
 
 **Done when:** the baseline API is green on the real Vercel deployment. The
 real field rename creates a fresh Checkly failure. The CLI captures sanitized
@@ -140,11 +179,116 @@ gate passes for the real repair.
 
 ## Phase 7 — Meaningful Multistep Check support
 
-Phase 7 starts only after Phase 6 API support and its real account proof are
-complete. It will use the same booking application and Checkly project. The
-scope must be a meaningful booking workflow. It must not add check types only
-to create a catalogue. Its detailed plan will be written from real Checkly
-Multistep result evidence before implementation.
+**Status: pre-real-account implementation staged; real proof deferred.** Phase 6
+API support and its historical account-backed proof are complete. Phase 7 keeps
+the same app, project, verdict law and `src/assertion/id.ts`. The app now returns
+`{ booking: { confirmed, status, account, slot, sessionVersion } }` on a
+successful booking; the *original* Multistep check deliberately still asserts
+the flat `body.confirmed` at the canonical book step. That stale assertion is
+not a Phase 7 repair and must remain unchanged until a real incident is
+captured. The single `MultiStepCheck` construct and its five awaited steps
+(login → session → slots → book → confirm) are checked in, not deployed here.
+The browser and Phase 6 API contracts remain separate.
+
+| Checkpoint | Implemented and locally exercised | Still requires real evidence/approval |
+| --- | --- | --- |
+| 7.0 baseline | One construct, fixed five-step script, nested live app contract, parallel locations with explicit `doubleCheck: false` (no failure rerun), separate account *names* for `us-east-1`/`eu-west-1`; no committed values. | Configure distinct real regional Multistep identities, separately from browser users, before any deployment. |
+| 7.1 remote-bound bundle | Bounded sanitized v3 Multistep result/asset intake and strict source/step/assertion/side binding; absent/unknown effective double-check or runtime config and forged, partial, local-only or passing-side evidence are UNCERTAIN. Local fixtures mock the authenticated Checkly asset path. | Inspect actual passing and failing Checkly result assets *outside this repo*, confirm observed schema and source line, capture using the packed CLI, review and pin a sanitized real bundle. Do not fabricate assets or trigger new Rocky analysis without approval. |
+| 7.2 detection | Fixed HTTP-200 proxy changes only nested `booking.confirmed: true → false` after a valid original transaction; reporter, independent request audit, proxy hits and two isolated region accounts must agree. Local synthetic fixtures can exercise the gate; they do not confer production authority. | Exact `checkly test --record --grep '^slots booking multistep transaction$' --retries 0`, one input mechanism (`--env-file` **or** `--env`, never both); prove both regions, browser count and original/repair behaviour on the actual target. Parser/token/bypass details not validated by those recordings remain deferred. |
+| 7.3 production URL gate | Staged secret-free preflight checks current `main`, deployment identity and both URL roles *before* production approval; pinned verifier checks the generated URL. Post-approval and post-preview status/identity rechecks precede force deployment to the stable URL. The protected job requires an explicitly configured, pinned Phase 7 Multistep bundle and a configured bypass; missing prerequisites fail closed. | Review and later advance the immutable caller pin **in a separate approval step**. The current `gate.yml` still calls the previous snapshot; edits to `protected-gate.yml` in this branch are not active. Configure/review the real bundle and bypass separately; do not guess the bypass value or Vercel API mechanism. |
+| 7.4 production/scheduled proof | No real Phase 7 deployment, cloud parity, gate PASS, Checkly deployment or scheduled green is claimed. | Verify generated-URL readiness (HTTP 200 + health JSON, no redirects), protected PASS at exact revision, preview and force deploy only after PASS, then observe the repaired scheduled Multistep green in *both* locations. Only then start Phase 8. |
+
+**URL-role policy (same GitHub deployment, not two unrelated deployments).**
+The generated immutable verification origin comes from the Vercel Bot / `vercel`
+GitHub App success status. The stable monitoring origin comes from a *human*
+User status with exact description `verify-fix:stable-alias-verified` and no
+GitHub App provenance, manually verified and created with
+`auto_inactive: false`. Both statuses must belong to the same authenticated
+GitHub deployment ID, SHA (equal to **current main HEAD**) and `Production`
+environment; their latest role-specific status IDs must still be successful.
+Each role has a single consistent HTTPS bare origin, the two origins differ,
+and the triggering event URL matches one of them. Missing role = wait without
+approval; conflicting history, unsafe URL, spoofed provenance, non-main SHA,
+revoked status or truncated history = fail closed. Preflight reads only bounded
+GitHub metadata/statuses (no Vercel API token), and sends only sanitized IDs,
+SHA, origins and reason codes. The approved job verifies the generated origin
+before any Checkly deploy; both deploy commands use **only** the manually
+verified stable origin. Browser/API secrets and regional Multistep names live
+in 0600 runner-temp input files; only the two regional names reach a local Multistep test child. For a
+Multistep cloud session, the Checkly CLI child receives those two names, the
+approved bypass and environment label; it cannot receive the shared browser or
+API values. The protected bypass is absent until separately configured. HTTP 302 is
+never readiness; no temporary domain exception is an accepted replacement.
+
+**Evidence/accounting legend.** Historical Phase 6 `158/158` and its Checkly
+runs belong to Phase 6, not Phase 7. A local fixture labeled `PASS` proves only
+the verifier's mechanics under explicit synthetic assumptions; it is not a
+Checkly capture, browser session, deployed revision, Vercel readiness or cloud
+proof. The current pre-commit Phase 7 checkpoint on Node v24.21.0
+(lockfile installs with `--ignore-scripts`) passed **170/170** focused
+Multistep tests and **242/242** focused
+workflow/bundle/API/executor/candidate/package/scene/sandbox tests (the last includes the
+packed external-consumer run), all zero-skip. The **482-test
+full suite: 475 pass, exactly seven known `test/verify.spec.ts` failures,
+zero skips** has the same seven failures as the preceding checkpoint. These
+are the legacy real-app DSL assertions against the now-nested app response,
+not new Phase 7 failures; an eighth failure or a skip is unacceptable. Root
+and example typechecks/builds, four helper syntax checks, workflow Bash syntax
+checks, and the synthetic local in-memory collision check (5/5) passed. The
+committed-HEAD recheck and exact hashes belong in the final review report.
+Real checkpoints above remain open.
+
+**Checkly 9.5.0 artifact parity corrections (2026-10-01, synthetic validation
+only).** Confirmed against the official Checkly 9.5.0 documentation and the
+published `checkly@9.5.0` package before implementation: (1) the result asset
+manifest binds each entry with a result-scoped `source` object and a *free-form*
+`contentType` — the real scheduled archive ships `application/octet-stream` — so
+the normal automatic remote-download path now verifies archive zip-ness from the
+downloaded bytes; non-string, absent-required, oversized (>512 chars) or
+foreign-scoped descriptors still fail closed (`MULTISTEP_ASSET_TYPE_INVALID`).
+(2) The provider spreads scheduled runs by `frequencyOffset` seconds that the
+construct never sets: a source-controlled offset (object form or
+`new Frequency(minutes, seconds)`) still requires exact equality, while an
+omitted source offset narrowly accepts only provider-generated metadata
+(integer seconds, 0 or within the documented spread for the frequency); any
+other value fails closed (`MULTISTEP_DEPLOYED_CONFIG_MISMATCH`).
+(3) The scheduled runner reports failing expects in transpiled/VM-wrapped
+coordinates (`132:44` for source line 142 of the same deployed script): a
+bounded fallback re-binds the canonical stale assertion only when the reported
+line matches no source assertion and exactly one unnegated
+`expect(body.confirmed).toBe(true)` in the failed step explains the failure;
+every other case fails closed, and stored recordings carry the re-based source
+line. (4) Real `pw:api` records also carry `queryParams`, now admitted by the
+raw reporter schema. The existing scheduled result then validates on the
+automatic remote-download path with zero multistep problems and warnings
+(nonempty scenes, failure at `book 09:30`, four ordered HTTP-200 requests, no
+confirmation step) in `test/multistep/scheduled-result.spec.ts` against the committed real
+artifact bytes (`test/multistep/fixtures/scheduled-failing-*` — Checkly
+already redacts every secret to the opaque `*********` form); no new Checkly
+run was triggered and no real evidence or parity is claimed.
+
+**Problem-taxonomy and evidence-admission corrections (2026-10-01, later the
+same day).** Three emitters spelled problem names with a nonexistent
+`MULTIPLE_` prefix (`shape.ts`, `files.ts`, `build.ts`), so the stored failure
+collapsed into the `MULTISTEP_EVIDENCE_INVALID` fallback instead of naming the
+true gate; the taxonomy test (`test/multistep/problem-taxonomy.spec.ts`) now
+proves every emitted problem literal is an exact fixed category. The
+failing-shape law no longer demands a redundant `expected`/`actual` copy on
+the book fetch record: the real runner keeps the binding assertion on the
+expect step's `checklyData` and fetch-record copies vary in serialization, so
+only a genuine contradiction of the stale assertion rejects (still
+`MULTISTEP_FAILURE_STEP_UNBOUND`, fail-closed). Finally, the category mapper
+now names the remaining gates truthfully — the rendered per-side availability
+names (`MULTISTEP_{FAILING,PASSING}_{RESULT_MISSING,RECORDING_MISSING,RECORDING_INVALID}`)
+are fixed categories, internally contradictory stats evidence maps to
+`MULTISTEP_RESULT_STATS_INVALID`, and unparseable/malformed raw evidence maps
+to `MULTISTEP_RAW_SCHEMA_INVALID` — so no admission can ever masquerade as
+`MULTISTEP_EVIDENCE_INVALID` again. The real failing-side artifacts
+(`check-run-data.json` byte-identical script, `logs.txt`, `test-results.json`
+with the no-`actual` failing expect, full Vercel config block, `errorLocation`
+132:44) validate end-to-end at the automatic remote-download path: zero
+problems/warnings, three scenes, failure bound at `book 09:30` line 142
+(`assert:3b894637`).
 
 ## Phase 8 — CLI setup and copied live learning project
 
@@ -166,6 +310,330 @@ incident. `verify-fix bundle` captures its fresh incident. A real repair passes.
 A bad repair fails. The pull-request gate binds the verdict to the exact preview
 revision. No mock, secret, generated duplicate implementation, or
 repository-relative dependency exists inside the copied project.
+
+## Phase 9 — Protected monitoring guarantees and two-sided verification
+
+Phase 9 starts after Phase 8 is complete.
+
+| Task | Technical detail |
+| --- | --- |
+| 9.1 Effective Checkly model | At incident capture, resolve the check's final effective configuration from the Checkly API, project defaults, groups, check-specific settings, imported configuration, and check-type settings. Do not compare only `checkly.config.ts`, and do not rely on assumed defaults. Checkly configuration supplies the facts; `verify-fix` supplies the protection rules. |
+| 9.2 General protected-requirements model | Convert the effective configuration into a versioned, normalized model stored in the trusted incident bundle. Protect stable check identity, activation, mute state, `shouldFail`, locations, private locations, `runParallel`, frequency, retry strategy, alert behavior, target resolution, execution selectors, and required assertion tuples. Use common requirements plus adapters for API, Browser, Playwright, and Multistep checks. Do not hardcode fixture names, regions, routes, or account-variable names. |
+| 9.3 Protected bundle trust | Keep the incident bundle outside the candidate project. Record its schema version, source identities, and digest. Pin the expected digest in protected CI. The candidate cannot add, remove, or edit its own policy. A missing, malformed, unsupported, or untrusted policy produces `UNCERTAIN`. |
+| 9.4 Candidate effective configuration | Resolve the complete candidate configuration using the same model as the original. Include project defaults, group overrides, check-level overrides, `browserChecks`, `multiStepChecks`, `playwrightChecks`, `playwrightConfig`, `playwrightConfigPath`, imported helpers, package files, and lockfiles. Compare final behavior, not only textual differences. |
+| 9.5 New-setting impact analysis | Do not reject a setting merely because it is new. Determine what it changes. A new setting that preserves protected guarantees continues to experiments. A setting that definitely weakens a protected guarantee returns `FAILED`. An unsupported or ambiguous effect returns `UNCERTAIN`. Metadata-only changes may be reported without blocking. |
+| 9.6 Static protected gate | Before any browser, local scene, or cloud run, compare the candidate's effective settings with the bundle. Protected change or known masking behavior returns `FAILED` with zero runs. Missing evidence or unresolved executable configuration returns `UNCERTAIN`. Preserve the existing assertion identity function and compare required assertions using complete tuples. |
+| 9.7 Candidate-independent experiments | Take trusted experiment conditions from the bundle. Candidate configuration cannot reduce reproduction concurrency, remove required regions, change the target, alter failure injection, or rewrite expected outcomes. Candidate code and safe new settings are executed under those fixed conditions. |
+| 9.8 Positive verification | Run `HEALTHY` and `REPRODUCTION` experiments. Healthy behavior must still pass. The repaired candidate must pass under the original incident concurrency, regions, target, and transaction conditions. New safe settings must actually be exercised during these runs. |
+| 9.9 Falsification verification | Deliberately try to disprove the repair. `DETECTION` injects a genuine recorded failure and requires the candidate check to detect it. Continue deterministic mutation tests for weakened, removed, skipped, caught, hardcoded, retried, or redirected assertions. Do not use an LLM to create verdict evidence. |
+| 9.10 Regression verification | Determine which other monitors and behaviors the candidate can affect. Generate regression scenes for affected production checks. Project-wide configuration changes must test every affected monitor. If affected resources cannot be enumerated or executed, return `UNCERTAIN`. |
+| 9.11 Regional-account isolation | Support per-location accounts as a general verified repair operator. Derive required account keys from the bundle's regions. Require each value to be present, non-empty, and different. Prove the trusted region selects the matching account. Compare values only in memory and never store or print them. |
+| 9.12 Deliberate policy changes | Reduced monitoring is not approved inside a repair run. Disabling parallel execution, removing a location, reducing frequency, muting the check, changing alert sensitivity, or adding masking retries returns `FAILED` under the current policy. A deliberate reduction requires a separate human-reviewed policy revision with a new version or digest. No interactive override can convert the current repair to `PASS`. |
+| 9.13 Reporting and security | Report policy version and digest, original and candidate effective values, fixed reason codes, trusted and measured concurrency, required and executed regions, affected monitors, target binding, scenes, and cost. Never include secrets, account values, tokens, cookies, signed URLs, or raw secret-bearing errors. Run the pinned verifier outside the candidate checkout. |
+| 9.14 Production rollout | Roll out the new verifier feature in three stages: shadow reporting without blocking, migration of active incident bundles, then CI enforcement. Shadow mode evaluates the feature; it does not weaken candidate testing. CI remains non-interactive. |
+| 9.15 Proof matrix | Test inheritance, overrides, new settings, unknown settings, location changes, concurrency changes, retries, activation, alert behavior, new monitor discovery, imported configuration, sibling impact, policy tampering, missing and duplicate accounts, candidate-controlled reproduction, positive testing, falsification, regression, and secret leakage. |
+
+### Decision rules
+
+```text
+Protected guarantee definitely changed → FAILED
+Known masking behavior                 → FAILED
+Required evidence missing              → UNCERTAIN
+Configuration effect unsupported       → UNCERTAIN
+Protected guarantees preserved         → run experiments
+All required experiments match         → PASS
+```
+
+### Configuration comparison rules
+
+#### Common fields
+
+Protect across supported check types:
+
+```text
+stable logical identity
+activated
+muted
+shouldFail
+frequency
+locations
+privateLocations
+runParallel
+retry strategy
+alert behavior
+environment-variable names
+target resolution
+```
+
+#### Type-specific fields
+
+Use deterministic adapters:
+
+```text
+API:
+  request method
+  URL structure
+  assertions
+  setup and teardown
+
+Browser:
+  entrypoint
+  runtime
+  assertions
+  target
+
+Playwright:
+  config path
+  projects
+  tags
+  test selection
+  retries
+  target
+
+Multistep:
+  ordered steps
+  routes and methods
+  assertions
+  environment mapping
+  runtime transaction
+```
+
+#### Comparison operators
+
+Use fixed operators:
+
+```text
+exact value
+exact unordered set
+required subset
+unchanged assertion tuple
+supported addition
+```
+
+Unknown operators or unresolved values produce `UNCERTAIN`.
+
+### Important cases
+
+#### Project default overridden by candidate
+
+```ts
+// Trusted project default
+locations: ['us-east-1', 'eu-west-1']
+runParallel: true
+```
+
+```ts
+// Candidate check override
+locations: ['us-east-1']
+runParallel: false
+```
+
+Final effective behavior is one sequential location.
+
+Result:
+
+```text
+FAILED before execution
+```
+
+#### New configuration section
+
+```ts
+playwrightConfigPath: './playwright.config.ts'
+```
+
+If the resolved file keeps the protected target, assertions, test selection, retries, locations, and concurrency:
+
+```text
+continue to positive, falsification, and regression experiments
+```
+
+If it skips the incident test or masks failure:
+
+```text
+FAILED
+```
+
+If it cannot be resolved safely:
+
+```text
+UNCERTAIN
+```
+
+#### New check definition
+
+If the candidate adds `browserChecks`, `multiStepChecks`, or `playwrightChecks`:
+
+1. Resolve the monitors created.
+2. Confirm the incident check remains.
+3. Determine which existing checks are affected.
+4. Run applicable experiments.
+5. Return `UNCERTAIN` if the impact cannot be bounded.
+
+#### Location change
+
+```text
+Original:  [USA, Europe]
+Candidate: [USA]
+Result:    FAILED
+```
+
+```text
+Original:  [USA, Europe]
+Candidate: [USA, Europe, Asia]
+Result:    FAILED until separately approved
+```
+
+```text
+Original:  [USA, Europe]
+Candidate: [Europe, USA]
+Result:    unchanged
+```
+
+#### Candidate lowers concurrency
+
+The bundle records:
+
+```text
+reproduction concurrency: 2
+```
+
+The candidate sets:
+
+```text
+runParallel: false
+```
+
+Result:
+
+```text
+FAILED during the static gate
+```
+
+The reproduction must never silently drop to one run.
+
+#### Positive experiment
+
+```text
+Run the repaired candidate with:
+- original target
+- original regions
+- original concurrency
+- original incident transaction
+
+Expected: repaired behavior passes
+```
+
+#### Falsification experiment
+
+```text
+Inject the recorded genuine failure.
+
+Expected: candidate check detects it and fails internally.
+```
+
+If the candidate check passes the forced failure, the candidate verdict is `FAILED`.
+
+#### Regression experiment
+
+Run unaffected behavior and every monitor affected by global configuration.
+
+Unknown project-wide impact produces `UNCERTAIN`.
+
+#### Per-location accounts
+
+```text
+Region A → account A
+Region B → account B
+```
+
+Rules:
+
+```text
+missing account       → UNCERTAIN
+empty account         → UNCERTAIN
+equal account values  → FAILED
+unsupported mapping   → UNCERTAIN
+distinct proven values → run experiments
+```
+
+#### Intentional monitoring reduction
+
+A human-approved reduction is a separate policy change.
+
+It cannot receive:
+
+```text
+PASS — incident repaired
+```
+
+under the old policy.
+
+### Expected fixture results
+
+| Candidate | Expected verdict | Runs |
+|---|---:|---:|
+| Original broken candidate | `FAILED` | Reproduction runs |
+| `01-good-run-parallel-false` | `FAILED`, exit 1 | 0 |
+| `12-good-one-location` | `FAILED`, exit 1 | 0 |
+| `13-config-retry-only` | `FAILED`, exit 1 | 0 |
+| `14`, missing regional value | `UNCERTAIN`, exit 2 | 0 |
+| `14`, equal regional values | `FAILED`, exit 1 | 0 |
+| `14`, valid distinct values | `PASS`, exit 0 | Full experiment set |
+| App-side session repair | `PASS`, exit 0 | Full experiment set |
+
+### Production rollout
+
+#### Stage 1 — Shadow
+
+Run the new logic without changing CI verdicts.
+
+Record:
+
+- Previous results that would change.
+- Bundles missing protected requirements.
+- Unsupported configuration patterns.
+- False positives and false uncertainty.
+
+#### Stage 2 — Migration
+
+- Add versioned requirements to active bundles.
+- Review effective settings.
+- Pin bundle digests.
+- Add missing regression requirements.
+- Do not infer requirements from candidate files.
+
+#### Stage 3 — Enforcement
+
+Enable blocking CI behavior:
+
+```text
+proven violation → FAILED
+missing evidence → UNCERTAIN
+requirements preserved → experiments
+```
+
+### Done when
+
+- Protected requirements come from trusted effective Checkly configuration.
+- Requirements are stored in a versioned trusted bundle.
+- The candidate cannot change its policy or evidence.
+- The design works across supported check types and incidents.
+- New settings are evaluated and tested rather than rejected only for being new.
+- Unknown effects return `UNCERTAIN`.
+- Candidate settings cannot lower trusted experiment difficulty.
+- Positive verification proves the repair works.
+- Falsification proves the alarm still detects real failure.
+- Regression covers every affected monitor.
+- `01` and `12` return `FAILED` before execution.
+- `13` remains `FAILED`.
+- `14` runs with two distinct regional accounts at original concurrency.
+- `14` detects the forced genuine failure.
+- Valid app-side repairs can still pass.
+- No secret enters bundles, logs, or reports.
+- Existing assertion identity remains unchanged.
+- Existing deterministic verdict law remains unchanged.
+- Shadow rollout and bundle migration complete before CI enforcement.
 
 How the `REPRODUCTION` mode is decided (learned from the real bundle, where
 Rocky classified the overlap incident as `INFRASTRUCTURE_ERROR / DO_NOT_REPAIR`):

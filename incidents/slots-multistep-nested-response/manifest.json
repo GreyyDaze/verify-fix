@@ -1,0 +1,824 @@
+{
+  "schemaVersion": "v3",
+  "generatedBy": "verify-fix bundle",
+  "generatedAt": "2026-10-09T16:25:49.527Z",
+  "incidentId": "multistep:c68a06fe-6062-4d02-b31c-9ab4331f8cbe:01a12179-d0cb-711f-90ea-efa7b87dc1a2",
+  "incident": {
+    "title": "Multistep check incident",
+    "description": "Recorded Multistep failure; raw diagnostics and RCA omitted.",
+    "sourceReference": null,
+    "status": "captured"
+  },
+  "check": {
+    "id": "c68a06fe-6062-4d02-b31c-9ab4331f8cbe",
+    "deployedId": "c68a06fe-6062-4d02-b31c-9ab4331f8cbe",
+    "name": "slots booking multistep transaction",
+    "checkType": "MULTI_STEP",
+    "repo": null,
+    "file": "checks/multistep-booking.spec.ts",
+    "files": [
+      "checkly.config.ts",
+      "checks/multistep-booking.check.ts",
+      "checks/multistep-booking.spec.ts"
+    ],
+    "logicalId": "slots-booking-multistep",
+    "projectCommit": "f64a08a005470cf9e326eca5d361f1f6d7c22ac6"
+  },
+  "config": {
+    "frequencyMinutes": 5,
+    "locations": [
+      "us-east-1",
+      "eu-central-1"
+    ],
+    "privateLocations": [],
+    "runParallel": true,
+    "retryStrategy": null,
+    "doubleCheck": false,
+    "activated": true,
+    "muted": false,
+    "tags": [
+      "slots-booking",
+      "verify-fix-example",
+      "multistep"
+    ],
+    "runtimeId": null,
+    "environmentVariables": [
+      {
+        "key": "ENVIRONMENT_URL",
+        "secret": false
+      },
+      {
+        "key": "MULTISTEP_USER_US_EAST_1",
+        "secret": true
+      },
+      {
+        "key": "MULTISTEP_USER_EU_CENTRAL_1",
+        "secret": true
+      },
+      {
+        "key": "VERCEL_AUTOMATION_BYPASS_SECRET",
+        "secret": true
+      }
+    ],
+    "playwright": null,
+    "apiRequest": null,
+    "repair": {
+      "intent": null,
+      "aiAutoRepairEnabled": null
+    }
+  },
+  "target": {
+    "resolution": "code",
+    "variable": "ENVIRONMENT_URL",
+    "recordedOrigin": null,
+    "note": "The runner derives ENVIRONMENT_URL from the explicit target; no recorded origin is retained."
+  },
+  "results": {
+    "failing": {
+      "id": "01a12179-d0cb-711f-90ea-efa7b87dc1a2",
+      "startedAt": "2026-10-09T16:23:14.869Z",
+      "stoppedAt": "2026-10-09T16:23:20.867Z",
+      "runLocation": "eu-central-1",
+      "resultType": "FINAL",
+      "attempts": 1,
+      "errorGroupIds": [],
+      "errors": [],
+      "failingTest": null,
+      "trace": null
+    },
+    "passing": {
+      "id": "01a12175-39d6-771f-8092-f57abce46b4d",
+      "startedAt": "2026-10-09T16:18:14.140Z",
+      "stoppedAt": "2026-10-09T16:18:19.702Z",
+      "runLocation": "eu-central-1",
+      "resultType": "FINAL",
+      "attempts": 1,
+      "errorGroupIds": [],
+      "errors": [],
+      "failingTest": null,
+      "trace": null
+    }
+  },
+  "rca": null,
+  "errorGroup": null,
+  "reproduction": {
+    "mode": "both",
+    "matchedRule": null,
+    "matchedText": null,
+    "reason": "Multistep mode derived from typed result history; raw diagnostic text omitted.",
+    "decidedBy": "none",
+    "overlappingRuns": [
+      {
+        "runId": "01a12179-d0ca-77ac-a9d6-6c5bc5f3b12f",
+        "runLocation": "us-east-1",
+        "startedAt": "2026-10-09T16:23:14.578Z",
+        "stoppedAt": "2026-10-09T16:23:20.171Z",
+        "startDeltaMs": 291,
+        "overlapMs": 5302,
+        "passed": false
+      }
+    ]
+  },
+  "failurePoint": {
+    "action": {
+      "apiName": "test.step",
+      "title": "book 09:30",
+      "error": "ASSERTION_FAILED"
+    },
+    "request": null,
+    "assertion": {
+      "file": "checks/multistep-booking.spec.ts",
+      "line": 142,
+      "column": null,
+      "assertionId": "assert:3b894637"
+    },
+    "dependency": {
+      "method": "POST",
+      "url": "https://recorded.invalid/api/book",
+      "path": "/api/book",
+      "passingStatus": null,
+      "msBeforeStep": null,
+      "stepLine": 142,
+      "stepTitle": "book 09:30"
+    }
+  },
+  "recordings": {
+    "failing": null,
+    "passing": null,
+    "bodies": "none",
+    "apiFailing": null,
+    "apiPassing": null,
+    "multistepFailing": "recordings/failing.multistep.json",
+    "multistepPassing": null
+  },
+  "multistep": {
+    "failing": null,
+    "passing": {
+      "problems": [
+        "MULTISTEP_REQUEST_BODY_INVALID",
+        "MULTISTEP_CAPTURE_BINDING_INVALID"
+      ]
+    }
+  },
+  "scenes": [
+    {
+      "sceneId": "reproduction",
+      "type": "REPRODUCTION",
+      "mode": "live-concurrent:2",
+      "state": "Multistep reproduction state; raw diagnostics omitted.",
+      "verdict": {
+        "mustFail": false,
+        "provenance": {
+          "kind": "recorded",
+          "runId": "01a12179-d0cb-711f-90ea-efa7b87dc1a2",
+          "artifactId": "recordings/failing.multistep.json"
+        },
+        "envAssumptions": [
+          "locations",
+          "run-parallel"
+        ]
+      },
+      "experiments": [
+        {
+          "durationSec": 120,
+          "repetitions": 5,
+          "expectStable": true
+        }
+      ],
+      "assertionsInvolved": [
+        "assert:3b894637"
+      ],
+      "environment": "target",
+      "notes": []
+    },
+    {
+      "sceneId": "detection",
+      "type": "DETECTION",
+      "mode": "detect:POST /api/book -> 200:booking.confirmed=false",
+      "state": "Multistep detection state; raw diagnostics omitted.",
+      "verdict": {
+        "mustFail": true,
+        "provenance": {
+          "kind": "recorded",
+          "runId": "01a12179-d0cb-711f-90ea-efa7b87dc1a2",
+          "artifactId": "recordings/failing.multistep.json"
+        },
+        "envAssumptions": [
+          "target-resolution"
+        ]
+      },
+      "experiments": [
+        {
+          "durationSec": 60,
+          "repetitions": 5,
+          "expectStable": true
+        }
+      ],
+      "assertionsInvolved": [
+        "assert:3b894637"
+      ],
+      "environment": "target",
+      "notes": []
+    }
+  ],
+  "assertions": null,
+  "envAssumptions": [
+    {
+      "id": "locations",
+      "verified": true,
+      "verifiedBy": "source-policy",
+      "text": "Two locations are configured."
+    },
+    {
+      "id": "run-parallel",
+      "verified": true,
+      "verifiedBy": "source-policy",
+      "text": "The check is configured to run in parallel."
+    },
+    {
+      "id": "env-vars",
+      "verified": true,
+      "verifiedBy": "source-policy",
+      "text": "Only environment variable names are retained."
+    },
+    {
+      "id": "target-resolution",
+      "verified": true,
+      "verifiedBy": "source-policy",
+      "text": "An explicit target is required."
+    },
+    {
+      "id": "overlapping-run",
+      "verified": true,
+      "verifiedBy": "source-policy",
+      "text": "An overlapping run was observed in the result timestamps."
+    }
+  ],
+  "determinism": {
+    "measured": false,
+    "method": null,
+    "history": {
+      "window": 100,
+      "finalRuns": 100,
+      "passed": 38,
+      "failed": 62,
+      "passRate": 0.38,
+      "byLocation": {
+        "eu-central-1": {
+          "runs": 21,
+          "passed": 19
+        },
+        "us-east-1": {
+          "runs": 50,
+          "passed": 19
+        }
+      },
+      "from": "2026-10-09T12:18:13.602Z",
+      "to": "2026-10-09T16:23:14.869Z"
+    },
+    "sequential": null,
+    "overlap": null,
+    "lastVerifiedAt": "2026-10-09T16:25:49.527Z"
+  },
+  "runBudget": {
+    "maxPerScene": 10,
+    "used": 0
+  },
+  "oracleProvenance": {
+    "recorded": 2,
+    "codeDerived": 0
+  },
+  "provenance": {
+    "accountIdHash": "c16b931f",
+    "checkId": "c68a06fe-6062-4d02-b31c-9ab4331f8cbe",
+    "failingResultId": "01a12179-d0cb-711f-90ea-efa7b87dc1a2",
+    "passingResultId": "01a12175-39d6-771f-8092-f57abce46b4d",
+    "errorGroupId": null,
+    "rcaId": null,
+    "assets": [
+      {
+        "result": "failing",
+        "name": "logs.txt",
+        "type": "remote-asset",
+        "bytes": 1178,
+        "sha256": "14e2dd3bc89347df0236b41cda2252319ac140bb8299356dcbd88b6e9567b011",
+        "resultId": "01a12179-d0cb-711f-90ea-efa7b87dc1a2",
+        "assetType": "log",
+        "manifestEntrySha256": "b8e466fab9e2dba4baf1b2473c5a882b76455eac6f1ef77769ec8d6936b0bcf0"
+      },
+      {
+        "result": "failing",
+        "name": "test-results.json",
+        "type": "remote-asset",
+        "bytes": 48947,
+        "sha256": "adf0de9a7376076fe4ced9243bd3395c7d4c638e421f08d149f07425f181d62a",
+        "resultId": "01a12179-d0cb-711f-90ea-efa7b87dc1a2",
+        "assetType": "report",
+        "manifestEntrySha256": "a70a553c8b492a5b4e9ba6eeb1d3c267a5aa7c709df39c18d979c40ff4a52f21"
+      },
+      {
+        "result": "passing",
+        "name": "logs.txt",
+        "type": "remote-asset",
+        "bytes": 620,
+        "sha256": "2136540ef51b94b9a3990e249e21f5a409f9ea9e1d6f1408f9c8735680f25def",
+        "resultId": "01a12175-39d6-771f-8092-f57abce46b4d",
+        "assetType": "log",
+        "manifestEntrySha256": "e5417b46201fc147e1417fedf03bb5503ff99d49b89ce4ee73d6a73bd562328a"
+      },
+      {
+        "result": "passing",
+        "name": "test-results.json",
+        "type": "remote-asset",
+        "bytes": 53931,
+        "sha256": "7b61f4cf988b27ab07ec4edb6163265fbab00dfb29d6d1f203a3663b0b3f1d21",
+        "resultId": "01a12175-39d6-771f-8092-f57abce46b4d",
+        "assetType": "report",
+        "manifestEntrySha256": "c641166bf07fd0f3eb278d384c433c0490ac5277a6493bb966ec828573fa672c"
+      }
+    ],
+    "apiCalls": [
+      {
+        "method": "GET",
+        "url": "get-check",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "list-results",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "get-result",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "list-assets",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "asset",
+        "status": 302
+      },
+      {
+        "method": "GET",
+        "url": "asset",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "get-result",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "list-assets",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "url": "asset",
+        "status": 302
+      },
+      {
+        "method": "GET",
+        "url": "asset",
+        "status": 200
+      }
+    ]
+  },
+  "notes": [
+    "Multistep evidence uses fixed routes, typed bodies, source bindings and error categories. Locally constructed fixtures prove mechanics only."
+  ],
+  "protectedRequirements": {
+    "policy": {
+      "schemaVersion": "protected-requirements-v2",
+      "policyVersion": 2,
+      "check": {
+        "id": "c68a06fe-6062-4d02-b31c-9ab4331f8cbe",
+        "logicalId": "slots-booking-multistep",
+        "checkType": "MULTI_STEP"
+      },
+      "sources": [
+        {
+          "kind": "checkly-api",
+          "identity": "c68a06fe-6062-4d02-b31c-9ab4331f8cbe",
+          "sha256": "fcdbd2483515572fb5935ef5c55fa860a10583f977eb6ff58efe6e244fbcf6f6"
+        }
+      ],
+      "fields": {
+        "check.name": {
+          "effect": "metadata",
+          "comparison": "exact",
+          "original": {
+            "state": "unknown",
+            "reason": "CONFIG_NOT_RETURNED"
+          }
+        },
+        "activated": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": true
+          }
+        },
+        "muted": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": false
+          }
+        },
+        "shouldFail": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "unknown",
+            "reason": "CONFIG_NOT_RETURNED"
+          }
+        },
+        "frequency": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": 5
+          }
+        },
+        "locations": {
+          "effect": "protected",
+          "comparison": "set-equal",
+          "original": {
+            "state": "known",
+            "value": [
+              "us-east-1",
+              "eu-central-1"
+            ]
+          }
+        },
+        "privateLocations": {
+          "effect": "protected",
+          "comparison": "set-equal",
+          "original": {
+            "state": "known",
+            "value": []
+          }
+        },
+        "runParallel": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": true
+          }
+        },
+        "retryStrategy": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": null
+          }
+        },
+        "alertBehavior": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "unknown",
+            "reason": "UNSUPPORTED_SETTING"
+          }
+        },
+        "environmentVariableNames": {
+          "effect": "protected",
+          "comparison": "set-equal",
+          "original": {
+            "state": "known",
+            "value": [
+              "ENVIRONMENT_URL",
+              "MULTISTEP_USER_US_EAST_1",
+              "MULTISTEP_USER_EU_CENTRAL_1",
+              "VERCEL_AUTOMATION_BYPASS_SECRET"
+            ]
+          }
+        },
+        "targetResolution": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": "code"
+          }
+        },
+        "execution.dependencyMetadata": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "unknown",
+            "reason": "CONFIG_NOT_RETURNED"
+          }
+        },
+        "multistep.orderedSteps": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": [
+              "login",
+              "session",
+              "slots",
+              "book 09:30",
+              "confirm transaction"
+            ]
+          }
+        },
+        "multistep.routesAndMethods": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "unknown",
+            "reason": "SOURCE_UNAVAILABLE"
+          }
+        },
+        "multistep.assertions": {
+          "effect": "protected",
+          "comparison": "required-tuples",
+          "original": {
+            "state": "known",
+            "value": [
+              {
+                "id": "assert:157dab33",
+                "subject": "response.status()",
+                "matcher": "toBe",
+                "target": "200"
+              },
+              {
+                "id": "assert:3b894637",
+                "subject": "body.ok",
+                "matcher": "toBe",
+                "target": "true"
+              },
+              {
+                "id": "assert:08dcb886",
+                "subject": "typeof body.account",
+                "matcher": "toBe",
+                "target": "'string'"
+              },
+              {
+                "id": "assert:be45ba3e",
+                "subject": "body.account",
+                "matcher": "toBe",
+                "target": "account"
+              },
+              {
+                "id": "assert:9ca8b0d6",
+                "subject": "typeof body.version",
+                "matcher": "toBe",
+                "target": "'number'"
+              },
+              {
+                "id": "assert:2a4dd752",
+                "subject": "body.version",
+                "matcher": "toBeGreaterThan",
+                "target": "0"
+              },
+              {
+                "id": "assert:3b894637",
+                "subject": "Number.isInteger(body.version)",
+                "matcher": "toBe",
+                "target": "true"
+              },
+              {
+                "id": "assert:08dcb886",
+                "subject": "typeof body.token",
+                "matcher": "toBe",
+                "target": "'string'"
+              },
+              {
+                "id": "assert:2a4dd752",
+                "subject": "(body.token as string).length",
+                "matcher": "toBeGreaterThan",
+                "target": "0"
+              },
+              {
+                "id": "assert:157dab33",
+                "subject": "response.status()",
+                "matcher": "toBe",
+                "target": "200"
+              },
+              {
+                "id": "assert:3b894637",
+                "subject": "body.valid",
+                "matcher": "toBe",
+                "target": "true"
+              },
+              {
+                "id": "assert:08dcb886",
+                "subject": "typeof body.account",
+                "matcher": "toBe",
+                "target": "'string'"
+              },
+              {
+                "id": "assert:db738277",
+                "subject": "body.account",
+                "matcher": "toBe",
+                "target": "loginAccount"
+              },
+              {
+                "id": "assert:9dea0a14",
+                "subject": "body.tokenVersion",
+                "matcher": "toBe",
+                "target": "loginVersion"
+              },
+              {
+                "id": "assert:9dea0a14",
+                "subject": "body.currentVersion",
+                "matcher": "toBe",
+                "target": "loginVersion"
+              },
+              {
+                "id": "assert:157dab33",
+                "subject": "response.status()",
+                "matcher": "toBe",
+                "target": "200"
+              },
+              {
+                "id": "assert:15df2abc",
+                "subject": "typeof body",
+                "matcher": "toBe",
+                "target": "'object'"
+              },
+              {
+                "id": "assert:71362618",
+                "subject": "body",
+                "matcher": "toBeNull",
+                "target": ""
+              },
+              {
+                "id": "assert:3b894637",
+                "subject": "Array.isArray(body.slots)",
+                "matcher": "toBe",
+                "target": "true"
+              },
+              {
+                "id": "assert:9ca8b0d6",
+                "subject": "typeof body.delayMs",
+                "matcher": "toBe",
+                "target": "'number'"
+              },
+              {
+                "id": "assert:1039fc86",
+                "subject": "body.slots as string[]",
+                "matcher": "toContain",
+                "target": "SELECTED_SLOT"
+              },
+              {
+                "id": "assert:157dab33",
+                "subject": "response.status()",
+                "matcher": "toBe",
+                "target": "200"
+              },
+              {
+                "id": "assert:3b894637",
+                "subject": "body.confirmed",
+                "matcher": "toBe",
+                "target": "true"
+              },
+              {
+                "id": "assert:d0778cfe",
+                "subject": "body.booking",
+                "matcher": "toBe",
+                "target": "'CONFIRMED'"
+              },
+              {
+                "id": "assert:08dcb886",
+                "subject": "typeof body.account",
+                "matcher": "toBe",
+                "target": "'string'"
+              },
+              {
+                "id": "assert:db738277",
+                "subject": "body.account",
+                "matcher": "toBe",
+                "target": "loginAccount"
+              },
+              {
+                "id": "assert:8958a4c3",
+                "subject": "body.slot",
+                "matcher": "toBe",
+                "target": "SELECTED_SLOT"
+              },
+              {
+                "id": "assert:07ba2f21",
+                "subject": "body.slot",
+                "matcher": "toBe",
+                "target": "'09:30'"
+              },
+              {
+                "id": "assert:9dea0a14",
+                "subject": "body.version",
+                "matcher": "toBe",
+                "target": "loginVersion"
+              },
+              {
+                "id": "assert:be45ba3e",
+                "subject": "loginAccount",
+                "matcher": "toBe",
+                "target": "account"
+              },
+              {
+                "id": "assert:be45ba3e",
+                "subject": "sessionAccount",
+                "matcher": "toBe",
+                "target": "account"
+              },
+              {
+                "id": "assert:be45ba3e",
+                "subject": "bookingAccount",
+                "matcher": "toBe",
+                "target": "account"
+              },
+              {
+                "id": "assert:9dea0a14",
+                "subject": "sessionTokenVersion",
+                "matcher": "toBe",
+                "target": "loginVersion"
+              },
+              {
+                "id": "assert:9dea0a14",
+                "subject": "sessionCurrentVersion",
+                "matcher": "toBe",
+                "target": "loginVersion"
+              },
+              {
+                "id": "assert:9dea0a14",
+                "subject": "bookingVersion",
+                "matcher": "toBe",
+                "target": "loginVersion"
+              },
+              {
+                "id": "assert:1039fc86",
+                "subject": "slots",
+                "matcher": "toContain",
+                "target": "SELECTED_SLOT"
+              },
+              {
+                "id": "assert:07ba2f21",
+                "subject": "bookingSlot",
+                "matcher": "toBe",
+                "target": "'09:30'"
+              },
+              {
+                "id": "assert:8958a4c3",
+                "subject": "bookingSlot",
+                "matcher": "toBe",
+                "target": "SELECTED_SLOT"
+              },
+              {
+                "id": "assert:3b894637",
+                "subject": "bookingConfirmed",
+                "matcher": "toBe",
+                "target": "true"
+              },
+              {
+                "id": "assert:d0778cfe",
+                "subject": "bookingResult",
+                "matcher": "toBe",
+                "target": "'CONFIRMED'"
+              }
+            ]
+          }
+        },
+        "multistep.environmentMapping": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "unknown",
+            "reason": "DYNAMIC_VALUE_UNRESOLVED"
+          }
+        },
+        "multistep.runtimeTransaction": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "unknown",
+            "reason": "SOURCE_UNAVAILABLE"
+          }
+        },
+        "multistep.runtime": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "unknown",
+            "reason": "CONFIG_NOT_RETURNED"
+          }
+        }
+      }
+    },
+    "sha256": "4b4f50357cbdbe4fa50f9e5e18c1c7c7d9d305cea5eba1aa16452a35c3228d1f"
+  }
+}

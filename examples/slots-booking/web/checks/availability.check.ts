@@ -16,7 +16,7 @@ new ApiCheck("slots-availability-api", {
   activated: true,
   muted: false,
   frequency: Frequency.EVERY_5M,
-  locations: ["us-east-1", "eu-west-1"],
+  locations: ["us-east-1", "eu-central-1"],
   tags: ["slots-booking", "api"],
   environmentVariables: [
     { key: "ENVIRONMENT_URL", value: process.env.ENVIRONMENT_URL ?? "" },

@@ -12,7 +12,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildManifest, resultErrors, runOutcome } from "../../src/bundle/manifest.ts";
+import { buildManifest, dependencyOf, resultErrors, runOutcome } from "../../src/bundle/manifest.ts";
 import { loadRealBundle } from "../helpers/real-bundle.ts";
 
 const { captured, failingResult, passingResult, rcaDoc, historyFile, inputs } = loadRealBundle("slots-booking-drift");
@@ -48,6 +48,21 @@ test("golden (drift): a stale check — locator not found at line 36, all respon
   assert.deepEqual(detection.verdict.provenance, { kind: "recorded", runId: passingResult.id, artifactId: "recordings/passing.har" });
   assert.ok(detection.notes?.some((n) => /derived from the passing run's timeline/.test(n)), detection.notes?.join("\n"));
   assert.equal(detection.verdict.mustFail, true);
+});
+
+test("drift dependency leaves invalid clock values unmeasured instead of inferring zero milliseconds", () => {
+  const { failing, passing } = inputs();
+  assert.ok(passing?.extract && failing?.extract);
+  const original = dependencyOf(passing.extract, failing.extract, 36, 'Expect "toHaveText" expected="200"', null);
+  assert.ok(original, "fixture includes a measured passing-run dependency");
+  const missingRequestClock = structuredClone(passing.extract);
+  for (const entry of missingRequestClock.har.log.entries) entry._monotonicTime = Number.NaN;
+  assert.equal(dependencyOf(missingRequestClock, failing.extract, 36, original.stepTitle, null), null);
+  const invalidStepClock = structuredClone(passing.extract);
+  for (const step of invalidStepClock.actions) {
+    if (step.location?.line === 36) step.startTime = Number.NaN;
+  }
+  assert.equal(dependencyOf(invalidStepClock, failing.extract, 36, original.stepTitle, null), null);
 });
 
 test("golden (drift): the sibling failed too, so the overlap decides nothing; the persistent history makes the reproduction `live`", () => {

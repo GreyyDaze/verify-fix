@@ -3,13 +3,18 @@
 // falsifiability, (b) per-scene assertion coverage, (c) env-assumption
 // completeness, (d) mutant-kill rate. Weak → cannot PASS.
 
-import type { Bundle, OracleStrength, SceneObservation, SceneType, WeaknessScan } from "../types.ts";
+import type { Assertion, Bundle, OracleStrength, SceneObservation, SceneType, WeaknessScan } from "../types.ts";
+import { parseMultiStepProject, type MultiStepScriptModel } from "../multistep/source.ts";
+import { trustedMultiStepDetection } from "../multistep/detection.ts";
+import { MULTISTEP_DETECTION_MODE } from "../scene/modes.ts";
 import type { ContractReport } from "../contract/contract.ts";
 
 export interface MutantResult {
   name: string;
   family: "operator" | "llm";
   survived: boolean;
+  /** No conclusive mutation observation. Neither a kill nor a survivor. */
+  inconclusive?: boolean;
   detail: string;
 }
 
@@ -27,6 +32,26 @@ export interface AdequacyOutput {
 }
 
 const INDEPENDENT_TYPES: SceneType[] = ["REPRODUCTION", "HEALTHY", "DETECTION", "REGRESSION"];
+
+/** Two generic property-matchers have concrete, falsifiable meanings in this
+ * one fully source-bound transaction: a nonempty token length (> 0) and an
+ * explicitly negated null check. The ordinary weak-range rule still applies
+ * to the version > 0 (and every other property matcher). Only a validated
+ * failing-side incident with the fixed detection scene can use these source
+ * facts; this never changes the verdict table, ID algorithm, or remote shape. */
+function concreteMultiStepBoundary(script: MultiStepScriptModel | null, assertion: Assertion): boolean {
+  if (!script || script.errors.length) return false;
+  const atLine = script.assertions.filter((item) => item.sourceLine === assertion.sourceLine
+    && item.id === assertion.id && item.subject === assertion.subject
+    && item.matcher === assertion.matcher && item.target === assertion.target && item.negated === assertion.negated);
+  if (atLine.length !== 1) return false;
+  if (assertion.subject === "body" && assertion.matcher === "toBeNull" && assertion.negated
+    && atLine[0]!.stepTitle === "slots") return true;
+  return assertion.subject === "(body.token as string).length" && assertion.matcher === "toBeGreaterThan"
+    && assertion.target === "0" && !assertion.negated && atLine[0]!.stepTitle === "login"
+    && script.assertions.some((item) => item.stepTitle === "login" && item.subject === "typeof body.token"
+      && item.matcher === "toBe" && item.target === "'string'" && !item.negated);
+}
 
 export function assessAdequacy(input: AdequacyInput): AdequacyOutput {
   const { contract, sceneObservations, mutants } = input;
@@ -50,7 +75,7 @@ export function assessAdequacy(input: AdequacyInput): AdequacyOutput {
   const verifiedEnv = b.envAssumptions.filter((a) => a.verified).length;
   const envCompleteness = totalEnv === 0 ? 1 : verifiedEnv / totalEnv;
 
-  const killed = mutants.filter((m) => m.survived === false).length;
+  const killed = mutants.filter((m) => !m.inconclusive && m.survived === false).length;
   const mutantKillRate = mutants.length === 0 ? 0 : killed / mutants.length;
 
   const score = Math.min(1, 0.3 * falsifiability + 0.3 * coverage + 0.2 * envCompleteness + 0.2 * mutantKillRate);
@@ -66,8 +91,13 @@ export function assessAdequacy(input: AdequacyInput): AdequacyOutput {
 
   const missingEnvContext = b.envAssumptions.filter((a) => !a.verified).map((a) => a.id);
 
+  const detection = b.check.checkType === "MULTI_STEP" && b.multistep?.problems.length === 0
+    ? b.scenes.find((scene) => scene.type === "DETECTION" && scene.mode === MULTISTEP_DETECTION_MODE) : null;
+  const sourceModel = detection && trustedMultiStepDetection(b, detection)
+    ? parseMultiStepProject(new Map(Object.entries(b.files)), b.check.file) : null;
+  const boundScript = sourceModel?.errors.length === 0 ? sourceModel.script : null;
   const weakAssertions = contract.original.assertions
-    .filter((a) => a.kind === "property" || !a.falsifiable)
+    .filter((a) => (a.kind === "property" || !a.falsifiable) && !concreteMultiStepBoundary(boundScript, a))
     .map((a) => ({ assertionId: a.id, reason: `matcher ${a.matcher}${a.falsifiable ? "" : " is not falsifiable"} (STING weak-assertion class)` }));
 
   const weakness: WeaknessScan = {

@@ -3,6 +3,8 @@
 // outcomes ("recorded:<runId>") and check-code assertions ("code:assert:<id>").
 // Anything else is rejected at ingestion.
 
+import type { ProtectedPolicyEnvelope } from "./protected-requirements.ts";
+
 export type SceneType = "REPRODUCTION" | "HEALTHY" | "DETECTION" | "MUTATION" | "REGRESSION";
 
 export type VerdictProvenance =
@@ -155,11 +157,21 @@ export interface Bundle {
   playwright?: { configFile: string; projects: string[] } | null;
   /** Sanitized request/response records for an API incident. */
   api?: { failing: ApiRecording | null; passing: ApiRecording | null } | null;
+  /** Normalized Multistep evidence summary (from the sanitized recording). */
+  multistep?: { kind: string | null; steps: string[]; problems: string[];
+    /** Only a source-line/target-bound assertion in a validated failing
+     * recording may identify the stale response field being repaired. */
+    failureAssertion?: { file: string; line: number; id: string; step: string } | null;
+  } | null;
   scenes: Scene[];
   envAssumptions: EnvAssumption[];
   determinism: DeterminismEvidence;
   runBudget: RunBudget;
   oracleProvenance: { recorded: number; codeDerived: number };
+  /** Parsed and digest-checked provider policy from a v3 trusted bundle. */
+  protectedRequirements?: ProtectedPolicyEnvelope | null;
+  /** Fixed safe reason when the v3 policy is absent or invalid. */
+  protectedRequirementsIssue?: string | null;
 }
 
 // ---- assertion inventory (contract engine 5.1) ----
@@ -171,6 +183,8 @@ export interface Assertion {
   subject: string;
   matcher: string;
   target: string;
+  /** Multistep polarity; absent for legacy/API/browser inventories. Not hashed into the ID. */
+  negated?: boolean;
   kind: AssertionKind;
   onCriticalPath: boolean;
   sourceLine: number;
@@ -287,6 +301,12 @@ export interface SceneCost {
   checkRuns: number;
   wallTimeMs: number;
   phase: "candidate" | "mutation";
+  /** Candidate-independent run conditions used by this scene. */
+  maxConcurrentRuns?: number;
+  requiredRegions?: string[];
+  executedRegions?: string[];
+  /** Per-sandbox descendant browser-process sample maxima (null = unavailable). */
+  multiStepBrowserCounts?: Array<number | null>;
 }
 
 export interface ExecutionCost {
@@ -300,6 +320,8 @@ export interface ExecutionCost {
   localRuns: number;
   /** Browser processes started by local Playwright executions. */
   browserProcesses: number;
+  /** Measured per-run maxima for the Multistep adapter; absent = no adapter runs. */
+  multiStepBrowserCounts?: Array<number | null>;
   /** Completed API requests, including deterministic response replays. */
   httpRequests?: number;
   mutationRuns: number;

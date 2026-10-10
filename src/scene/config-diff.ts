@@ -25,6 +25,11 @@ export interface CheckConfigView {
   doubleCheck: boolean | null;
   timeouts: Record<string, string>;
   envKeys: string[];
+  activated?: boolean | null;
+  muted?: boolean | null;
+  shouldFail?: boolean | null;
+  privateLocations?: string[] | null;
+  runtimeId?: string | null;
 }
 
 const TIMEOUT_KEYS = ["maxResponseTime", "timeout", "degradedResponseTime"];
@@ -48,6 +53,9 @@ export function parseCheckConfig(source: string | null | undefined): CheckConfig
   }
   const envBlock = /\benvironmentVariables\s*:\s*\[([\s\S]*?)\]/.exec(s);
   const envKeys = envBlock ? [...envBlock[1].matchAll(/\bkey\s*:\s*['"`]([^'"`]+)['"`]/g)].map((m) => m[1]) : [];
+  const runtime = /\bruntimeId\s*:\s*['"`]([^'"`]+)['"`]/.exec(s);
+  const privateLocationsBlock = /\bprivateLocations\s*:\s*\[([^\]]*)\]/.exec(s);
+  const privateLocations = privateLocationsBlock ? [...privateLocationsBlock[1].matchAll(/['"`]([^'"`]+)['"`]/g)].map((m) => m[1]) : null;
   return {
     runParallel: bool("runParallel"),
     locations,
@@ -56,6 +64,11 @@ export function parseCheckConfig(source: string | null | undefined): CheckConfig
     doubleCheck: bool("doubleCheck"),
     timeouts,
     envKeys,
+    activated: bool("activated"),
+    muted: bool("muted"),
+    shouldFail: bool("shouldFail"),
+    privateLocations,
+    runtimeId: runtime ? runtime[1] : null,
   };
 }
 

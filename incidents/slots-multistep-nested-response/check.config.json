@@ -12,7 +12,7 @@
       "checks/multistep-booking.spec.ts"
     ],
     "logicalId": "slots-booking-multistep",
-    "projectCommit": "f64a08a005470cf9e326eca5d361f1f6d7c22ac6"
+    "projectCommit": "6117e4dbc224bc83ffe3a3d9fba49d7265f073f7"
   },
   "config": {
     "frequencyMinutes": 5,

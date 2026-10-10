@@ -181,9 +181,22 @@ function candidateProtectedRequirements(
     const everyHours = /(?:EVERY_)?(\d+)H\b/.exec(frequency);
     write("frequency", everyMinutes ? Number(everyMinutes[1]) : everyHours ? Number(everyHours[1]) * 60 : frequency);
   } else unresolvedIfRemoved("frequency", originalCheckView.frequency ?? originalConfigView.frequency, null);
-  const envText = `${configText}\n${checkText}`;
-  if (/\benvironmentVariables\s*:/.test(envText)) write("environmentVariableNames", [...new Set([...configView.envKeys, ...checkView.envKeys])].sort());
-  else if (configChanged && /\benvironmentVariables\s*:/.test(originalConfigText)) fields.environmentVariableNames = policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
+  // The incident check's OWN declared names. The Checkly project config declares
+  // keys for every check in the project (the browser check's TEST_USER_* beside
+  // the Multistep check's MULTISTEP_USER_*); those belong to other monitors and
+  // are not part of this check's contract, so a candidate reusing the captured
+  // config must not be convicted for keys it never declared.
+  const ownDeclaredEnvKeys = (() => {
+    const own = [...new Set(checkView.envKeys)];
+    if (own.length) return own;
+    const captured = original["environmentVariableNames"]?.original;
+    return captured?.state === "known" && Array.isArray(captured.value)
+      ? (captured.value.filter((key) => typeof key === "string") as string[]) : [];
+  })();
+  if (ownDeclaredEnvKeys.length) write("environmentVariableNames", [...new Set(ownDeclaredEnvKeys)].sort());
+  else if (configChanged && /\benvironmentVariables\s*:/.test(originalConfigText)) {
+    fields.environmentVariableNames = policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
+  }
 
   const executableCandidate = Object.entries(candidateFiles)
     .filter(([path]) => /\.[cm]?[jt]sx?$/.test(path))
@@ -222,12 +235,18 @@ function candidateProtectedRequirements(
     const metadataPath = /(?:^|\/)(?:package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|(?:tsconfig|jsconfig)(?:\.[^.]+)*\.json)$/;
     const candidatePaths = Object.keys(candidateFiles).filter((path) => metadataPath.test(path));
     const expectedPaths = Object.keys(expected);
+    // A candidate that carries NO dependency manifest at all is a partial
+    // candidate (e.g. `--patch <spec file>`): it did not touch dependencies, so
+    // the captured hashes remain valid. A candidate that DOES carry manifests
+    // must match the sealed set exactly, or a changed one is a real change.
+    const partialCandidate = candidatePaths.length === 0 && expectedPaths.length > 0;
     const samePathSet = candidatePaths.length === expectedPaths.length
       && expectedPaths.every((path) => candidatePaths.includes(path));
-    const unchanged = samePathSet && expectedPaths.every((path) => {
+    const unchanged = (partialCandidate || samePathSet) && expectedPaths.every((path) => {
       const source = candidateFiles[path];
-      return typeof expected[path] === "string" && typeof source === "string"
-        && createHash("sha256").update(source, "utf8").digest("hex") === expected[path];
+      return typeof source === "undefined"
+        || (typeof expected[path] === "string" && typeof source === "string"
+          && createHash("sha256").update(source, "utf8").digest("hex") === expected[path]);
     });
     fields["execution.dependencyMetadata"] = unchanged
       ? policyKnown(expected as never)

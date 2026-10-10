@@ -1,7 +1,7 @@
 {
   "schemaVersion": "v3",
   "generatedBy": "verify-fix bundle",
-  "generatedAt": "2026-10-09T16:25:49.527Z",
+  "generatedAt": "2026-10-10T20:49:56.602Z",
   "incidentId": "multistep:c68a06fe-6062-4d02-b31c-9ab4331f8cbe:01a12179-d0cb-711f-90ea-efa7b87dc1a2",
   "incident": {
     "title": "Multistep check incident",
@@ -22,7 +22,7 @@
       "checks/multistep-booking.spec.ts"
     ],
     "logicalId": "slots-booking-multistep",
-    "projectCommit": "f64a08a005470cf9e326eca5d361f1f6d7c22ac6"
+    "projectCommit": "6117e4dbc224bc83ffe3a3d9fba49d7265f073f7"
   },
   "config": {
     "frequencyMinutes": 5,
@@ -149,18 +149,82 @@
     "apiFailing": null,
     "apiPassing": null,
     "multistepFailing": "recordings/failing.multistep.json",
-    "multistepPassing": null
+    "multistepPassing": "recordings/passing.multistep.json"
   },
   "multistep": {
     "failing": null,
-    "passing": {
-      "problems": [
-        "MULTISTEP_REQUEST_BODY_INVALID",
-        "MULTISTEP_CAPTURE_BINDING_INVALID"
-      ]
-    }
+    "passing": null
   },
   "scenes": [
+    {
+      "sceneId": "healthy-live",
+      "type": "HEALTHY",
+      "mode": "live",
+      "state": "Multistep healthy state; raw diagnostics omitted.",
+      "verdict": {
+        "mustFail": false,
+        "provenance": {
+          "kind": "recorded",
+          "runId": "01a12175-39d6-771f-8092-f57abce46b4d",
+          "artifactId": "recordings/passing.multistep.json"
+        },
+        "envAssumptions": [
+          "locations",
+          "target-resolution"
+        ]
+      },
+      "experiments": [
+        {
+          "durationSec": 60,
+          "repetitions": 5,
+          "expectStable": true
+        }
+      ],
+      "assertionsInvolved": [
+        "assert:157dab33",
+        "assert:3b894637",
+        "assert:08dcb886",
+        "assert:be45ba3e",
+        "assert:9ca8b0d6",
+        "assert:2a4dd752",
+        "assert:3b894637",
+        "assert:08dcb886",
+        "assert:2a4dd752",
+        "assert:157dab33",
+        "assert:3b894637",
+        "assert:08dcb886",
+        "assert:db738277",
+        "assert:9dea0a14",
+        "assert:9dea0a14",
+        "assert:157dab33",
+        "assert:15df2abc",
+        "assert:71362618",
+        "assert:3b894637",
+        "assert:9ca8b0d6",
+        "assert:1039fc86",
+        "assert:157dab33",
+        "assert:3b894637",
+        "assert:d0778cfe",
+        "assert:08dcb886",
+        "assert:db738277",
+        "assert:8958a4c3",
+        "assert:07ba2f21",
+        "assert:9dea0a14",
+        "assert:be45ba3e",
+        "assert:be45ba3e",
+        "assert:be45ba3e",
+        "assert:9dea0a14",
+        "assert:9dea0a14",
+        "assert:9dea0a14",
+        "assert:1039fc86",
+        "assert:07ba2f21",
+        "assert:8958a4c3",
+        "assert:3b894637",
+        "assert:d0778cfe"
+      ],
+      "environment": "target",
+      "notes": []
+    },
     {
       "sceneId": "reproduction",
       "type": "REPRODUCTION",
@@ -255,37 +319,47 @@
     }
   ],
   "determinism": {
-    "measured": false,
-    "method": null,
+    "measured": true,
+    "method": "local-runner",
     "history": {
       "window": 100,
       "finalRuns": 100,
-      "passed": 38,
-      "failed": 62,
-      "passRate": 0.38,
+      "passed": 58,
+      "failed": 42,
+      "passRate": 0.58,
       "byLocation": {
         "eu-central-1": {
-          "runs": 21,
-          "passed": 19
+          "runs": 50,
+          "passed": 29
         },
         "us-east-1": {
           "runs": 50,
-          "passed": 19
+          "passed": 29
         }
       },
-      "from": "2026-10-09T12:18:13.602Z",
-      "to": "2026-10-09T16:23:14.869Z"
+      "from": "2026-10-09T15:28:15.120Z",
+      "to": "2026-10-09T19:33:18.760Z"
     },
-    "sequential": null,
-    "overlap": null,
-    "lastVerifiedAt": "2026-10-09T16:25:49.527Z"
+    "sequential": {
+      "runs": 20,
+      "passed": 0,
+      "passRate": 0,
+      "sessions": []
+    },
+    "overlap": {
+      "pairs": 20,
+      "pairsWithFailure": 20,
+      "failRate": 1,
+      "sessions": []
+    },
+    "lastVerifiedAt": "2026-10-10T21:00:17.585Z"
   },
   "runBudget": {
     "maxPerScene": 10,
     "used": 0
   },
   "oracleProvenance": {
-    "recorded": 2,
+    "recorded": 3,
     "codeDerived": 0
   },
   "provenance": {
@@ -405,8 +479,23 @@
       "sources": [
         {
           "kind": "checkly-api",
-          "identity": "c68a06fe-6062-4d02-b31c-9ab4331f8cbe",
-          "sha256": "fcdbd2483515572fb5935ef5c55fa860a10583f977eb6ff58efe6e244fbcf6f6"
+          "identity": "checks/c68a06fe-6062-4d02-b31c-9ab4331f8cbe",
+          "sha256": "33427f273dbf0ccc9f13920bd86a7aa3fb3b215369f1376f117e6373823bd1af"
+        },
+        {
+          "kind": "project-default",
+          "identity": "checkly.config.ts",
+          "sha256": "ebbf1d6b1c57f0d67036fd331a08b9790d812d65947b50cff2e23aa1d22428c6"
+        },
+        {
+          "kind": "imported-source",
+          "identity": "checks/multistep-booking.check.ts",
+          "sha256": "8c6636e78d404314106957eb137bc0d45971108401b0a0be06f0a68b81400b25"
+        },
+        {
+          "kind": "check",
+          "identity": "checks/multistep-booking.spec.ts",
+          "sha256": "98d63dcd61342316820ef6a8ede7de7d2bd2f32ee49f345615041e849902a253"
         }
       ],
       "fields": {
@@ -414,8 +503,8 @@
           "effect": "metadata",
           "comparison": "exact",
           "original": {
-            "state": "unknown",
-            "reason": "CONFIG_NOT_RETURNED"
+            "state": "known",
+            "value": "slots booking multistep transaction"
           }
         },
         "activated": {
@@ -438,8 +527,8 @@
           "effect": "protected",
           "comparison": "exact",
           "original": {
-            "state": "unknown",
-            "reason": "CONFIG_NOT_RETURNED"
+            "state": "known",
+            "value": false
           }
         },
         "frequency": {
@@ -489,8 +578,8 @@
           "effect": "protected",
           "comparison": "exact",
           "original": {
-            "state": "unknown",
-            "reason": "UNSUPPORTED_SETTING"
+            "state": "known",
+            "value": "a8292cbab66f02bf67e74818ae2c551397c5454fc3e76ea743bac054db8f61b6"
           }
         },
         "environmentVariableNames": {
@@ -500,8 +589,8 @@
             "state": "known",
             "value": [
               "ENVIRONMENT_URL",
-              "MULTISTEP_USER_US_EAST_1",
               "MULTISTEP_USER_EU_CENTRAL_1",
+              "MULTISTEP_USER_US_EAST_1",
               "VERCEL_AUTOMATION_BYPASS_SECRET"
             ]
           }
@@ -518,8 +607,12 @@
           "effect": "protected",
           "comparison": "exact",
           "original": {
-            "state": "unknown",
-            "reason": "CONFIG_NOT_RETURNED"
+            "state": "known",
+            "value": {
+              "package-lock.json": "4b3e048dfe96ff34875a7c956e6fdead8a4ee1db320b569798bfb2279eabeabb",
+              "package.json": "2dffa04ca219c43ae5eec65e2cd0a1c2ebbb3c28ea8aec77f6fd0af551342a5a",
+              "tsconfig.json": "d07c7d477d8493c526e814cf448001d8fd2f7e8594fd044fcbb9bfdcba8fcde0"
+            }
           }
         },
         "multistep.orderedSteps": {
@@ -528,11 +621,11 @@
           "original": {
             "state": "known",
             "value": [
-              "login",
-              "session",
-              "slots",
-              "book 09:30",
-              "confirm transaction"
+              "428821350e9691491f616b754cd8315fb86d797ab35d843479e732ef90665324",
+              "3f3af1ecebbd1410ab417ec0d27bbfcb5d340e177ae159b59fc8626c2dfd9175",
+              "3b478a0a3fc655df9df052728812851b6b22ddf49daa1130ff37eafed057414f",
+              "b3447b2b35548540c5b631a2d69f2f18d6864c2ea4f660e48c212257a8264da7",
+              "6991a54f617841c9a029a3d5741a2c2285a621707714e1f504c21f700fa3bc71"
             ]
           }
         },
@@ -540,8 +633,25 @@
           "effect": "protected",
           "comparison": "exact",
           "original": {
-            "state": "unknown",
-            "reason": "SOURCE_UNAVAILABLE"
+            "state": "known",
+            "value": [
+              [
+                "POST",
+                "306c3036837047ca63435c3a0c3d6f59005d8eae4b40ec3bb3d34906275f7e56"
+              ],
+              [
+                "GET",
+                "cb769483d3642316589cd950b4350f6444cceae994b9c8eea77c1e7cf4358fd7"
+              ],
+              [
+                "GET",
+                "eacb0e1aca95a61918c8efaa463005e49beb6d8933c72977f33284064a1204e1"
+              ],
+              [
+                "POST",
+                "53497853ba53be6a288b68812d2fff8ffee871aeb5bee68d633bb46858c62a3f"
+              ]
+            ]
           }
         },
         "multistep.assertions": {
@@ -550,246 +660,46 @@
           "original": {
             "state": "known",
             "value": [
-              {
-                "id": "assert:157dab33",
-                "subject": "response.status()",
-                "matcher": "toBe",
-                "target": "200"
-              },
-              {
-                "id": "assert:3b894637",
-                "subject": "body.ok",
-                "matcher": "toBe",
-                "target": "true"
-              },
-              {
-                "id": "assert:08dcb886",
-                "subject": "typeof body.account",
-                "matcher": "toBe",
-                "target": "'string'"
-              },
-              {
-                "id": "assert:be45ba3e",
-                "subject": "body.account",
-                "matcher": "toBe",
-                "target": "account"
-              },
-              {
-                "id": "assert:9ca8b0d6",
-                "subject": "typeof body.version",
-                "matcher": "toBe",
-                "target": "'number'"
-              },
-              {
-                "id": "assert:2a4dd752",
-                "subject": "body.version",
-                "matcher": "toBeGreaterThan",
-                "target": "0"
-              },
-              {
-                "id": "assert:3b894637",
-                "subject": "Number.isInteger(body.version)",
-                "matcher": "toBe",
-                "target": "true"
-              },
-              {
-                "id": "assert:08dcb886",
-                "subject": "typeof body.token",
-                "matcher": "toBe",
-                "target": "'string'"
-              },
-              {
-                "id": "assert:2a4dd752",
-                "subject": "(body.token as string).length",
-                "matcher": "toBeGreaterThan",
-                "target": "0"
-              },
-              {
-                "id": "assert:157dab33",
-                "subject": "response.status()",
-                "matcher": "toBe",
-                "target": "200"
-              },
-              {
-                "id": "assert:3b894637",
-                "subject": "body.valid",
-                "matcher": "toBe",
-                "target": "true"
-              },
-              {
-                "id": "assert:08dcb886",
-                "subject": "typeof body.account",
-                "matcher": "toBe",
-                "target": "'string'"
-              },
-              {
-                "id": "assert:db738277",
-                "subject": "body.account",
-                "matcher": "toBe",
-                "target": "loginAccount"
-              },
-              {
-                "id": "assert:9dea0a14",
-                "subject": "body.tokenVersion",
-                "matcher": "toBe",
-                "target": "loginVersion"
-              },
-              {
-                "id": "assert:9dea0a14",
-                "subject": "body.currentVersion",
-                "matcher": "toBe",
-                "target": "loginVersion"
-              },
-              {
-                "id": "assert:157dab33",
-                "subject": "response.status()",
-                "matcher": "toBe",
-                "target": "200"
-              },
-              {
-                "id": "assert:15df2abc",
-                "subject": "typeof body",
-                "matcher": "toBe",
-                "target": "'object'"
-              },
-              {
-                "id": "assert:71362618",
-                "subject": "body",
-                "matcher": "toBeNull",
-                "target": ""
-              },
-              {
-                "id": "assert:3b894637",
-                "subject": "Array.isArray(body.slots)",
-                "matcher": "toBe",
-                "target": "true"
-              },
-              {
-                "id": "assert:9ca8b0d6",
-                "subject": "typeof body.delayMs",
-                "matcher": "toBe",
-                "target": "'number'"
-              },
-              {
-                "id": "assert:1039fc86",
-                "subject": "body.slots as string[]",
-                "matcher": "toContain",
-                "target": "SELECTED_SLOT"
-              },
-              {
-                "id": "assert:157dab33",
-                "subject": "response.status()",
-                "matcher": "toBe",
-                "target": "200"
-              },
-              {
-                "id": "assert:3b894637",
-                "subject": "body.confirmed",
-                "matcher": "toBe",
-                "target": "true"
-              },
-              {
-                "id": "assert:d0778cfe",
-                "subject": "body.booking",
-                "matcher": "toBe",
-                "target": "'CONFIRMED'"
-              },
-              {
-                "id": "assert:08dcb886",
-                "subject": "typeof body.account",
-                "matcher": "toBe",
-                "target": "'string'"
-              },
-              {
-                "id": "assert:db738277",
-                "subject": "body.account",
-                "matcher": "toBe",
-                "target": "loginAccount"
-              },
-              {
-                "id": "assert:8958a4c3",
-                "subject": "body.slot",
-                "matcher": "toBe",
-                "target": "SELECTED_SLOT"
-              },
-              {
-                "id": "assert:07ba2f21",
-                "subject": "body.slot",
-                "matcher": "toBe",
-                "target": "'09:30'"
-              },
-              {
-                "id": "assert:9dea0a14",
-                "subject": "body.version",
-                "matcher": "toBe",
-                "target": "loginVersion"
-              },
-              {
-                "id": "assert:be45ba3e",
-                "subject": "loginAccount",
-                "matcher": "toBe",
-                "target": "account"
-              },
-              {
-                "id": "assert:be45ba3e",
-                "subject": "sessionAccount",
-                "matcher": "toBe",
-                "target": "account"
-              },
-              {
-                "id": "assert:be45ba3e",
-                "subject": "bookingAccount",
-                "matcher": "toBe",
-                "target": "account"
-              },
-              {
-                "id": "assert:9dea0a14",
-                "subject": "sessionTokenVersion",
-                "matcher": "toBe",
-                "target": "loginVersion"
-              },
-              {
-                "id": "assert:9dea0a14",
-                "subject": "sessionCurrentVersion",
-                "matcher": "toBe",
-                "target": "loginVersion"
-              },
-              {
-                "id": "assert:9dea0a14",
-                "subject": "bookingVersion",
-                "matcher": "toBe",
-                "target": "loginVersion"
-              },
-              {
-                "id": "assert:1039fc86",
-                "subject": "slots",
-                "matcher": "toContain",
-                "target": "SELECTED_SLOT"
-              },
-              {
-                "id": "assert:07ba2f21",
-                "subject": "bookingSlot",
-                "matcher": "toBe",
-                "target": "'09:30'"
-              },
-              {
-                "id": "assert:8958a4c3",
-                "subject": "bookingSlot",
-                "matcher": "toBe",
-                "target": "SELECTED_SLOT"
-              },
-              {
-                "id": "assert:3b894637",
-                "subject": "bookingConfirmed",
-                "matcher": "toBe",
-                "target": "true"
-              },
-              {
-                "id": "assert:d0778cfe",
-                "subject": "bookingResult",
-                "matcher": "toBe",
-                "target": "'CONFIRMED'"
-              }
+              "03a4b018b8c71dc28f220a301d8dcf9a1a2f6978daa3a1fe8f9cefe10e92bb2c",
+              "0d4f50454014c486be2154a2e0c2885165f882e51d48af0cc4d814d5e7b8967f",
+              "0d5f6ef11d9d6b604a26e28e7542b1b517680eb6008dac9ad4e4c1afc0195e16",
+              "344252fc679c7482dc86224afd5a21a75dea5167aa2aa3e74b01bff3903df523",
+              "344252fc679c7482dc86224afd5a21a75dea5167aa2aa3e74b01bff3903df523",
+              "35085e0c168a75874a8cd60bcf7475ad02902991ab981e081b5e8dc3e8e87829",
+              "35845dccbe23419303d3cdcc055c59a6fd2f66e7c6075ede6cf71cb96a9cc451",
+              "42465f5d3b8c811e8c6ea180d4b3fdc71178081678f86327515d282a0086fde2",
+              "4ed586a1080add0735c8c12b5fea0bd6d8ad184e956800dd09481cdc3dbea8fe",
+              "547d6d0008e02008a367cadcd20a22b6f189ec7bd60d81e2494cf09a05b71b45",
+              "64157e91f66f744c45e29a80c26bc29bc1047270a1ed22f513ebb955c81cac66",
+              "663532d71d165fd7762e91c9e87e4dc0b7ea9ac9a85e0dd665a35309c5c7af19",
+              "7a21131c3a875db38166c32bfaecbbaa16c646508cd2e4321c78e5f6bb965ef4",
+              "7a21131c3a875db38166c32bfaecbbaa16c646508cd2e4321c78e5f6bb965ef4",
+              "7bdc108434f08121e0aeb4cd4a35aa61727212a886c2e3c13debcd1233a3ea0e",
+              "81bfd56ef7135ef4082c0bf97d5a032ffb5753ecb7a2c5da072d892a34f48045",
+              "9ee3e28f0be857326b78485ad54061ceb36e83f8ed5c315daa757c757ae6a20e",
+              "a5e17be9c55147161a588828cdcf74e7c23fd83801758d703e9a0eb30c024735",
+              "a6c28eeded375e4c4372b02c1deac0146d57a5c36d6b1cc1084dbb2dfdd79002",
+              "a8511ad64010046a491949163ba1c0f8e9a5f7505a2dbe4ba96ae56d0777c53a",
+              "a91582ac2b83684f0afd0d17a4e88ae11623b7614f55a7b01a9c6bf1e12cfbb4",
+              "ba0bc28bec753869296e8be3c87df4bf28a0ee18e5e232be6333dbe7938b9ae6",
+              "ba0bc28bec753869296e8be3c87df4bf28a0ee18e5e232be6333dbe7938b9ae6",
+              "c227ef28e2f86cc271d3895cc3c78010b0fdf69fa6b07c2f95dd8f744b1bb1ac",
+              "d0edb50e7a1cc32a49db99fd68568ee4e5185c4ec516b754f55e976951f2ce84",
+              "d3625651d9660b8039414aabb958cb4ee212273313c120949f77f9e1925b60b0",
+              "d43858154879099da1fe054cf60985e26c07e458d2875458cc43ea00aab19551",
+              "d43858154879099da1fe054cf60985e26c07e458d2875458cc43ea00aab19551",
+              "d43858154879099da1fe054cf60985e26c07e458d2875458cc43ea00aab19551",
+              "d55129be61f6e27c2c1f6b55bd185e1b5f2893a51373f6273ade33657e7522ed",
+              "e16714937b6a301c745b725b9e48cc5b70db9fc48070b49982441874bd2ebce4",
+              "e6b654dd72c79b2c2957bdbcf2859e216fe832b80de632e39f65418ca436275d",
+              "e6b654dd72c79b2c2957bdbcf2859e216fe832b80de632e39f65418ca436275d",
+              "e6b654dd72c79b2c2957bdbcf2859e216fe832b80de632e39f65418ca436275d",
+              "e8d140a1ee90816f66ed4673c63b5b17f310f336dd18d06f6682055c3487103a",
+              "ea20b8039658f01f07b57a940865f008817a4242d08942a8d3fb610435161ea2",
+              "ecfe720ad56e239a777ac35bc129fd9b47fb14e02b6a197915fc2857993e25e7",
+              "f0bd019bd14a79a8d6cb7997616b97fdda4f1bfbaf8bc411233b9739487a3f5a",
+              "f0bd019bd14a79a8d6cb7997616b97fdda4f1bfbaf8bc411233b9739487a3f5a",
+              "f2d41a322d865edec4b59c0930e94559be1d38ff90ae6223b95615b6af882924"
             ]
           }
         },
@@ -797,28 +707,57 @@
           "effect": "protected",
           "comparison": "exact",
           "original": {
-            "state": "unknown",
-            "reason": "DYNAMIC_VALUE_UNRESOLVED"
+            "state": "known",
+            "value": {
+              "us-east-1": "MULTISTEP_USER_US_EAST_1",
+              "eu-central-1": "MULTISTEP_USER_EU_CENTRAL_1"
+            }
           }
         },
         "multistep.runtimeTransaction": {
           "effect": "protected",
           "comparison": "exact",
           "original": {
-            "state": "unknown",
-            "reason": "SOURCE_UNAVAILABLE"
+            "state": "known",
+            "value": {
+              "steps": [
+                "428821350e9691491f616b754cd8315fb86d797ab35d843479e732ef90665324",
+                "3f3af1ecebbd1410ab417ec0d27bbfcb5d340e177ae159b59fc8626c2dfd9175",
+                "3b478a0a3fc655df9df052728812851b6b22ddf49daa1130ff37eafed057414f",
+                "b3447b2b35548540c5b631a2d69f2f18d6864c2ea4f660e48c212257a8264da7",
+                "6991a54f617841c9a029a3d5741a2c2285a621707714e1f504c21f700fa3bc71"
+              ],
+              "requests": [
+                [
+                  "POST",
+                  "306c3036837047ca63435c3a0c3d6f59005d8eae4b40ec3bb3d34906275f7e56"
+                ],
+                [
+                  "GET",
+                  "cb769483d3642316589cd950b4350f6444cceae994b9c8eea77c1e7cf4358fd7"
+                ],
+                [
+                  "GET",
+                  "eacb0e1aca95a61918c8efaa463005e49beb6d8933c72977f33284064a1204e1"
+                ],
+                [
+                  "POST",
+                  "53497853ba53be6a288b68812d2fff8ffee871aeb5bee68d633bb46858c62a3f"
+                ]
+              ]
+            }
           }
         },
         "multistep.runtime": {
           "effect": "protected",
           "comparison": "exact",
           "original": {
-            "state": "unknown",
-            "reason": "CONFIG_NOT_RETURNED"
+            "state": "known",
+            "value": "runtime:2026.04"
           }
         }
       }
     },
-    "sha256": "4b4f50357cbdbe4fa50f9e5e18c1c7c7d9d305cea5eba1aa16452a35c3228d1f"
+    "sha256": "1109dfcbdb6c2a2794fc4e7e625b1b24b8ad525ff3a72d38332f3b5258504251"
   }
 }

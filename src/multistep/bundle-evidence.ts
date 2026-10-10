@@ -240,5 +240,10 @@ export function constrainMultiStepManifest(m: ManifestV3,
         url: API_OPERATIONS.has(call.url) ? call.url : "<checkly-request>", status: count(call.status, 599) })) },
     notes: ["Multistep evidence uses fixed routes, typed bodies, source bindings and error categories. Locally constructed fixtures prove mechanics only."],
   };
+  // The protected-requirements envelope is sealed by buildBundle BEFORE this
+  // projection. It must survive the projection, otherwise a captured Multistep
+  // bundle loses its sealed policy and every protect-requirement gate treats it
+  // as PROTECTED_POLICY_MISSING.
+  projected.protectedRequirements = m.protectedRequirements;
   return projected;
 }

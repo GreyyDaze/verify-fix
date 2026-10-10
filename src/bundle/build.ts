@@ -121,10 +121,12 @@ function protectedRequirementsFor(input: {
   check: ChecklyCheck;
   group: ChecklyCheckGroup | null;
   sources: Array<{ path: string; content: string }>;
-  mainSource: string | null;
+  mainSource: string | null
   logicalId: string | null;
   playwright: ProjectSources["playwright"];
   dependencyMetadata: Record<string, string>;
+  /** Runtime version observed on the captured FAILING result, when reported. */
+  observedRuntimeVersion?: string | null;
 }): ProtectedPolicyEnvelope | null {
   const { check, group, sources } = input;
   const configSource = sources.find((source) => /^checkly\.config\.[cm]?[jt]sx?$/.test(source.path));
@@ -156,7 +158,13 @@ function protectedRequirementsFor(input: {
       const checkNames = names(check.environmentVariables);
       const groupNames = names(group?.environmentVariables);
       const projectNames = names(projectSettings.environmentVariables);
-      const returned = [checkNames, groupNames, projectNames].filter((item): item is string[] => item !== null);
+      // Only the INCIDENT CHECK's own declared names are part of its monitoring
+      // contract. A shared project config also declares keys for OTHER checks in
+      // the same project (the browser check's TEST_USER_* beside the Multistep
+      // check's MULTISTEP_USER_*); admitting those makes a repair of one check
+      // look like it changed the other's contract.
+      const own = checkNames ?? null;
+      const returned = own !== null ? [own] : [groupNames, projectNames].filter((item): item is string[] => item !== null);
       return returned.length === 0 ? policyUnknown("CONFIG_NOT_RETURNED")
         : policyKnown([...new Set(returned.flat())].sort());
     })(),
@@ -224,7 +232,11 @@ function protectedRequirementsFor(input: {
     values["multistep.assertions"] = complete ? policyKnown(tupleDigests(model!.script!.assertions.map((a) => [a.stepTitle, a.id, a.matcher, a.target, a.negated]))) : policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
     values["multistep.environmentMapping"] = regionalAccounts ? policyKnown(regionalAccounts) : policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
     values["multistep.runtimeTransaction"] = complete ? policyKnown({ steps: model!.script!.steps.map((step) => sha256(step.title)), requests: model!.script!.requests.map((request) => [request.method, request.route ? sha256(request.route) : null]) }) : policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
-    values["multistep.runtime"] = check.runtimeId ? policyKnown(check.runtimeId) : policyUnknown("CONFIG_NOT_RETURNED");
+    values["multistep.runtime"] = check.runtimeId
+      ? policyKnown(check.runtimeId)
+      : input.observedRuntimeVersion
+        ? policyKnown(`runtime:${input.observedRuntimeVersion}`)
+        : policyUnknown("CONFIG_NOT_RETURNED");
   }
 
   const sourceIdentities = [protectedSourceIdentity("checkly-api", `checks/${check.id}`, JSON.stringify({
@@ -1366,6 +1378,10 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     logicalId: proj.logicalId,
     playwright: proj.playwright,
     dependencyMetadata: proj.dependencyMetadata,
+    // The runtime version the deployed runner actually used. Only observed on
+    // the captured result; never assumed.
+    observedRuntimeVersion: failing?.detail?.multiStepCheckResult?.runtimeVersion
+      ?? failing?.detail?.browserCheckResult?.runtimeVersion ?? null,
   });
   if (!protectedRequirements) warnings.push(`protected requirements unsupported for check type ${check.checkType}`);
   else log(`[bundle] protected requirements ${protectedRequirements.policy.schemaVersion} sha256=${protectedRequirements.sha256} sources=${protectedRequirements.policy.sources.length}`);

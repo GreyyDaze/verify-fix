@@ -39,15 +39,28 @@ export function isValidRegionSet(locations: unknown): locations is string[] {
  * there is one distinct key per declared region. Hardcoding a name would
  * reject every customer whose keys differ from the example's
  * (Phase 9 task 9.2).
+ *
+ * SECURITY: every account key MUST be declared `secret: true`. A candidate that
+ * flips an account variable to non-secret stores its value in plaintext, which
+ * is a real weakening and is rejected here.
  */
-export function hasCompleteEnvDeclarations(keys: unknown, regionCount: number): boolean {
+export function hasCompleteEnvDeclarations(
+  keys: unknown,
+  regionCount: number,
+  definitions?: ReadonlyArray<{ key: string; secret?: boolean | null }>,
+): boolean {
   if (!Array.isArray(keys) || !Number.isInteger(regionCount) || regionCount < 1) return false;
   const unique = [...new Set(keys.filter((key) => typeof key === "string"))] as string[];
   if (unique.length !== keys.length) return false;
   const structural = unique.filter((key) => (MULTISTEP_STRUCTURAL_ENV_KEYS as readonly string[]).includes(key));
   if (structural.length !== MULTISTEP_STRUCTURAL_ENV_KEYS.length) return false;
   const accounts = unique.filter((key) => !(MULTISTEP_STRUCTURAL_ENV_KEYS as readonly string[]).includes(key));
-  return accounts.length === regionCount;
+  if (accounts.length !== regionCount) return false;
+  if (!definitions) return true;
+  // A regional account value must always be secret.
+  return definitions.every((entry) => entry.key === "ENVIRONMENT_URL"
+    || (MULTISTEP_STRUCTURAL_ENV_KEYS as readonly string[]).includes(entry.key)
+    || entry.secret === true);
 }
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
@@ -62,7 +75,7 @@ export function canonicalMultiStepIdentityProblem(model: MultiStepSourceModel | 
     || c.entrypoint !== MULTISTEP_ENTRYPOINT
     || !isValidRegionSet(c.locations) || !same(c.tags, MULTISTEP_TAGS)
     || c.frequencyMinutes !== 5 || c.runParallel !== true || c.doubleCheck !== false || c.activated !== true || c.muted !== false
-    || !hasCompleteEnvDeclarations(c.environmentKeys, c.locations.length)) return "MULTISTEP_CONSTRUCT_IDENTITY_INVALID";
+    || !hasCompleteEnvDeclarations(c.environmentKeys, c.locations.length, c.environmentDefinitions)) return "MULTISTEP_CONSTRUCT_IDENTITY_INVALID";
   return null;
 }
 
@@ -112,7 +125,8 @@ export function deployedProblem(check: ChecklyCheck, model: MultiStepSourceModel
   if (check.runParallel !== true) fields.push("runParallel");
   if (!isValidRegionSet(check.locations)) fields.push("locations");
   if (!same(check.tags, MULTISTEP_TAGS)) fields.push("tags");
-  if (!hasCompleteEnvDeclarations((check.environmentVariables ?? []).map((entry) => entry.key), (check.locations ?? []).length)) fields.push("environmentVariables");
+  const declared = check.environmentVariables ?? [];
+  if (!hasCompleteEnvDeclarations(declared.map((entry) => entry.key), (check.locations ?? []).length, declared)) fields.push("environmentVariables");
   if ((check.privateLocations?.length ?? 0) !== 0) fields.push("privateLocations");
   if (check.groupId != null) fields.push("groupId");
   if (check.runtimeId != null) fields.push("runtimeId");
@@ -181,7 +195,7 @@ export function storedMultiStepIdentityProblem(m: ManifestV3, model: MultiStepSo
     || m.config.frequencyMinutes !== 5 || m.config.activated !== true || m.config.muted !== false
     || m.config.runParallel !== true || !isValidRegionSet(m.config.locations)
     || !same(m.config.tags, MULTISTEP_TAGS)
-    || !hasCompleteEnvDeclarations(m.config.environmentVariables.map((entry) => entry.key), m.config.locations.length)
+    || !hasCompleteEnvDeclarations(m.config.environmentVariables.map((entry) => entry.key), m.config.locations.length, m.config.environmentVariables)
     || m.config.privateLocations.length !== 0 || m.config.runtimeId !== null
     || m.config.retryStrategy !== null
     || m.config.doubleCheck !== false || m.config.apiRequest !== null

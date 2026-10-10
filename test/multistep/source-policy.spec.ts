@@ -42,7 +42,7 @@ test("ordered five-step parsing: canonical titles, all awaited, none conditional
   assert.equal(model!.construct?.logicalId, "slots-booking-multistep");
   assert.equal(model!.construct?.entrypoint, "checks/multistep-booking.spec.ts");
   assert.equal(model!.construct?.frequencyMinutes, 5);
-  assert.deepEqual(model!.construct?.locations, ["us-east-1", "eu-west-1"]);
+  assert.deepEqual(model!.construct?.locations, ["us-east-1", "eu-central-1"]);
   assert.equal(model!.construct?.runParallel, true);
   assert.equal(model!.construct?.doubleCheck, false);
 });
@@ -208,13 +208,13 @@ test("canonical deployed Multistep admission binds source identity and every mod
   const deployed: ChecklyCheck = {
     id: "synthetic-deployed-id", name: "slots booking multistep transaction", checkType: "MULTI_STEP",
     activated: true, muted: false, frequency: 5, frequencyOffset: 0, runParallel: true,
-    locations: ["us-east-1", "eu-west-1"], tags: ["slots-booking", "verify-fix-example", "multistep"],
+    locations: ["us-east-1", "eu-central-1"], tags: ["slots-booking", "verify-fix-example", "multistep"],
     groupId: null, runtimeId: null, privateLocations: [], retryStrategy: null, doubleCheck: false,
     script: scriptSource, scriptPath: "checks/multistep-booking.spec.ts",
     environmentVariables: [
       { key: "ENVIRONMENT_URL", value: "synthetic-origin", secret: false },
       { key: "MULTISTEP_USER_US_EAST_1", value: "synthetic-east", secret: true },
-      { key: "MULTISTEP_USER_EU_WEST_1", value: "synthetic-west", secret: true },
+      { key: "MULTISTEP_USER_EU_CENTRAL_1", value: "synthetic-west", secret: true },
       { key: "VERCEL_AUTOMATION_BYPASS_SECRET", value: "synthetic-bypass", secret: true },
     ],
   };
@@ -224,7 +224,10 @@ test("canonical deployed Multistep admission binds source identity and every mod
     ["kind", (c) => { c.checkType = "BROWSER"; }],
     ["deployed bytes", (c) => { c.script += "\n"; }],
     ["wrong source path with same basename", (c) => { c.scriptPath = "elsewhere/multistep-booking.spec.ts"; }],
-    ["locations", (c) => { c.locations = ["eu-west-1", "us-east-1"]; }],
+    // Removing a region is an attack; REORDERING the same set is not
+    // (docs/PLAN.md: "Original [USA, Europe] / Candidate [Europe, USA] -> unchanged").
+    ["locations", (c) => { c.locations = ["us-east-1"]; }],
+    ["locations added", (c) => { c.locations = ["us-east-1", "eu-central-1", "ap-south-1"]; }],
     ["parallel", (c) => { c.runParallel = false; }],
     ["frequency", (c) => { c.frequency = 10; }],
     ["activated", (c) => { c.activated = false; }],

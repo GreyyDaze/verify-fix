@@ -118,8 +118,16 @@ export function multiStepShapeProblems(capture: Pick<MultiStepCapture, "kind" | 
             || object(body.booking)?.confirmed !== true || object(body.booking)?.status !== "CONFIRMED"
             || !identity(object(body.booking)?.account) || object(body.booking)?.slot !== "09:30"
             || !version(object(body.booking)?.sessionVersion)
-          : body.confirmed !== true || body.booking !== "CONFIRMED" || !identity(body.account)
-            || body.slot !== "09:30" || !version(body.version))))) {
+          // A PASSING capture is a healthy booking against the SAME nested
+          // application contract. It must be validated with the identical
+          // nested shape: the recorded response body is
+          // {booking:{confirmed,status,account,slot,sessionVersion}}, whether
+          // the run passed or failed. Requiring the flat historical shape
+          // here made every real passing recording inadmissible.
+          : Object.hasOwn(body, "confirmed") || !object(body.booking)
+            || object(body.booking)?.confirmed !== true || object(body.booking)?.status !== "CONFIRMED"
+            || !identity(object(body.booking)?.account) || object(body.booking)?.slot !== "09:30"
+            || !version(object(body.booking)?.sessionVersion))))) {
       problems.push("MULTISTEP_REQUEST_BODY_INVALID");
     }
     // The request record repeats the assertion only in some reporter formats

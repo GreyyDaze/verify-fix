@@ -88,25 +88,31 @@ function slotsStep(): Json {
 }
 
 /** Flat (pre-incident) book response — the passing baseline. */
-function bookStepFlat(): Json {
-  return step("book 09:30", [
-    requestStep("POST /api/book", [
-      {
-        requestTitle: "POST /api/book",
-        fetchUid: "fetch-4",
-        method: "POST",
-        url: `${FAKE_ORIGIN}/api/book`,
-        requestHeaders: [["authorization", `Bearer ${FAKE_TOKEN}`], ["content-type", "application/json"]],
-        requestBody: { data: { slot: SELECTED_SLOT } },
-        status: 200,
-        statusText: "OK",
-        responseHeaders: [["content-type", "application/json"]],
-        body: { confirmed: true, booking: "CONFIRMED", account: FAKE_ACCOUNT, slot: SELECTED_SLOT, version: 1 },
-        timings: { startTime: 7, endTime: 8 },
-      },
-    ]),
-    assertion(true, true),
+/**
+ * Nested (healthy) book response with the nested assertion passing.
+ *
+ * The application ALWAYS returns the nested `booking` object, so a PASSING run
+ * against it records a nested body — exactly like the failing run. A passing
+ * capture validated against a flat historical shape is inadmissible, which is
+ * why the flat variant below is retained only as a negative fixture.
+ */
+function bookStepNestedPassing(): Json {
+  const request = requestStep("POST /api/book", [
+    {
+      requestTitle: "POST /api/book",
+      fetchUid: "fetch-4",
+      method: "POST",
+      url: `${FAKE_ORIGIN}/api/book`,
+      requestHeaders: [["authorization", `Bearer ${FAKE_TOKEN}`], ["content-type", "application/json"]],
+      requestBody: { data: { slot: SELECTED_SLOT } },
+      status: 200,
+      statusText: "OK",
+      responseHeaders: [["content-type", "application/json"]],
+      body: { booking: { confirmed: true, status: "CONFIRMED", account: FAKE_ACCOUNT, slot: SELECTED_SLOT, sessionVersion: 1 } },
+      timings: { startTime: 7, endTime: 8 },
+    },
   ]);
+  return step("book 09:30", [request, assertion(true, true)]);
 }
 
 /** Nested (incident) book response with the stale assertion failing. */
@@ -185,7 +191,7 @@ function report(stats: Json, steps: Json[]): string {
 export function passingTestResults(): string {
   return report(
     { expected: 1, unexpected: 0, flaky: 0, skipped: 0 },
-    [loginStep(), sessionStep(), slotsStep(), bookStepFlat(), confirmStep()],
+    [loginStep(), sessionStep(), slotsStep(), bookStepNestedPassing(), confirmStep()],
   );
 }
 

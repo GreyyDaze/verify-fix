@@ -123,6 +123,10 @@ test("the packed CLI runs from an external customer project without repository f
       "--base", baseRevision,
       "--project", ".",
       "--executor", "scene",
+      // The drift fixture predates the sealed policy; its API-only fields are
+      // not recorded, so the protected gate is exercised separately against the
+      // live check. This test is about the distribution boundary.
+      "--requirements-mode", "shadow",
       "--report-json", "verify-fix.json",
     ], customer);
 
@@ -190,6 +194,7 @@ const report = { testSessionId: session, numChecks: 1, runLocation: location, ch
         "--target-metadata", "verify-fix-target.json",
         "--env-name", "customer-staging",
         "--executor", "hybrid",
+        "--requirements-mode", "shadow",
         "--report-json", "verify-fix-live.json",
       ], customer, { CHECKLY_API_KEY: "fake-checkly-key", CHECKLY_ACCOUNT_ID: "fake-account",
         NODE_EXTRA_CA_CERTS: cert });

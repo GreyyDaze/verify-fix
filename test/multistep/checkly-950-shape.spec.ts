@@ -137,7 +137,7 @@ function bookStepPassing(): Json {
       requestHeaders: [["authorization", `Bearer ${FAKE_TOKEN}`], ["content-type", "application/json"]],
       responseHeaders: [["content-type", "application/json"]],
       requestBody: { data: { slot: SELECTED_SLOT }, maxRedirects: 20 },
-      body: { confirmed: true, booking: "CONFIRMED", account: FAKE_ACCOUNT, slot: SELECTED_SLOT, version: 1 },
+      body: { booking: { confirmed: true, status: "CONFIRMED", account: FAKE_ACCOUNT, slot: SELECTED_SLOT, sessionVersion: 1 } },
     }),
     expectStep("expect@60", "Expect \"toBe\"", 200, 200),
     expectStep("expect@61", "Expect \"toBe\"", true, true),
@@ -305,7 +305,7 @@ test("automatic real-shape archive download binds a bundle with scenes and the b
   writeFileSync(join(projectDir, "checks/multistep-booking.check.ts"), construct);
   const fail: CheckResultSummary = {
     id: "synthetic-fail", checkId: "synthetic-check", name: "slots booking multistep transaction",
-    hasFailures: true, hasErrors: false, runLocation: "eu-west-1", startedAt: "2026-09-25T22:18:13.000Z",
+    hasFailures: true, hasErrors: false, runLocation: "eu-central-1", startedAt: "2026-09-25T22:18:13.000Z",
     stoppedAt: "2026-09-25T22:18:18.000Z", resultType: "FINAL", attempts: 1, errorGroupIds: [],
   };
   const pass: CheckResultSummary = { ...fail, id: "synthetic-pass", hasFailures: false, runLocation: "us-east-1", startedAt: "2026-09-25T20:08:13.000Z", stoppedAt: "2026-09-25T20:08:18.000Z" };
@@ -322,13 +322,13 @@ test("automatic real-shape archive download binds a bundle with scenes and the b
     async getCheck() {
       return {
         id: "synthetic-check", name: fail.name, checkType: "MULTI_STEP", activated: true, muted: false,
-        frequency: 5, runParallel: true, locations: ["us-east-1", "eu-west-1"], privateLocations: [],
+        frequency: 5, runParallel: true, locations: ["us-east-1", "eu-central-1"], privateLocations: [],
         tags: ["slots-booking", "verify-fix-example", "multistep"], retryStrategy: null, doubleCheck: false, runtimeId: null,
         script: spec, scriptPath: "multistep-booking.spec.ts",
         environmentVariables: [
           { key: "ENVIRONMENT_URL", value: FAKE_ORIGIN, secret: false },
           { key: "MULTISTEP_USER_US_EAST_1", value: FAKE_ACCOUNT, secret: true },
-          { key: "MULTISTEP_USER_EU_WEST_1", value: "fixture-west", secret: true },
+          { key: "MULTISTEP_USER_EU_CENTRAL_1", value: "fixture-west", secret: true },
           { key: "VERCEL_AUTOMATION_BYPASS_SECRET", value: "synthetic-bypass-2910", secret: true },
         ],
       };
@@ -368,7 +368,7 @@ test("official free-form archive content type is admitted; a non-string one is n
   writeFileSync(join(projectDir, "checks/multistep-booking.check.ts"), readFileSync(`${web}checks/multistep-booking.check.ts`, "utf8"));
   const fail: CheckResultSummary = {
     id: "synthetic-fail", checkId: "synthetic-check", name: "slots booking multistep transaction",
-    hasFailures: true, hasErrors: false, runLocation: "eu-west-1", startedAt: "2026-09-25T22:18:13.000Z",
+    hasFailures: true, hasErrors: false, runLocation: "eu-central-1", startedAt: "2026-09-25T22:18:13.000Z",
     stoppedAt: "2026-09-25T22:18:18.000Z", resultType: "FINAL", attempts: 1, errorGroupIds: [],
   };
   const zip = writeZip({ "test-results.json": realShapeFailing(), "check-run-data.json": realShapeCheckRunData(), "logs.txt": realShapeLogs() });
@@ -377,13 +377,13 @@ test("official free-form archive content type is admitted; a non-string one is n
     async getCheck() {
       return {
         id: "synthetic-check", name: fail.name, checkType: "MULTI_STEP", activated: true, muted: false,
-        frequency: 5, runParallel: true, locations: ["us-east-1", "eu-west-1"], privateLocations: [],
+        frequency: 5, runParallel: true, locations: ["us-east-1", "eu-central-1"], privateLocations: [],
         tags: ["slots-booking", "verify-fix-example", "multistep"], retryStrategy: null, doubleCheck: false, runtimeId: null,
         groupId: null, script: spec, scriptPath: "checks/multistep-booking.spec.ts",
         environmentVariables: [
           { key: "ENVIRONMENT_URL", value: "synthetic-origin", secret: false },
           { key: "MULTISTEP_USER_US_EAST_1", value: "synthetic-east", secret: true },
-          { key: "MULTISTEP_USER_EU_WEST_1", value: "synthetic-west", secret: true },
+          { key: "MULTISTEP_USER_EU_CENTRAL_1", value: "synthetic-west", secret: true },
           { key: "VERCEL_AUTOMATION_BYPASS_SECRET", value: "synthetic-bypass", secret: true },
         ],
       };
@@ -432,13 +432,13 @@ test("canonical no-retry deployed config is exactly doubleCheck:false plus retry
   const base = {
     id: "synthetic-deployed-id", name: "slots booking multistep transaction", checkType: "MULTI_STEP",
     activated: true, muted: false, frequency: 5, frequencyOffset: 0, runParallel: true,
-    locations: ["us-east-1", "eu-west-1"], tags: ["slots-booking", "verify-fix-example", "multistep"],
+    locations: ["us-east-1", "eu-central-1"], tags: ["slots-booking", "verify-fix-example", "multistep"],
     groupId: null, runtimeId: null, privateLocations: [], retryStrategy: null, doubleCheck: false,
     script: "synthetic-script", scriptPath: "checks/multistep-booking.spec.ts",
     environmentVariables: [
       { key: "ENVIRONMENT_URL", value: "synthetic-origin", secret: false },
       { key: "MULTISTEP_USER_US_EAST_1", value: "synthetic-east", secret: true },
-      { key: "MULTISTEP_USER_EU_WEST_1", value: "synthetic-west", secret: true },
+      { key: "MULTISTEP_USER_EU_CENTRAL_1", value: "synthetic-west", secret: true },
       { key: "VERCEL_AUTOMATION_BYPASS_SECRET", value: "synthetic-bypass", secret: true },
     ],
   } as unknown as Parameters<typeof deployedMultiStepProblem>[0];
@@ -452,7 +452,6 @@ test("canonical no-retry deployed config is exactly doubleCheck:false plus retry
     ["inactive", (c) => { c.activated = false; }, ["activated"]],
     ["frequency", (c) => { c.frequency = 10; }, ["frequency"]],
     ["parallel", (c) => { c.runParallel = false; }, ["runParallel"]],
-    ["locations order", (c) => { c.locations = ["eu-west-1", "us-east-1"]; }, ["locations"]],
     ["private location", (c) => { c.privateLocations = ["private-1"]; }, ["privateLocations"]],
   ];
   for (const [label, mutate, expectedFields] of drift) {
@@ -461,4 +460,9 @@ test("canonical no-retry deployed config is exactly doubleCheck:false plus retry
     assert.equal(deployedMultiStepProblem(changed, projectModel, "synthetic-script"), "MULTISTEP_DEPLOYED_CONFIG_MISMATCH", label);
     assert.deepEqual(deployedProblemFields(changed, projectModel, "synthetic-script"), expectedFields, `${label} names the mismatched field`);
   }
+  // Region identity is a set, not a sequence: the trusted scope is
+  // order-insensitive, so a reorder is never drift.
+  const reordered = structuredClone(base);
+  reordered.locations = ["eu-central-1", "us-east-1"];
+  assert.equal(deployedMultiStepProblem(reordered, projectModel, "synthetic-script"), null, "locations order is not significant");
 });

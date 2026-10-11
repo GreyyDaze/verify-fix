@@ -57,7 +57,7 @@ function assetDir(failing = failingTestResults(), passing = passingTestResults()
 function summary(id: string, failure: boolean): CheckResultSummary {
   return {
     id, checkId: "synthetic-check", name: "slots booking multistep transaction", hasFailures: failure, hasErrors: false,
-    runLocation: failure ? "eu-west-1" : "us-east-1",
+    runLocation: failure ? "eu-central-1" : "us-east-1",
     startedAt: failure ? "2026-09-25T22:18:13.000Z" : "2026-09-25T20:08:13.000Z",
     stoppedAt: failure ? "2026-09-25T22:18:18.000Z" : "2026-09-25T20:08:18.000Z",
     resultType: "FINAL", attempts: failure ? 2 : 1, errorGroupIds: [],
@@ -99,13 +99,13 @@ function fakeClient(opts: FakeOpts = {}): ChecklyClient {
     async getCheck() {
       return {
         id: "synthetic-check", name: "slots booking multistep transaction", checkType: "MULTI_STEP",
-        activated: true, muted: false, frequency: 5, runParallel: true, locations: opts.checkLocations ?? ["us-east-1", "eu-west-1"],
+        activated: true, muted: false, frequency: 5, runParallel: true, locations: opts.checkLocations ?? ["us-east-1", "eu-central-1"],
         privateLocations: [], tags: ["slots-booking", "verify-fix-example", "multistep"], retryStrategy: null, doubleCheck: false, runtimeId: null,
         script: SPEC, scriptPath: "multistep-booking.spec.ts",
         environmentVariables: [
           { key: "ENVIRONMENT_URL", value: FAKE_ORIGIN, secret: false },
           { key: "MULTISTEP_USER_US_EAST_1", value: FAKE_ACCOUNT, secret: true },
-          { key: "MULTISTEP_USER_EU_WEST_1", value: "other-fixture", secret: true },
+          { key: "MULTISTEP_USER_EU_CENTRAL_1", value: "other-fixture", secret: true },
           { key: "VERCEL_AUTOMATION_BYPASS_SECRET", value: opts.shortSecret ? "abc" : "synthetic-protected-bypass-2910", secret: true },
         ],
       };
@@ -736,7 +736,7 @@ test("exact output tree and full preflight secret scan reject stale files before
 // browser, deployment, production or cloud evidence.
 const DETECTION_EAST = "synthetic-detection-east";
 const DETECTION_WEST = "synthetic-detection-west";
-const DETECTION_ENV = { MULTISTEP_USER_US_EAST_1: DETECTION_EAST, MULTISTEP_USER_EU_WEST_1: DETECTION_WEST,
+const DETECTION_ENV = { MULTISTEP_USER_US_EAST_1: DETECTION_EAST, MULTISTEP_USER_EU_CENTRAL_1: DETECTION_WEST,
   CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass-only-7392" };
 
 test("remote-bound HTTP-200 nested confirmation mutation is one field and the repaired candidate fails on THAT line in both regions", { timeout: 180_000 }, async () => {

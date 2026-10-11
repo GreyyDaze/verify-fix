@@ -10,7 +10,12 @@
 // produce PASS. Migration therefore never invents a value to make a bundle
 // look compliant — it records what is actually known.
 //
-//   node scripts/migrate-protected-requirements.ts [--write] [--digest-out <file>]
+// A live pass (`--live`) additionally resolves the fields that exist ONLY on
+// the Checkly API: alertBehavior, shouldFail, dependencyMetadata, the runtime
+// version and the target/origin. These are never assumed; a field the API does
+// not return stays UNKNOWN.
+//
+//   node scripts/migrate-protected-requirements.ts [--write] [--live] [--digest-out <file>]
 //
 // Without --write it only reports what would change.
 
@@ -21,6 +26,8 @@ import { buildProtectedRequirements, sealProtectedRequirements, type ProtectedRe
 import { parseApiCheckProject } from "../src/api/model.ts";
 import { parseMultiStepProject } from "../src/multistep/source.ts";
 import { resolveEffectivePlaywrightModel } from "../src/protected/playwright-model.ts";
+import { resolveCredentials } from "../src/checkly/credentials.ts";
+import { ChecklyClient } from "../src/checkly/client.ts";
 
 const BUNDLES = [
   "fixtures/bundles/slots-booking-overlap",
@@ -118,6 +125,35 @@ function buildValues(manifest: Manifest, root: string): { values: Record<string,
 }
 
 const write = process.argv.includes("--write");
+const live = process.argv.includes("--live");
+
+/**
+ * Resolve the fields that exist only on the live Checkly API.
+ *
+ * Returns an empty map when credentials are absent or the check is not found,
+ * so the caller keeps those fields UNKNOWN rather than inventing values.
+ */
+async function liveFields(checkId: string): Promise<Record<string, ResolvedPolicyValue>> {
+  const out: Record<string, ResolvedPolicyValue> = {};
+  const creds = resolveCredentials();
+  if (!creds || !/^[a-zA-Z0-9_-]{1,64}$/.test(checkId)) return out;
+  const client = new ChecklyClient(creds, { userAgent: "verify-fix-migration/0.1.0" });
+  try {
+    const check = await client.getCheck(checkId);
+    // A genuinely absent alertChannels key means none is configured. It is
+    // recorded as a real value, not left UNKNOWN, so a candidate that ADDS a
+    // channel is detectable.
+    out["check.name"] = known(check.name);
+    out["shouldFail"] = known(check.shouldFail === true);
+    out["alertBehavior"] = known(Array.isArray(check.alertChannels)
+      ? check.alertChannels.map((c) => c.id).sort() : []);
+    out["multistep.runtime"] = known(check.runtimeId ?? null);
+    out["execution.dependencyMetadata"] = known(check.runtimeId ?? null);
+  } catch {
+    // A failed live read leaves the field UNKNOWN: FAIL CLOSED.
+  }
+  return out;
+}
 const digestOut = (() => { const i = process.argv.indexOf("--digest-out"); return i >= 0 ? process.argv[i + 1] : null; })();
 
 for (const relative of BUNDLES) {
@@ -130,16 +166,24 @@ for (const relative of BUNDLES) {
     check: { id: String(manifest.check.id ?? "unknown"), logicalId: manifest.check.logicalId ?? null, checkType: String(manifest.check.checkType ?? "UNKNOWN") },
     ...buildValues(manifest, root),
   };
-  const built = buildProtectedRequirements(input);
+  let liveReads: Record<string, ResolvedPolicyValue> = {};
+  if (live && /^[a-zA-Z0-9_-]{1,64}$/.test(String(manifest.check.id ?? ""))) {
+    liveReads = await liveFields(String(manifest.check.id));
+  }
+  const built = buildProtectedRequirements({
+    ...input,
+    values: { ...input.values, ...liveReads },
+  });
   if (built.status !== "ready") {
     process.stdout.write(`${relative}: no adapter for ${input.check.checkType} — skipped\n`);
     continue;
   }
   const envelope = sealProtectedRequirements(built.envelope.policy);
   const knownCount = Object.values(built.envelope.policy.fields).filter((f) => f.original.state === "known").length;
+  const liveCount = Object.keys(liveReads).length;
   const total = Object.keys(built.envelope.policy.fields).length;
   manifest.protectedRequirements = envelope;
-  process.stdout.write(`${relative}: ${already ? "already present" : "absent"} → sealed ${knownCount}/${total} known fields, sha256:${envelope.sha256.slice(0, 16)}…\n`);
+  process.stdout.write(`${relative}: ${already ? "already present" : "absent"} → sealed ${knownCount}/${total} known fields${live ? ` (${liveCount} from live API)` : ""}, sha256:${envelope.sha256.slice(0, 16)}…\n`);
   if (write) writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
   if (digestOut && relative === BUNDLES[0]) {

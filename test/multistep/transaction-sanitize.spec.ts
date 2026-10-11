@@ -26,7 +26,7 @@ test("cross-step account, slot, version, and token relationships extract from ev
   assert.equal(tx.version?.value, 1);
   assert.ok(tx.version!.sites.includes("login.response.body.version"));
   assert.ok(tx.version!.sites.includes("session.response.body.tokenVersion"));
-  assert.ok(tx.version!.sites.includes("book 09:30.response.body.version"));
+  assert.ok(tx.version!.sites.includes("book 09:30.response.body.booking.sessionVersion"));
   assert.equal(tx.steps.map((s) => s.title).join(","), "login,session,slots,book 09:30,confirm transaction");
   assert.deepEqual(requestSequence(capture).map((r) => r.request.method), ["POST", "GET", "GET", "POST"]);
 });
@@ -75,8 +75,8 @@ test("sanitization: no original sensitive value survives; labels and structure a
   assert.equal(loginBody.token, TOKEN_LABEL);
   assert.equal(loginBody.ok, true);
   assert.equal(loginBody.version, 1);
-  const bookBody = roundTripped.steps.find((s: { title: string }) => s.title === "book 09:30").requests[0].responseBody as { confirmed?: boolean; booking?: unknown };
-  assert.equal(bookBody.confirmed, true);
+  const bookBody = roundTripped.steps.find((s: { title: string }) => s.title === "book 09:30").requests[0].responseBody as { booking?: { confirmed?: boolean } };
+  assert.equal(bookBody.booking?.confirmed, true);
   // query keys preserved with redacted values
   const url = result.capture.steps[0].requests[0].url as string;
   assert.ok(!url.includes(FAKE_ORIGIN));

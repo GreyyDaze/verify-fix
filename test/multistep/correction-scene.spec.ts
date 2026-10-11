@@ -66,7 +66,7 @@ function scene(bundle: Bundle): Scene {
   return bundle.scenes.find((row) => row.type === "REPRODUCTION")!;
 }
 const BYPASS = "synthetic-bypass-only-5610";
-const identities = { MULTISTEP_USER_US_EAST_1: EAST, MULTISTEP_USER_EU_WEST_1: WEST,
+const identities = { MULTISTEP_USER_US_EAST_1: EAST, MULTISTEP_USER_EU_CENTRAL_1: WEST,
   CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: BYPASS };
 
 // The real adapter may take a few seconds to synthesize per-run certificates.
@@ -77,7 +77,7 @@ test("two locations receive DISTINCT trusted REGION accounts; ordered traffic, m
     env: identities, barrierTimeoutMs: 25_000, sandboxTimeoutMs: 90_000 });
   try {
     assert.equal(multistepRegionForLocation("us-east-1"), "us-east-1");
-    assert.equal(multistepRegionForLocation("eu-west-1"), "eu-west-1");
+    assert.equal(multistepRegionForLocation("eu-central-1"), "eu-central-1");
     const observation = await executor.runScene(b, SPEC, scene(b));
     assert.equal(observation.observed, "pass", observation.reason ?? JSON.stringify(observation.trace));
     const repeats = scene(b).experiments[0]!.repetitions;
@@ -131,7 +131,7 @@ test("unknown or conflicting region is UNCERTAIN before a runner starts; CI is r
   const conflict = new SceneExecutor({ target: app.origin, projectDir: WEB,
     env: { ...identities, REGION: "us-east-1" } });
   const dirty = new SceneExecutor({ target: app.origin, projectDir: WEB,
-    env: { ...identities, MULTISTEP_USER_US_EAST_1: `${EAST} `, MULTISTEP_USER_EU_WEST_1: EAST } });
+    env: { ...identities, MULTISTEP_USER_US_EAST_1: `${EAST} `, MULTISTEP_USER_EU_CENTRAL_1: EAST } });
   try {
     // A malformed region is still rejected outright.
     assert.equal(multistepRegionForLocation("ap-south-1/../etc"), null);
@@ -142,7 +142,7 @@ test("unknown or conflicting region is UNCERTAIN before a runner starts; CI is r
     // regions).
     assert.equal(multistepRegionForLocation("ap-south-1"), "ap-south-1");
     const altered = await syntheticRemoteBundle();
-    altered.config!.locations = ["ap-south-1", "eu-west-1"];
+    altered.config!.locations = ["ap-south-1", "eu-central-1"];
     const a = await unknown.runScene(altered, SPEC, scene(altered));
     assert.equal(a.observed, "uncertain");
     assert.match(a.reason ?? "", /on-disk remote authority/);

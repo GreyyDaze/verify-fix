@@ -8,7 +8,7 @@ import { sanitizeMultiStepCapture } from "../../src/multistep/sanitize.ts";
 import { buildMultiStepRecording, MULTISTEP_DRAFT_SCHEMA } from "../../src/multistep/capture.ts";
 import { multiStepShapeProblems } from "../../src/multistep/shape.ts";
 import { validMultiStepStoredRecording } from "../../src/multistep/recording-schema.ts";
-import { FAKE_TOKEN, failingTestResults, passingTestResults } from "./helpers.ts";
+import { FAKE_ACCOUNT, FAKE_TOKEN, SELECTED_SLOT, failingTestResults, passingTestResults } from "./helpers.ts";
 
 type Report = Record<string, any>;
 function run(report: Report): Report { return report.suites[0].suites[0].specs[0].tests[0].results[0]; }
@@ -73,10 +73,14 @@ test("admission: HTTP 401 and 500 at EVERY canonical request on BOTH selected si
 test("admission: wrong book shape, missing body, contradictory result/stats/error and wrong assertion are inadmissible", () => {
   const attacks: Array<[string, Report]> = [];
   const missing = raw(); body(missing, 3).body = null; attacks.push(["missing book body", missing]);
-  const flatFail = raw(); body(flatFail, 3).body = body(raw(false), 3).body;
+  // The historical flat book body ({confirmed,booking,...}) is a real shape a
+  // customer could still return. Whichever side it appears on, it contradicts
+  // the nested application contract the recording is bound to.
+  const FLAT_BODY = { confirmed: true, booking: "CONFIRMED", account: FAKE_ACCOUNT, slot: SELECTED_SLOT, version: 1 };
+  const flatFail = raw(); body(flatFail, 3).body = { ...FLAT_BODY };
   attacks.push(["flat instead of nested failing book", flatFail]);
-  const nestedPass = raw(false); body(nestedPass, 3).body = body(raw(), 3).body;
-  attacks.push(["nested instead of flat passing book", nestedPass]);
+  const flatPass = raw(false); body(flatPass, 3).body = { ...FLAT_BODY };
+  attacks.push(["flat instead of nested passing book", flatPass]);
   const extraField = raw(); body(extraField, 3).body.confirmed = true;
   attacks.push(["a flat confirmed field contradicts the stale failure", extraField]);
   const wrongAssert = raw(); body(wrongAssert, 3).expected = false;

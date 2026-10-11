@@ -157,14 +157,14 @@ test("ENVIRONMENT_URL has no fallback and setup validation precedes any request"
 
 test("per-region accounts come from environment names only, isolated from browser check accounts", () => {
   assert.match(script, /process\.env\.MULTISTEP_USER_US_EAST_1/);
-  assert.match(script, /process\.env\.MULTISTEP_USER_EU_WEST_1/);
+  assert.match(script, /process\.env\.MULTISTEP_USER_EU_CENTRAL_1/);
   assert.match(script, /process\.env\.REGION/);
   assert.ok(!script.includes("TEST_USER"), "multistep accounts are isolated from browser check accounts");
   assert.ok(!script.includes("'demo'"), "no account value is hardcoded");
   const keys = [...construct.matchAll(/key: "([A-Z0-9_]+)"/g)].map((m) => m[1]);
   assert.deepEqual(keys.sort(), [
     "ENVIRONMENT_URL",
-    "MULTISTEP_USER_EU_WEST_1",
+    "MULTISTEP_USER_EU_CENTRAL_1",
     "MULTISTEP_USER_US_EAST_1",
     "VERCEL_AUTOMATION_BYPASS_SECRET",
   ]);
@@ -275,7 +275,7 @@ test("no masking control flow, retries, timeouts, or failure-masking constructs"
 test("construct configuration: project, locations, frequency, tags, activation, env names", () => {
   assert.match(construct, /new MultiStepCheck\("slots-booking-multistep"/);
   assert.match(construct, /frequency: Frequency\.EVERY_5M/);
-  assert.match(construct, /locations: \["us-east-1", "eu-west-1"\]/);
+  assert.match(construct, /locations: \["us-east-1", "eu-central-1"\]/);
   assert.match(construct, /activated: true/);
   assert.match(construct, /muted: false/);
   assert.match(construct, /tags: \["slots-booking", "verify-fix-example", "multistep"\]/);

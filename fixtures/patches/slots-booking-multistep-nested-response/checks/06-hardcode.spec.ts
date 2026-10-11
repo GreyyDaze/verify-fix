@@ -44,7 +44,7 @@ const origin = requireHttpsOrigin(rawEnvironmentUrl, 'ENVIRONMENT_URL')
 // values arrive from the environment at the later checkpoint.
 const MONITORING_ACCOUNTS_BY_REGION: Record<string, string | undefined> = {
   'us-east-1': process.env.MULTISTEP_USER_US_EAST_1,
-  'eu-west-1': process.env.MULTISTEP_USER_EU_WEST_1,
+  'eu-central-1': process.env.MULTISTEP_USER_EU_CENTRAL_1,
 }
 const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
 const region = process.env.REGION

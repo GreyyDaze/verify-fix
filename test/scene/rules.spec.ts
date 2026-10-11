@@ -53,12 +53,12 @@ describe("scene modes", () => {
 });
 
 describe("config diff + policy", () => {
-  const original = `export default defineConfig({ checks: { frequency: 5, locations: ["us-east-1", "eu-west-1"], runParallel: true, environmentVariables: [{ key: "ACCOUNT", value: "{{ACCOUNT}}" }] } });`;
+  const original = `export default defineConfig({ checks: { frequency: 5, locations: ["us-east-1", "eu-central-1"], runParallel: true, environmentVariables: [{ key: "ACCOUNT", value: "{{ACCOUNT}}" }] } });`;
 
   test("parses the keys that matter", () => {
     const v = parseCheckConfig(original);
     assert.equal(v.runParallel, true);
-    assert.deepEqual(v.locations, ["us-east-1", "eu-west-1"]);
+    assert.deepEqual(v.locations, ["us-east-1", "eu-central-1"]);
     assert.equal(v.frequency, "5");
     assert.equal(v.retryStrategy, null);
     assert.deepEqual(v.envKeys, ["ACCOUNT"]);
@@ -117,8 +117,8 @@ describe("environment", () => {
 
   test("a fixed declared user per Checkly region is allowed; random, undeclared, and partial mappings remain dodges", () => {
     const original = `const TEST_USER = process.env.TEST_USER ?? 'demo'`;
-    const good = `const USERS = {\n  'us-east-1': process.env.TEST_USER_US_EAST_1,\n  'eu-west-1': process.env.TEST_USER_EU_WEST_1,\n}\nconst TEST_USER = USERS[process.env.CHECKLY_REGION ?? '']`;
-    const context = { locations: ["us-east-1", "eu-west-1"], declaredEnvKeys: ["TEST_USER_US_EAST_1", "TEST_USER_EU_WEST_1"] };
+    const good = `const USERS = {\n  'us-east-1': process.env.TEST_USER_US_EAST_1,\n  'eu-central-1': process.env.TEST_USER_EU_CENTRAL_1,\n}\nconst TEST_USER = USERS[process.env.CHECKLY_REGION ?? '']`;
+    const context = { locations: ["us-east-1", "eu-central-1"], declaredEnvKeys: ["TEST_USER_US_EAST_1", "TEST_USER_EU_CENTRAL_1"] };
     assert.equal(regionalUserEnvKey("us-east-1"), "TEST_USER_US_EAST_1");
     assert.equal(detectEnvScopeDodge(original, good, context), null);
     assert.match(detectEnvScopeDodge(original, `${good} ?? 'hardcoded-user'`, context) ?? "", /constant changed/);
@@ -219,6 +219,8 @@ describe("patch sets", () => {
   test("a file replaces the main check; a directory replaces matching files; config merges over the bundle's", () => {
     const { bundle } = loadBundle(INCIDENT_DIR);
     assert.equal(bundle.configFile, "checkly.config.ts");
+    // The overlap bundle is real captured evidence recorded in eu-west-1. It is
+    // never rewritten to match the example's current region.
     assert.deepEqual(bundle.config, { runParallel: true, locations: ["us-east-1", "eu-west-1"], frequencyMinutes: 5, environmentVariables: ["ACCOUNT"] });
 
     const file = loadPatch(join(PATCH_DIR, "03-weaken-assertion.ts"), bundle);

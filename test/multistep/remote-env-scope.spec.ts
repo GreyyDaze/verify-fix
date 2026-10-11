@@ -16,16 +16,16 @@ import { trustedMultiStepDetection } from "../../src/multistep/detection.ts";
 const bundle = { check: { checkType: "MULTI_STEP" } } as Bundle;
 
 test("Multistep cloud child sees two region identities and approved bypass, never shared browser/API secrets", () => {
-  const input = { MULTISTEP_USER_US_EAST_1: "synthetic-ms-east", MULTISTEP_USER_EU_WEST_1: "synthetic-ms-west",
+  const input = { MULTISTEP_USER_US_EAST_1: "synthetic-ms-east", MULTISTEP_USER_EU_CENTRAL_1: "synthetic-ms-west",
     CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass", ENVIRONMENT_NAME: "preview",
     TEST_USER: "synthetic-browser", TEST_USER_US_EAST_1: "synthetic-browser-east", API_TOKEN: "synthetic-api",
     CHECKLY_API_KEY: "synthetic-cloud-auth", ENVIRONMENT_URL: "https://untrusted-override.invalid",
     PATH: "/untrusted/path" };
   assert.deepEqual(scopedChecklyEnvironment(bundle, input), {
-    MULTISTEP_USER_US_EAST_1: "synthetic-ms-east", MULTISTEP_USER_EU_WEST_1: "synthetic-ms-west",
+    MULTISTEP_USER_US_EAST_1: "synthetic-ms-east", MULTISTEP_USER_EU_CENTRAL_1: "synthetic-ms-west",
     CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass", ENVIRONMENT_NAME: "preview",
   });
-  assert.equal(scopedChecklyEnvironment(bundle, { ...input, MULTISTEP_USER_EU_WEST_1: input.MULTISTEP_USER_US_EAST_1 }), null);
+  assert.equal(scopedChecklyEnvironment(bundle, { ...input, MULTISTEP_USER_EU_CENTRAL_1: input.MULTISTEP_USER_US_EAST_1 }), null);
   assert.equal(scopedChecklyEnvironment(bundle, { ...input, MULTISTEP_USER_US_EAST_1: "" }), null);
   assert.equal(scopedChecklyEnvironment(bundle, { ...input, MULTISTEP_USER_US_EAST_1: " synthetic-ms-east" }), null);
   // The legacy API/browser sandbox keeps its separate environment contract.
@@ -49,8 +49,8 @@ const fs = require('node:fs')
 const args = process.argv.slice(2)
 const at = (flag) => args[args.indexOf(flag) + 1]
 const location = at('--location')
-const selected = location === 'us-east-1' ? 'MULTISTEP_USER_US_EAST_1' : 'MULTISTEP_USER_EU_WEST_1'
-const other = location === 'us-east-1' ? 'MULTISTEP_USER_EU_WEST_1' : 'MULTISTEP_USER_US_EAST_1'
+const selected = location === 'us-east-1' ? 'MULTISTEP_USER_US_EAST_1' : 'MULTISTEP_USER_EU_CENTRAL_1'
+const other = location === 'us-east-1' ? 'MULTISTEP_USER_EU_CENTRAL_1' : 'MULTISTEP_USER_US_EAST_1'
 const file = fs.readFileSync(at('--env-file'), 'utf8')
 const isolated = args[0] === 'test' && at('--grep') === '^slots booking multistep transaction$'
   && args.filter(v => v === '--record').length === 1 && at('--retries') === '0'
@@ -75,7 +75,7 @@ process.exitCode = isolated ? 0 : 1
     const repaired = repairedNestedSpec();
     const scene = captured.scenes.find((item) => item.type === "HEALTHY")!;
     const regionalEnv = {
-      MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_WEST_1: "synthetic-west",
+      MULTISTEP_USER_US_EAST_1: "synthetic-east", MULTISTEP_USER_EU_CENTRAL_1: "synthetic-west",
       CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-bypass",
       TEST_USER: "synthetic-browser", API_TOKEN: "synthetic-api",
     };
@@ -106,7 +106,7 @@ process.exitCode = isolated ? 0 : 1
     assert.equal(replayObservation.repetitions, 1);
     assert.equal(replayed.costReport().checklyCloudRuns, 2, "both already launched children are still counted");
     for (const invalid of [
-      { ...regionalEnv, MULTISTEP_USER_EU_WEST_1: regionalEnv.MULTISTEP_USER_US_EAST_1 },
+      { ...regionalEnv, MULTISTEP_USER_EU_CENTRAL_1: regionalEnv.MULTISTEP_USER_US_EAST_1 },
       { ...regionalEnv, CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET: "" },
     ]) {
       const rejected = run(invalid);

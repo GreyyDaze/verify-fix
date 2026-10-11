@@ -20,7 +20,7 @@ const prefix = "synthetic-rebound-";
 
 function summary(id: string, failed: boolean): CheckResultSummary {
   return { id, checkId: "synthetic-check", name, hasFailures: failed, hasErrors: false,
-    runLocation: failed ? "eu-west-1" : "us-east-1", resultType: "FINAL", attempts: 1,
+    runLocation: failed ? "eu-central-1" : "us-east-1", resultType: "FINAL", attempts: 1,
     startedAt: "2026-09-25T22:18:13.000Z", stoppedAt: "2026-09-25T22:18:18.000Z", errorGroupIds: [] };
 }
 
@@ -48,12 +48,12 @@ export async function syntheticRemoteBundle() {
     calls: [],
     async getCheck() {
       return { id: "synthetic-check", name, checkType: "MULTI_STEP", activated: true, muted: false,
-        frequency: 5, runParallel: true, locations: ["us-east-1", "eu-west-1"], privateLocations: [],
+        frequency: 5, runParallel: true, locations: ["us-east-1", "eu-central-1"], privateLocations: [],
         tags: ["slots-booking", "verify-fix-example", "multistep"], retryStrategy: null, doubleCheck: false, runtimeId: null,
         script: spec, scriptPath: "multistep-booking.spec.ts", environmentVariables: [
           { key: "ENVIRONMENT_URL", value: FAKE_ORIGIN, secret: false },
           { key: "MULTISTEP_USER_US_EAST_1", value: FAKE_ACCOUNT, secret: true },
-          { key: "MULTISTEP_USER_EU_WEST_1", value: "fixture-west-distinct", secret: true },
+          { key: "MULTISTEP_USER_EU_CENTRAL_1", value: "fixture-west-distinct", secret: true },
           { key: "VERCEL_AUTOMATION_BYPASS_SECRET", value: "synthetic-bypass-not-real-918", secret: true },
         ] };
     },
@@ -79,7 +79,7 @@ export async function syntheticRemoteBundle() {
     sources: [protectedSourceIdentity("checkly-api", "synthetic-checkly-check", "synthetic-checkly-check")],
     values: {
       "multistep.environmentMapping": policyKnown({
-        "eu-west-1": "MULTISTEP_USER_EU_WEST_1",
+        "eu-central-1": "MULTISTEP_USER_EU_CENTRAL_1",
         "us-east-1": "MULTISTEP_USER_US_EAST_1",
       }),
     },

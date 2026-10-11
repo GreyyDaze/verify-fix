@@ -535,7 +535,11 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
 
   test("CLI: without --target the verdict is UNCERTAIN (exit 2), never PASS", async () => {
     const result = await new Promise<{ code: number | null; stdout: string }>((resolve) => {
-      const child = spawn(process.execPath, ["--no-warnings", join(ROOT, "src/cli.ts"), "verify", "--patch", join(PATCH_DIR, "01-good-run-parallel-false"), "--bundle", INCIDENT_DIR], { cwd: ROOT });
+      // Shadow mode: this fixture bundle predates the sealed policy and its
+      // API-only fields are legitimately UNKNOWN. The subject here is the
+      // --target requirement, so the protected gate is held off and exercised
+      // on its own in the proof matrix and the real-account acceptance run.
+      const child = spawn(process.execPath, ["--no-warnings", join(ROOT, "src/cli.ts"), "verify", "--patch", join(PATCH_DIR, "01-good-run-parallel-false"), "--bundle", INCIDENT_DIR, "--requirements-mode", "shadow"], { cwd: ROOT });
       let stdout = "";
       child.stdout.on("data", (d) => (stdout += String(d)));
       child.on("close", (code) => resolve({ code, stdout }));

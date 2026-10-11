@@ -180,11 +180,23 @@ for (const relative of BUNDLES) {
   }
   const envelope = sealProtectedRequirements(built.envelope.policy);
   const knownCount = Object.values(built.envelope.policy.fields).filter((f) => f.original.state === "known").length;
+  const existingPolicy = already ? (manifest.protectedRequirements as { policy?: { fields?: Record<string, { original?: { state?: string } }> } } | undefined) : undefined;
+  const existingKnown = existingPolicy?.policy?.fields
+    ? Object.values(existingPolicy.policy.fields).filter((f) => f.original?.state === "known").length
+    : 0;
+  const downgrades = already && !live && knownCount < existingKnown;
   const liveCount = Object.keys(liveReads).length;
   const total = Object.keys(built.envelope.policy.fields).length;
-  manifest.protectedRequirements = envelope;
-  process.stdout.write(`${relative}: ${already ? "already present" : "absent"} → sealed ${knownCount}/${total} known fields${live ? ` (${liveCount} from live API)` : ""}, sha256:${envelope.sha256.slice(0, 16)}…\n`);
-  if (write) writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  if (downgrades) {
+    // A non-live rebuild on an already-sealed bundle can only LOSE the
+    // API-only fields (alertBehavior, shouldFail, runtime, ...) that a
+    // previous --live run resolved. Never silently regress the policy.
+    process.stdout.write(`${relative}: sealed ${existingKnown}/${total} known fields; non-live rebuild would drop to ${knownCount} — keep existing, re-run with --live to refresh\n`);
+  } else {
+    manifest.protectedRequirements = envelope;
+    process.stdout.write(`${relative}: ${already ? "already present" : "absent"} → sealed ${knownCount}/${total} known fields${live ? ` (${liveCount} from live API)` : ""}, sha256:${envelope.sha256.slice(0, 16)}…\n`);
+    if (write) writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  }
 
   if (digestOut && relative === BUNDLES[0]) {
     writeFileSync(digestOut, `${envelope.sha256}\n`, "utf8");

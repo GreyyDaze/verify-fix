@@ -109,6 +109,12 @@ async function main(): Promise<void> {
   }
 
   const loaded = loadBundle(outcome.outDir).bundle;
+  // Pin the freshly sealed policy digest. Under the default `enforce` mode a
+  // caller that does not pin one is UNCERTAIN by construction, so the
+  // acceptance run must present the policy it intends to be held to.
+  const policyDigest = (manifest.protectedRequirements as { sha256?: string } | undefined)?.sha256;
+  if (!policyDigest) throw new Error("REAL_CHECKLY_VERIFY_ACCEPTANCE_FAILED: captured bundle has no sealed protected policy");
+  const policyArgs = ["--requirements-mode", "enforce", "--requirements-digest", policyDigest];
   const noOpPatch = join(outDir, "original-check.noop.ts");
   writeFileSync(noOpPatch, loaded.checkSource, "utf8");
   const reportDir = join(outDir, "reports");
@@ -134,6 +140,7 @@ async function main(): Promise<void> {
     "--target", target, "--project", projectDir, "--env-file", envFile, "--json",
     "--report-json", join(reportDir, "good.json"),
     "--report-markdown", join(reportDir, "good.md"),
+    ...policyArgs,
   ]);
   assertCode("known valid repair", good.code, 0, good.stdout + good.stderr);
 
@@ -142,12 +149,14 @@ async function main(): Promise<void> {
     "--target", target, "--project", projectDir, "--env-file", envFile, "--json",
     "--report-json", join(reportDir, "noop.json"),
     "--report-markdown", join(reportDir, "noop.md"),
+    ...policyArgs,
   ]);
   assertCode("no-op candidate", noOp.code, 1, noOp.stdout + noOp.stderr);
 
   const uncertain = await runCli([
     "verify", "--patch", patchDir, "--bundle", outcome.outDir,
     "--project", projectDir, "--env-file", envFile, "--json",
+    ...policyArgs,
   ]);
   assertCode("missing-target candidate", uncertain.code, 2, uncertain.stdout + uncertain.stderr);
 

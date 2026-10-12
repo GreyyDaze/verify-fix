@@ -13,6 +13,7 @@ import { decide } from "./decision/decision.ts";
 import { seedMutants } from "./mutation.ts";
 import { buildReport, type Report } from "./report/report.ts";
 import { detectEnvScopeDodge, regionalUserKeys, SceneExecutor } from "./executor/scene.ts";
+import { assessSiblingImpact, monitorInventory } from "./protected/sibling-impact.ts";
 import { HybridExecutor } from "./executor/hybrid.ts";
 import { inlinePatch, newFiles, originalConfigSource, patchedAssets, patchedCheckSource, patchedConfig, patchedConfigSource, patchedFiles, type PatchSet } from "./patch.ts";
 import { applyConfigPolicy, diffCheckConfig, parseCheckConfig, type ConfigPolicy } from "./scene/config-diff.ts";
@@ -92,6 +93,8 @@ export interface ProtectedRequirementsAssessment {
   requiredRegions: string[] | null;
   executedRegions: string[];
   affectedMonitors: { known: string[]; unresolved: boolean; reason: string | null };
+  /** Phase 9.10: one scene per affected sibling monitor. */
+  regressionScenes?: Array<{ sceneId: string; type: "REGRESSION"; monitorId: string; checkType: string; state: string }>;
 }
 
 function trustedRequirementRegions(envelope: ProtectedPolicyEnvelope | null): string[] | null {
@@ -113,23 +116,63 @@ function trustedRequirementConcurrency(bundle: Bundle, envelope: ProtectedPolicy
   return Math.min(mode.concurrency, effective);
 }
 
+/**
+ * Phase 9.10 — which other monitors can this candidate move?
+ *
+ * Replaces the earlier "any project file changed => UNCERTAIN" placeholder.
+ * The inventory and each monitor's source closure were captured from the real
+ * account, so scope is computed from evidence rather than assumed unknown. A
+ * bundle with no recorded inventory stays UNCERTAIN: claiming "no sibling is
+ * affected" without having enumerated them is the silent regression this task
+ * exists to prevent.
+ */
 function assessAffectedMonitors(
   bundle: Bundle,
   candidateFiles: Record<string, string>,
   candidateCheckFile: string,
-): ProtectedRequirementsAssessment["affectedMonitors"] {
+): ProtectedRequirementsAssessment["affectedMonitors"] & { changedFiles: string[] } {
   const allPaths = new Set([...Object.keys(bundle.files), ...Object.keys(candidateFiles)]);
-  const changedOutsideIncident = [...allPaths].some((path) => path !== bundle.check.file && path !== candidateCheckFile
-    && bundle.files[path] !== candidateFiles[path]);
-  const incidentIdentity = bundle.check.logicalId || bundle.check.deployedId;
-  const known = incidentIdentity ? [incidentIdentity] : [];
+  const changedFiles = [...allPaths].filter((path) => bundle.files[path] !== candidateFiles[path]);
+  const inventory = bundle.siblingMonitors;
+  if (!inventory) {
+    return {
+      known: [],
+      unresolved: true,
+      reason: "the bundle records no sibling-monitor inventory; the regression scope cannot be established",
+      changedFiles,
+    };
+  }
+  const impact = assessSiblingImpact(
+    monitorInventory(inventory.monitors),
+    bundle.check.file,
+    changedFiles,
+  );
   return {
-    known,
-    unresolved: changedOutsideIncident || candidateCheckFile !== bundle.check.file,
-    reason: changedOutsideIncident || candidateCheckFile !== bundle.check.file
-      ? "candidate changes project files beyond the incident check; sibling monitor impact is not inventoried"
-      : null,
+    known: impact.affected,
+    unresolved: impact.unresolved,
+    reason: impact.unresolved ? impact.reason : null,
+    changedFiles,
   };
+}
+
+/**
+ * A regression scene per affected sibling monitor.
+ *
+ * The sibling's own command is never taken from the candidate: it is the
+ * deployed type plus the identity captured in the bundle. A candidate that
+ * renamed or repointed a sibling check cannot thereby choose how that sibling
+ * is tested.
+ */
+export function regressionScenesFor(monitors: Array<{ id: string; name: string; checkType: string; files: string[] }>): Array<{
+  sceneId: string; type: "REGRESSION"; monitorId: string; checkType: string; state: string;
+}> {
+  return monitors.map((monitor) => ({
+    sceneId: `regression:${monitor.id}`,
+    type: "REGRESSION",
+    monitorId: monitor.id,
+    checkType: monitor.checkType,
+    state: `${monitor.checkType} monitor "${monitor.name}" must keep its captured behaviour under the candidate.`,
+  }));
 }
 
 function candidateProtectedRequirements(
@@ -391,9 +434,10 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     protectedComparison = compareProtectedRequirements(protectedEnvelope, protectedCandidate);
     protectedReasonCodes = [...protectedComparison.reasonCodes];
     if (affectedMonitors.unresolved) {
-      // The bundle currently has no complete sibling-monitor inventory. Any
-      // project-level change can affect checks outside this incident, so do
-      // not claim regression safety until the impact is enumerated and run.
+      // The sibling-monitor inventory is missing, truncated, or its source
+      // closure could not be resolved. The candidate may well move another
+      // monitor and we cannot show it does not, so the regression scope is
+      // UNCERTAIN rather than "no affected monitors".
       protectedReasonCodes.push("PROTECTED_REGRESSION_SCOPE_UNRESOLVED");
     }
   } else {
@@ -431,7 +475,14 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     measuredConcurrency: null,
     requiredRegions: trustedRequirementRegions(protectedEnvelope),
     executedRegions: [],
-    affectedMonitors,
+    affectedMonitors: {
+      known: affectedMonitors.known,
+      unresolved: affectedMonitors.unresolved,
+      reason: affectedMonitors.reason,
+    },
+    regressionScenes: regressionScenesFor(
+      (bundle.siblingMonitors?.monitors ?? []).filter((monitor) => affectedMonitors.known.includes(monitor.id)),
+    ),
   };
   const protectedGateRejected = protectedMode === "enforce" && protectedStaticVerdict === "FAILED"
     ? `protected requirements changed (${protectedReasonCodes.join(", ")})` : null;

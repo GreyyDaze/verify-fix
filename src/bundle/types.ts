@@ -110,6 +110,17 @@ export interface ManifestV3 {
     deployedId: string;
     projectCommit: string | null;
   };
+  /**
+   * Phase 9.10: the real sibling monitors in the account, with each check's
+   * captured source closure. Recorded at capture time so regression scope is
+   * evidence, not a guess. `complete: false` means the enumeration was
+   * truncated or a closure could not be resolved, which forces UNCERTAIN.
+   */
+  siblingMonitors?: {
+    monitors: Array<{ id: string; name: string; checkType: string; files: string[] }>;
+    complete: boolean;
+    reason: string | null;
+  };
   config: {
     frequencyMinutes: number | null;
     locations: string[];

@@ -57,6 +57,8 @@ export interface ManifestInputs {
   assets: ManifestV3["provenance"]["assets"];
   apiCalls: ManifestV3["provenance"]["apiCalls"];
   accountId: string;
+  /** Phase 9.10 sibling-monitor inventory captured from the account. */
+  siblingMonitors?: { monitors: Array<{ id: string; name: string; checkType: string; files: string[] }>; complete: boolean; reason: string | null } | null;
   now: string;
   toolVersion: string;
   protectedRequirements?: ProtectedPolicyEnvelope | null;
@@ -900,6 +902,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
       deployedId: check.id,
       projectCommit: input.project.gitCommit,
     },
+    ...(input.siblingMonitors ? { siblingMonitors: input.siblingMonitors } : {}),
     config: {
       frequencyMinutes: check.frequency ?? null,
       locations,

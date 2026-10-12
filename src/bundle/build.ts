@@ -22,7 +22,7 @@ import { ASSET_ZIP_BOUNDS, isZip, openZipBounded } from "../trace/zip.ts";
 import { mergeHars, traceZipToHar, type BodyPolicy, type TraceExtract } from "../trace/trace-to-har.ts";
 import { parseInventory } from "../assertion/inventory.ts";
 import { sanitizeHar } from "./sanitize.ts";
-import { buildManifest, detectTargetResolution, expectedReceived, findOverlappingRuns, groupErrorMatches, rcaFit, rcaMentionsReceived, resultErrors, runOutcome, type FetchedResult } from "./manifest.ts";
+import { buildManifest, detectTargetResolution, expectedReceived, findOverlappingRuns, groupErrorMatches, rcaFit, rcaMentionsReceived, resultErrors, runOutcome, type FetchedResult, type ManifestInputs } from "./manifest.ts";
 import { measureDeterminism, type MeasureResult, type Runner } from "./measure.ts";
 import type { ManifestV3 } from "./types.ts";
 import { apiRecordingFromResult, setupProvenance } from "../api/recording.ts";
@@ -361,6 +361,98 @@ function boundedMultiStepSource(root: string, file: string): { path: string; con
     }
     throw new Error("MULTISTEP_SOURCE_CLOSURE_BOUND");
   } finally { closeSync(fd); }
+}
+
+/**
+ * Phase 9.10: enumerate every check in the account and resolve each one's
+ * source closure from the project on disk, so the bundle records which files
+ * each monitor is built from. The closure is what makes a later impact claim
+ * ("this change cannot move that monitor") checkable instead of asserted.
+ *
+ * A sibling whose files cannot be resolved marks the inventory incomplete:
+ * we can then never claim it is unaffected.
+ */
+function captureSiblingInventory(
+  root: string,
+  checks: ChecklyCheck[],
+): NonNullable<ManifestInputs["siblingMonitors"]> {
+  const monitors: Array<{ id: string; name: string; checkType: string; files: string[] }> = [];
+  const unresolved: string[] = [];
+  const configFiles = ["checkly.config.ts", "checkly.config.js", "playwright.config.ts", "playwright.config.js"]
+    .filter((name) => existsSync(join(root, name)))
+    .map((name) => join(root, name));
+
+  for (const check of checks) {
+    const id = String(check.id);
+    const files = new Set<string>();
+    const sources: Array<{ path: string; content: string }> = [];
+    try {
+      // Constructs declare their own entrypoint; a *.check.* file also names
+      // the spec or setup module it runs. Resolve that module's closure.
+      const candidates = findApiCheckFiles(root, MULTISTEP_MAX_SOURCE_FILES + 1);
+      for (const file of candidates) {
+        if (candidates.length > MULTISTEP_MAX_SOURCE_FILES) throw new Error("SIBLING_CLOSURE_BOUND");
+        const content = boundedMultiStepSource(root, file).content;
+        // Only attribute a construct to this sibling when the construct's own
+        // name/logicalId matches this check. Never guess across monitors.
+        if (!/new\s+(MultiStepCheck|PlaywrightCheck|ApiCheck|BrowserCheck)\s*\(/.test(content)) continue;
+        const nameMatch = /\bname\s*:\s*['"`]([^'"`]+)['"`]/.exec(content)?.[1];
+        const logicalMatch = /\bnew\s+\w*Check\s*\(\s*['"`]([^'"`]+)['"`]/.exec(content)?.[1];
+        const logicalId = check.logicalId ?? null;
+        const matches = (logicalMatch !== undefined && logicalMatch === id)
+          || (logicalMatch !== undefined && logicalId !== null && logicalMatch === logicalId)
+          || (nameMatch !== undefined && nameMatch === check.name);
+        if (!matches) continue;
+        sources.length = 0;
+        // Seed the closure with the construct file AND its declared entrypoint:
+        // a Multistep check's spec is named by `entrypoint`, not by an import
+        // statement, so an import-only walk would record the check as having no
+        // code and silently scope it out of every impact assessment.
+        const seeds = [file];
+        const entrypoint = /\bentrypoint\s*:\s*(?:path\.join\(\s*__dirname\s*,\s*)?['"`]([^'"`]+)['"`]/.exec(content)?.[1];
+        if (entrypoint) {
+          const resolved = relativeModule(root, file, entrypoint);
+          if (resolved) seeds.push(resolved);
+        }
+        collectMultiStepClosure(root, seeds, sources);
+        for (const item of sources) files.add(item.path);
+      }
+      for (const file of configFiles) files.add(relative(root, file).split("\\").join("/"));
+      // A PLAYWRIGHT check owns no *.check.* file: the Checkly config lists it
+      // and names the Playwright projects it runs. Attribute its specs from
+      // playwright.config.ts so a change to tests/booking.spec.ts is seen to
+      // touch that monitor.
+      if (check.checkType === "PLAYWRIGHT") {
+        const pwConfig = join(root, "playwright.config.ts");
+        if (existsSync(pwConfig)) {
+          const content = boundedMultiStepSource(root, pwConfig).content;
+          const testDir = /testDir\s*:\s*['"`]([^'"`]+)['"`]/.exec(content)?.[1] ?? ".";
+          const declared = new Set((check.pwProjects ?? []).map(String));
+          for (const spec of findSpecFiles(dirname(pwConfig), testDir)) {
+            const rel = relative(root, spec).split("\\").join("/");
+            // With no explicit projects, every spec in testDir belongs to this
+            // check. With projects declared, only specs under a project dir
+            // of that name are attributable; a flat spec is shared.
+            if (declared.size === 0 || [...declared].some((project) => rel.startsWith(`${project}/`) || rel.includes(`/${project}/`))) {
+              files.add(rel);
+            }
+          }
+        }
+      }
+      if (files.size === 0) unresolved.push(id);
+      monitors.push({ id, name: check.name, checkType: check.checkType, files: [...files].sort() });
+    } catch {
+      unresolved.push(id);
+      monitors.push({ id, name: check.name, checkType: check.checkType, files: [] });
+    }
+  }
+  return {
+    monitors,
+    complete: unresolved.length === 0,
+    reason: unresolved.length > 0
+      ? "source closure unresolved for captured monitors"
+      : null,
+  };
 }
 
 function collectMultiStepClosure(root: string, initial: string[], sources: Array<{ path: string; content: string }>): void {
@@ -1100,6 +1192,19 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
 
   // 1. check
   const check = await client.getCheck(opts.checkId);
+  // Phase 9.10: record the account's real sibling monitors. A failure here is
+  // non-fatal to capture but marks the inventory incomplete, which forces the
+  // verifier to answer UNCERTAIN instead of claiming no other monitor moved.
+  let siblingInventory: NonNullable<ManifestInputs["siblingMonitors"]> | null = null;
+  if (opts.projectDir) {
+    try {
+      siblingInventory = captureSiblingInventory(resolve(opts.projectDir), await client.listChecks());
+      log(`[bundle] sibling monitors captured: ${siblingInventory.monitors.length} (complete=${siblingInventory.complete})`);
+    } catch (error) {
+      siblingInventory = { monitors: [], complete: false, reason: (error as Error).message };
+      log("[bundle] sibling monitor inventory unavailable; regression scope will be UNCERTAIN");
+    }
+  }
   if (check.checkType === "MULTI_STEP") log("[bundle] Multistep deployed check fetched; configuration and script require exact local binding");
   else log(`[bundle] check ${check.id} "${check.name}" type=${check.checkType} locations=${(check.locations ?? []).join(",")} runParallel=${Boolean(check.runParallel)}`);
   const secretValues = (check.environmentVariables ?? []).map((v) => v.value).filter((v): v is string => typeof v === "string");
@@ -1432,6 +1537,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     assets,
     apiCalls: client.calls.map((c) => ({ ...c })),
     accountId: deps.accountId,
+    siblingMonitors: siblingInventory,
     now,
     toolVersion,
     protectedRequirements,

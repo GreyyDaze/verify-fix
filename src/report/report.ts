@@ -54,6 +54,8 @@ export interface ReportDetails {
     requiredRegions: string[] | null;
     executedRegions: string[];
     affectedMonitors: { known: string[]; unresolved: boolean; reason: string | null };
+    /** Phase 9.10: one scene per affected sibling monitor. */
+    regressionScenes?: Array<{ sceneId: string; type: "REGRESSION"; monitorId: string; checkType: string; state: string }>;
   };
 }
 
@@ -161,6 +163,9 @@ export function buildReport(contract: ContractReport, decision: Decision, observ
     lines.push(`- Regions: required ${p.requiredRegions === null ? "unknown" : p.requiredRegions.length ? p.requiredRegions.join(", ") : "none"}; executed ${p.executedRegions.length ? p.executedRegions.join(", ") : "none"}`);
     const affected = p.affectedMonitors;
     lines.push(`- Affected monitors: ${affected.known.length ? affected.known.join(", ") : "unknown"}${affected.unresolved ? `; sibling impact unresolved${affected.reason ? ` (${affected.reason})` : ""}` : ""}`);
+    if (p.regressionScenes?.length) {
+      lines.push(`- Regression scenes: ${p.regressionScenes.map((scene) => `${scene.sceneId} (${scene.checkType})`).join(", ")}`);
+    }
     const names = [...new Set([...Object.keys(p.originalValues), ...Object.keys(p.candidateValues)])].sort();
     for (const name of names) {
       const original = p.originalValues[name];

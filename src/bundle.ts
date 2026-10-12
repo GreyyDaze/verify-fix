@@ -227,6 +227,21 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
         ? error.message : "PROTECTED_POLICY_INVALID";
     }
   }
+  // The sibling inventory is trusted scope evidence, so it is validated with
+  // the same care as the sealed policy: a tampered or malformed inventory must
+  // not be able to quietly shrink the set of monitors we are held against.
+  if (!m.siblingMonitors) {
+    bundle.siblingMonitors = null;
+  } else {
+    const inv = m.siblingMonitors;
+    const wellFormed = Array.isArray(inv.monitors) && typeof inv.complete === "boolean"
+      && inv.monitors.every((monitor) => typeof monitor.id === "string" && monitor.id.length > 0
+        && typeof monitor.name === "string" && typeof monitor.checkType === "string"
+        && Array.isArray(monitor.files) && monitor.files.every((f) => typeof f === "string" && !f.includes("..")));
+    bundle.siblingMonitors = wellFormed
+      ? { monitors: inv.monitors, complete: inv.complete, reason: inv.reason ?? null }
+      : { monitors: [], complete: false, reason: "the recorded sibling-monitor inventory is malformed" };
+  }
   bundle.multistep = null;
   if (m.check.checkType === "MULTI_STEP") {
     const problems: string[] = [];

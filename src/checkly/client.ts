@@ -60,6 +60,9 @@ export const MAX_API_JSON_BYTES = 16 * 1024 * 1024;
 export const MAX_CHECKLY_REDIRECTS = 3;
 export const MAX_CHECKLY_RETRY_DELAY_MS = 30_000;
 export const DEFAULT_CHECKLY_REQUEST_TIMEOUT_MS = 30_000;
+/** Inventory bounds for the sibling-monitor list. See listChecks. */
+export const MAX_LIST_CHECK_PAGE_SIZE = 100;
+export const MAX_LIST_CHECK_PAGES = 20;
 
 function httpsUrl(raw: string): URL {
   let url: URL;
@@ -75,6 +78,7 @@ function operationOf(url: URL, authenticated: boolean, asset = false): string {
   if (asset) return "asset";
   if (!authenticated) return "asset";
   if (/^\/v1\/checks\/[^/]+$/.test(url.pathname)) return "get-check";
+  if (/^\/v1\/checks$/.test(url.pathname)) return "list-checks";
   if (/^\/v1\/check-groups\/[^/]+$/.test(url.pathname)) return "get-check-group";
   if (/^\/v2\/check-results\/[^/]+$/.test(url.pathname)) return "list-results";
   if (/^\/v1\/check-results\/[^/]+\/[^/]+\/assets(?:\/.*)?$/.test(url.pathname)) return "list-assets";
@@ -223,6 +227,38 @@ export class ChecklyClient {
 
   getCheck(id: string): Promise<ChecklyCheck> {
     return this.json<ChecklyCheck>("GET", `/v1/checks/${encodeURIComponent(id)}`).then((r) => r.data);
+  }
+
+  /**
+   * Enumerate every check in the account so an incident bundle can record the
+   * real sibling monitors instead of guessing which other checks a project-wide
+   * change might affect (Phase 9 task 9.10).
+   *
+   * BOUNDED: at most MAX_LIST_CHECK_PAGES pages of MAX_LIST_CHECK_PAGE_SIZE.
+   * A partial enumeration would make the regression scope unknowable, so a
+   * truncation throws rather than returning a short list that would silently
+   * under-report affected monitors.
+   */
+  async listChecks(limit = MAX_LIST_CHECK_PAGE_SIZE): Promise<ChecklyCheck[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("invalid check list page size");
+    const out: ChecklyCheck[] = [];
+    const seen = new Set<string>();
+    for (let page = 1; page <= MAX_LIST_CHECK_PAGES; page++) {
+      const batch = await this.json<ChecklyCheck[] | { data: ChecklyCheck[] }>(
+        "GET", `/v1/checks?limit=${limit}&page=${page}`,
+      ).then((r) => (Array.isArray(r.data) ? r.data : r.data));
+      const items = Array.isArray(batch) ? batch : [];
+      for (const check of items) {
+        if (typeof check?.id !== "string" || check.id.length === 0) throw new Error("Checkly API returned a check without an id");
+        if (seen.has(check.id)) continue;
+        seen.add(check.id);
+        out.push(check);
+      }
+      // A short page is the only trustworthy end-of-list signal here; this
+      // endpoint returns no total count.
+      if (items.length < limit) return out;
+    }
+    throw new Error("Checkly check inventory is truncated; the regression scope cannot be established");
   }
 
   /** Fetch the inherited settings source for a grouped check. Callers must

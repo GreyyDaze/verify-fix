@@ -170,6 +170,8 @@ export interface Bundle {
   oracleProvenance: { recorded: number; codeDerived: number };
   /** Parsed and digest-checked provider policy from a v3 trusted bundle. */
   protectedRequirements?: ProtectedPolicyEnvelope | null;
+  /** Phase 9.10 sibling-monitor inventory captured from the account. */
+  siblingMonitors?: { monitors: Array<{ id: string; name: string; checkType: string; files: string[] }>; complete: boolean; reason: string | null } | null;
   /** Fixed safe reason when the v3 policy is absent or invalid. */
   protectedRequirementsIssue?: string | null;
 }

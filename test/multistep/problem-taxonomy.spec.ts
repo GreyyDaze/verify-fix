@@ -13,7 +13,6 @@ const srcDir = new URL("../../src/", import.meta.url).pathname;
 const files = [
   ...readdirSync(`${srcDir}multistep`).filter((name) => name.endsWith(".ts")).map((name) => `src/multistep/${name}`),
   ...readdirSync(`${srcDir}bundle`).filter((name) => name.endsWith(".ts")).map((name) => `src/bundle/${name}`),
-  "src/bundle.ts",
 ];
 
 const LITERAL = /"(MULTISTEP|MULTIPLE)_[A-Z_]+"/g;

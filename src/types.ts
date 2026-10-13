@@ -3,7 +3,7 @@
 // outcomes ("recorded:<runId>") and check-code assertions ("code:assert:<id>").
 // Anything else is rejected at ingestion.
 
-import type { ProtectedPolicyEnvelope } from "./protected-requirements.ts";
+import type { ProtectedPolicyEnvelope } from "./protected/requirements.ts";
 
 export type SceneType = "REPRODUCTION" | "HEALTHY" | "DETECTION" | "MUTATION" | "REGRESSION";
 

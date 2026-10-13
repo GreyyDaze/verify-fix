@@ -9,11 +9,11 @@
 
 import { readFileSync, existsSync, lstatSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadBundle } from "./bundle.ts";
+import { loadBundle } from "./bundle/load.ts";
 import { verify } from "./verify.ts";
 import { SceneExecutor } from "./executor/scene.ts";
 import { HybridExecutor } from "./executor/hybrid.ts";
-import { loadCandidateRevision, loadPatch } from "./patch.ts";
+import { loadCandidateRevision, loadPatch } from "./candidate/patch.ts";
 import {
   assertPullRequestStillCurrent,
   bindCandidateTarget,
@@ -23,9 +23,9 @@ import {
   type CandidateRevision,
 } from "./candidate/revision.ts";
 import { parseEnvFile } from "./scene/env.ts";
-import { measureLocalDeterminism } from "./measure-local.ts";
-import { buildCostMatrix, costMatrixMarkdown } from "./cost-report.ts";
-import { initConfirmation, mergePackageScripts, planInit } from "./init.ts";
+import { measureLocalDeterminism } from "./cli/measure-local.ts";
+import { buildCostMatrix, costMatrixMarkdown } from "./report/cost.ts";
+import { initConfirmation, mergePackageScripts, planInit } from "./cli/init.ts";
 import { mkdirSync, statSync } from "node:fs";
 
 const isFile = (path: string): boolean => { try { return statSync(path).isFile(); } catch { return false; } };

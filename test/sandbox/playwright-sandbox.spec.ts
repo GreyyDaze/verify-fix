@@ -8,7 +8,7 @@ import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parsePlaywrightReport, runPlaywrightSandbox } from "../src/playwright-sandbox.ts";
+import { parsePlaywrightReport, runPlaywrightSandbox } from "../../src/sandbox/playwright-sandbox.ts";
 
 function report(status: string, error?: string): string {
   return JSON.stringify({

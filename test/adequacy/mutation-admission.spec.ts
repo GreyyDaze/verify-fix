@@ -4,11 +4,11 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import test from "node:test";
 
-import { loadBundle } from "../src/bundle.ts";
-import { emptyExecutionCost, type ExperimentExecutor, type ObservationValue } from "../src/types.ts";
-import { verify } from "../src/verify.ts";
+import { loadBundle } from "../../src/bundle/load.ts";
+import { emptyExecutionCost, type ExperimentExecutor, type ObservationValue } from "../../src/types.ts";
+import { verify } from "../../src/verify.ts";
 
-const incident = join(import.meta.dirname, "..", "fixtures/slots-booking/bundle/incidents/slots-booking-overlap");
+const incident = join(import.meta.dirname, "..", "..", "fixtures/slots-booking/bundle/incidents/slots-booking-overlap");
 
 test("PR-10: the verifier requires admitted mutation evidence before counting a kill or survivor", async () => {
   const { bundle } = loadBundle(incident);

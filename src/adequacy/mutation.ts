@@ -3,8 +3,8 @@
 // A mutant "survives" if it masks the detection scene while the good patch
 // fails it — that is proof the oracle is blind there (STING weakness classes).
 
-import { parseInventory, parseProjectInventory } from "./assertion/inventory.ts";
-import type { Assertion } from "./types.ts";
+import { parseInventory, parseProjectInventory } from "../assertion/inventory.ts";
+import type { Assertion } from "../types.ts";
 
 export type MutantFamily = "operator" | "llm";
 

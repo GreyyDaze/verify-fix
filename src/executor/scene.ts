@@ -19,8 +19,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExecutor, type ObservationValue, type RunContext, type Scene, type SceneObservation, type TraceStep } from "../types.ts";
-import { runSandbox } from "../sandbox.ts";
-import { runPlaywrightSandbox } from "../playwright-sandbox.ts";
+import { runSandbox } from "../sandbox/runner.ts";
+import { runPlaywrightSandbox } from "../sandbox/playwright-sandbox.ts";
 import { AUTOMATION_BYPASS_INPUT, trustedAutomationBypass, trustedRegionalAccounts } from "../multistep/accounts.ts";
 import { trustedMultiStepDetection } from "../multistep/detection.ts";
 import { multiStepDiskRebound } from "../multistep/rebind.ts";

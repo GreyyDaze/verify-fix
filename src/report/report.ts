@@ -5,7 +5,7 @@
 import type { Decision, EvidenceRow, ExecutionCost, SceneObservation } from "../types.ts";
 import type { ContractReport } from "../contract/contract.ts";
 import type { CandidateRevisionMetadata, CandidateTargetBinding } from "../candidate/revision.ts";
-import type { ResolvedPolicyValue } from "../protected-requirements.ts";
+import type { ResolvedPolicyValue } from "../protected/requirements.ts";
 
 export interface Report {
   incidents: string;

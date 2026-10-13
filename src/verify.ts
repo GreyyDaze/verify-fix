@@ -10,12 +10,12 @@ import type { Bundle, BundleConfig, Decision, ExecutionCost, ExperimentExecutor,
 import { buildContract, type ContractReport } from "./contract/contract.ts";
 import { assessAdequacy, type MutantResult } from "./adequacy/adequacy.ts";
 import { decide } from "./decision/decision.ts";
-import { seedMutants } from "./mutation.ts";
+import { seedMutants } from "./adequacy/mutation.ts";
 import { buildReport, type Report } from "./report/report.ts";
 import { detectEnvScopeDodge, regionalUserKeys, SceneExecutor } from "./executor/scene.ts";
 import { assessSiblingImpact, monitorInventory } from "./protected/sibling-impact.ts";
 import { HybridExecutor } from "./executor/hybrid.ts";
-import { inlinePatch, newFiles, originalConfigSource, patchedAssets, patchedCheckSource, patchedConfig, patchedConfigSource, patchedFiles, type PatchSet } from "./patch.ts";
+import { inlinePatch, newFiles, originalConfigSource, patchedAssets, patchedCheckSource, patchedConfig, patchedConfigSource, patchedFiles, type PatchSet } from "./candidate/patch.ts";
 import { applyConfigPolicy, diffCheckConfig, parseCheckConfig, type ConfigPolicy } from "./scene/config-diff.ts";
 import { checkEnv, type EnvCheck } from "./scene/env.ts";
 import type { CandidateRevisionMetadata, CandidateTargetBinding } from "./candidate/revision.ts";
@@ -27,7 +27,7 @@ import { deriveRegionalAccountMapping } from "./multistep/region-account-mapping
 import { effectiveConcurrency, parseMode } from "./scene/modes.ts";
 import { multiStepDiskRebound } from "./multistep/rebind.ts";
 import { parseInventory, stripComments } from "./assertion/inventory.ts";
-import { compareProtectedRequirements, policyKnown, policyUnknown, type CandidateEffectiveRequirements, type ProtectedPolicyEnvelope, type ProtectedRequirementsComparison, type ResolvedPolicyValue } from "./protected-requirements.ts";
+import { compareProtectedRequirements, policyKnown, policyUnknown, type CandidateEffectiveRequirements, type ProtectedPolicyEnvelope, type ProtectedRequirementsComparison, type ResolvedPolicyValue } from "./protected/requirements.ts";
 
 export const PR12_HEALTHY_RUNS = 5; // PR-12: ≥5 repeated healthy runs, else flake → UNCERTAIN
 

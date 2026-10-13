@@ -11,9 +11,9 @@ import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readS
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, normalize, resolve } from "node:path";
-import type { TraceStep } from "./types.ts";
-import { rawJsonUniqueKeys, rawTreeBounded } from "./multistep/raw-evidence.ts";
-import { trustedAutomationBypass } from "./multistep/accounts.ts";
+import type { TraceStep } from "../types.ts";
+import { rawJsonUniqueKeys, rawTreeBounded } from "../multistep/raw-evidence.ts";
+import { trustedAutomationBypass } from "../multistep/accounts.ts";
 
 export interface ChecklySandboxContext {
   /** Trusted region -> account-env-key NAME mapping. Names only, never values.

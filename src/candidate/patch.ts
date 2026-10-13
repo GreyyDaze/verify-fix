@@ -8,10 +8,10 @@
 import { existsSync, lstatSync, readFileSync, realpathSync, readdirSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";
 import * as ts from "typescript";
-import type { Bundle, BundleConfig } from "./types.ts";
-import { parseCheckConfig } from "./scene/config-diff.ts";
-import type { CandidateRevision, CandidateRevisionMetadata } from "./candidate/revision.ts";
-import { configuredPlaywrightPath, resolveCheckIdentity, sourceExtensionCandidates } from "./candidate/check-identity.ts";
+import type { Bundle, BundleConfig } from "../types.ts";
+import { parseCheckConfig } from "../scene/config-diff.ts";
+import type { CandidateRevision, CandidateRevisionMetadata } from "./revision.ts";
+import { configuredPlaywrightPath, resolveCheckIdentity, sourceExtensionCandidates } from "./check-identity.ts";
 
 export interface PatchSet {
   kind: "file" | "directory" | "inline" | "candidate-project" | "candidate-revision";

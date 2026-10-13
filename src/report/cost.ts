@@ -3,7 +3,7 @@
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
-import type { ExecutionCost, VerdictValue } from "./types.ts";
+import type { ExecutionCost, VerdictValue } from "../types.ts";
 
 export interface CandidateCostRow {
   file: string;

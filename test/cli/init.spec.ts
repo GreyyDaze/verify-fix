@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectProject, initConfirmation, initPackageScripts, isSafeRelativeTarget, mergePackageScripts, planInit } from "../src/init.ts";
+import { detectProject, initConfirmation, initPackageScripts, isSafeRelativeTarget, mergePackageScripts, planInit } from "../../src/cli/init.ts";
 
 function tempProject(files: Record<string, string> = {}): string {
   const dir = mkdtempSync(join(tmpdir(), "verify-fix-init-"));

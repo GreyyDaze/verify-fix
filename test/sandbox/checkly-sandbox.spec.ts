@@ -7,9 +7,9 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseChecklyReport, runChecklySandbox } from "../src/checkly-sandbox.ts";
-import { ChecklyCliExecutor } from "../src/executor/checkly-cli.ts";
-import type { Bundle, Scene } from "../src/types.ts";
+import { parseChecklyReport, runChecklySandbox } from "../../src/sandbox/checkly-sandbox.ts";
+import { ChecklyCliExecutor } from "../../src/executor/checkly-cli.ts";
+import type { Bundle, Scene } from "../../src/types.ts";
 
 function report(result = "Pass", retries = 0) {
   return JSON.stringify({

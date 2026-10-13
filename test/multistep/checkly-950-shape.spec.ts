@@ -19,7 +19,7 @@ import { sanitizeMultiStepCapture } from "../../src/multistep/sanitize.ts";
 import { deployedMultiStepProblem, deployedProblemFields } from "../../src/multistep/identity.ts";
 import { parseMultiStepProject } from "../../src/multistep/source.ts";
 import { buildBundle } from "../../src/bundle/build.ts";
-import { loadBundle } from "../../src/bundle.ts";
+import { loadBundle } from "../../src/bundle/load.ts";
 import type { ChecklyClient } from "../../src/checkly/client.ts";
 import type { AssetManifestEntry, CheckResultSummary } from "../../src/checkly/types.ts";
 import { writeZip } from "../helpers/zip-writer.ts";

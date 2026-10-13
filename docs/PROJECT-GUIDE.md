@@ -338,32 +338,93 @@ served by the parent.
 
 ## 5. Code tour — file by file
 
-Repository layout:
+Layout is organized by responsibility. Only the two entry points and the shared
+vocabulary live at the root of `src/`; everything else sits in the folder that
+owns it.
 
 ```
-bin/verify-fix                 executable shim → src/cli.ts
+bin/verify-fix                 executable shim → src/cli.ts, else dist/cli.js
+
 src/
-  cli.ts                       argument parsing, executor selection, exit code
-  verify.ts                    orchestrator (the pipeline above)
-  bundle.ts                    loads manifest.json + original check + app-sim path
-  types.ts                     all shared types (Bundle, Scene, SceneObservation, Decision…)
-  check-api.ts                 the sandbox DSL: check(), expect(), runCollected()
-  sandbox.ts                   runs a patch in a child process, parses its JSON
-  contract/contract.ts         provenance + inventory diff + gates (static engine)
-  assertion/id.ts              assertion identity (FNV-1a of "matcher|target")
-  assertion/classify.ts        matcher → exact/property, falsifiable?
-  assertion/inventory.ts       regex scanner for expect() calls, steps, try/catch guards
-  adequacy/adequacy.ts         oracle_strength and weakness scan
-  mutation.ts                  seeded mutants of the candidate
-  decision/decision.ts         the verdict law
+  cli.ts                       ENTRY POINT — argument parsing, executor selection, exit code
+  verify.ts                    ENTRY POINT — orchestrator (the pipeline above)
+  types.ts                     shared vocabulary (Bundle, Scene, SceneObservation, Decision…)
+
+  bundle/                      the incident bundle: capture, schema, loading
+    load.ts                    loads manifest.json + the original check source
+    build.ts                   `bundle` command — Checkly API → sanitized files on disk
+    manifest.ts                v3 manifest builder (pure function of what was fetched)
+    types.ts                   ManifestV3 schema
+    measure.ts                 --measure N: real determinism numbers
+    rca-mode.ts                REPRODUCTION mode derived from Rocky's RCA text
+    sanitize.ts                credential policy for everything written out
+
+  checkly/                     the Checkly Public API boundary
+    client.ts                  thin client; bounded requests; check/check-result/asset calls
+    credentials.ts             reads CHECKLY_API_KEY or the Checkly CLI login (never prints)
+    types.ts                   API response shapes
+
+  candidate/                   what is being verified
+    revision.ts                immutable snapshot of a local tree or a GitHub PR head SHA
+    check-identity.ts          stable logical-ID matching for a complete project state
+    patch.ts                   loads the candidate monitoring tree (file or directory)
+
+  assertion/                   assertion identity and static scanning
+    id.ts                      FNV-1a of "matcher|target" (shared by scanner and runtime DSL)
+    classify.ts                matcher → exact/property, falsifiable?
+    inventory.ts               regex scanner for expect() calls, steps, try/catch guards
+
+  contract/contract.ts         provenance + inventory diff + static gates
+  adequacy/                    is the oracle strong enough to trust?
+    adequacy.ts                oracle_strength and weakness scan
+    mutation.ts                seeded mutants of the candidate
+
+  scene/                       how a scene puts the target into a state
+    proxy.ts                   THE only place a scene shapes traffic
+    modes.ts                   live / live-concurrent:N / replay:<har> / inject:…
+    env.ts                     Checkly's ENVIRONMENT_URL convention
+    config-diff.ts             config diff + scheduling policy
+
+  executor/                    what runs each scene
+    scene.ts                   local scene executor (proxy + sandbox)
+    checkly-cli.ts             remote executor via the customer's own `checkly test`
+    hybrid.ts                  REPRODUCTION/DETECTION local; HEALTHY/REGRESSION on Checkly
+    checkly.ts                 direct Checkly API executor (dry-run without a key)
+
+  sandbox/                     running candidate code in isolation
+    check-api.ts               the sandbox DSL: check(), expect(), runCollected()
+    runner.ts                  runs a patch in a child process, parses its JSON outcome
+    playwright-sandbox.ts      runs a captured Playwright check unmodified
+    checkly-sandbox.ts         runs a DSL check through the Checkly CLI
+
+  protected/                   Phase 9 protected guarantees
+    requirements.ts            the sealed policy envelope + per-check-type adapters
+    playwright-model.ts        effective Playwright model from the bundle's own evidence
+    sibling-impact.ts          which other monitors a changed file can move (9.10)
+
+  multistep/                   MultiStepCheck support (the largest area)
+    source.ts                  construct + source modelling (the static half)
+    normalize.ts               real Checkly/Playwright result → normalized capture
+    capture.ts  binding.ts     recording drafts and remote finalization
+    identity.ts                derived regions/env-key names; deployed-config agreement
+    policy.ts                  static policy for Multistep candidates
+    transaction.ts             cross-step account/slot/version/token relationships
+    sanitize.ts                values-free recording
+    shape.ts                   one admission rule for every evidence kind
+    executor.ts                the Multistep transaction executor adapter
+    …                          accounts, detection, rebind, routes, trusted-scope, …
+
+  api/                         ApiCheck support (model, policy, recording, executor, setup)
+  decision/decision.ts         THE verdict law — no LLM, an ordered table
   report/report.ts             markdown + json report
-  executor/synthetic.ts        SyntheticExecutor + AppSim interface + env-dodge heuristic
-  executor/checkly.ts          ChecklyExecutor (real API; dry-run without key)
-fixtures/slots-booking/
-  bundle/incidents/slots-booking-overlap/{manifest.json, check/booking.check.ts, app-sim.ts}
-  bundle/incidents/slots-booking-weak-oracle/…        second bundle (weak oracle)
-  patches/01…11*.ts            one good fix + nine fooling vectors + one weakened good fix
-test/verify.spec.ts            node:test harness (25 tests)
+  report/cost.ts               cost aggregation across verification reports
+  cli/init.ts                  `verify-fix init`
+  cli/measure-local.ts         local determinism measurement for an existing bundle
+  trace/                       Playwright .trace → HAR, plus a bounded ZIP reader
+
+fixtures/bundles/              committed, sanitized incident fixtures
+incidents/                     real captured Checkly incidents
+test/                          node:test suites, mirroring src/ by responsibility
 docs/PROJECT-GUIDE.md          this document
 ```
 
@@ -385,7 +446,7 @@ docs/PROJECT-GUIDE.md          this document
   `runScene(bundle, patchSource, scene)`, `isLive()`, `costReport()`,
   `budgetExhausted`, `nondeterministicScenes`.
 
-### 5.2 `src/bundle.ts` — loading an incident
+### 5.2 `src/bundle/load.ts` — loading an incident
 `loadBundle(dir)` reads `manifest.json`, insists on `schemaVersion: "v2"`,
 reads `check/<bundle.check.file>` into `bundle.checkSource`, and returns
 `appSimPath` if `app-sim.ts` exists (null otherwise → Checkly executor).
@@ -436,7 +497,7 @@ are the two predicates the rest of the code uses.
 - `rows` — one per scene with `expected` from `mustFail` and `observed:
   "uncertain"` until an executor fills it in.
 
-### 5.7 `src/check-api.ts` — the DSL the check runs against
+### 5.7 `src/sandbox/check-api.ts` — the DSL the check runs against
 This file is copied into the sandbox and is what `import { check, expect }
 from "./check-api.ts"` resolves to (`sandbox.remapImports` also maps
 `@checkly/playwright` / `@checkly/cli` here so a real check file runs unmodified).
@@ -459,7 +520,7 @@ from "./check-api.ts"` resolves to (`sandbox.remapImports` also maps
   where `results[i] = { name, passed, error, trace, runCount, runs, simHits,
   assertionCount }`. `passed` is only true when `simHits > 0` and the run held.
 
-### 5.8 `src/sandbox.ts` — running the patch in isolation
+### 5.8 `src/sandbox/runner.ts` — running the patch in isolation
 `runSandbox(checkSource, { baseUrl, account, concurrentRuns, timeoutMs, seed })`:
 1. `mkdtemp(verify-fix-sandbox-*)`;
 2. write `check.ts` (the patch, imports remapped), `id.ts`, `check-api.ts`
@@ -480,28 +541,24 @@ from "./check-api.ts"` resolves to (`sandbox.remapImports` also maps
    `passed = !vacuous && every result passed`;
 6. always removes the temp dir.
 
-### 5.9 `src/executor/synthetic.ts` — the synthetic executor
-- `AppSim` interface: `start(): Promise<baseUrl>`, `drive(scene)`, `close()` —
-  the contract the fixture's `app-sim.ts` implements.
-- `SyntheticExecutor.runScene(bundle, patch, scene)`:
-  1. budget: `budgetFor(bundle) = option ?? bundle.runBudget.maxPerScene ?? 10`;
-     if this scene's runs are exhausted → `uncertain("run budget exhausted")`
-     and `budgetExhausted = true`;
-  2. `ensureSim()` imports `app-sim.ts` once and starts it; `sim.drive(scene)`
-     arms the mode (`normal | overlap | auth-fail`) and clears account state;
-  3. repeat `min(scene.repetitions, budget)` times: `runSandbox(patch, {baseUrl,
-     account, seed: repetitionSeed(sceneId, i)})` — REGRESSION scenes use account
-     `demo-r<i>` (an independent user); a sandbox exception → `uncertain("sandbox
-     could not run the check: …")`; a `vacuous` outcome → `uncertain("DSL did not
-     contact armed sim…")`; otherwise record `pass`/`fail` and merge the trace;
-  4. repetitions disagree → `nondeterministicScenes.push(id)` and
-     `uncertain("repetitions disagreed (pass×a, fail×b)")`;
-  5. otherwise `{ observed, repetitions, trace, source:"synthetic" }`.
-- `detectEnvScopeDodge(original, patched)` — regex heuristic: any
-  credential-bearing line (`account:`, `ACCOUNT =`, `username`, `email`, …) that
-  uses `Date.now()/Math.random()/randomUUID()` ⇒ "generated at runtime"; else the
-  **set** of distinct credential statements must be unchanged ⇒ otherwise
-  "constant changed".
+### 5.9 `src/executor/scene.ts` — the local scene executor
+The synthetic executor was replaced in Phase 3: there is no simulator any more.
+A real preview supplies all application behavior, and the scene executor decides
+what the target is allowed to see.
+
+`SceneExecutor.runScene(bundle, patch, scene)`:
+1. budget: `budgetFor(bundle) = option ?? bundle.runBudget.maxPerScene ?? 10`;
+   if this scene's runs are exhausted → `uncertain("run budget exhausted")` and
+   `budgetExhausted = true`;
+2. the scene mode is armed on the proxy (see `src/scene/proxy.ts`) — a real
+   target, a recorded HAR, or an injected failure;
+3. each repetition runs the candidate through the sandbox that its check type
+   implies: a Playwright check via `runPlaywrightSandbox`, a DSL check via
+   `runSandbox`, a Multistep check via the Multistep adapter;
+4. a run that registered no check or never reached the armed target is
+   `vacuous` → `uncertain`, never pass or fail;
+5. repetitions disagree → `nondeterministicScenes.push(id)`;
+6. otherwise `{ observed, repetitions, trace, source: "scene" }`.
 
 ### 5.10 `src/executor/checkly.ts` — the production executor
 Same interface against Checkly's API: `PUT /v1/check-checks/<id>` (deploy the
@@ -511,7 +568,7 @@ list mapped into the trace. Without `CHECKLY_API_KEY` (or with `--dry-run`) it
 only logs the operations and reports every scene `uncertain` ("no live run was
 performed"). The route shapes have not been exercised against a live account.
 
-### 5.11 `src/mutation.ts` — seeded mutants
+### 5.11 `src/adequacy/mutation.ts` — seeded mutants
 `seedMutants(patch, file)` takes the falsifiable `exact` assertions of the
 candidate and builds up to four mutants:
 - `mut-op-<id>` (operator family) for the first and second strong assertion:
@@ -889,7 +946,7 @@ bundle/
 ```
 
 The bundle is consumed by `verify` from Phase 3 on, which loads this v3
-manifest directly (`src/bundle.ts`). The only fields a person may still edit
+manifest directly (`src/bundle/load.ts`). The only fields a person may still edit
 by hand are noted in the README of the bundle; every scene carries the result
 id it came from, so nothing in it has to be trusted on faith.
 
@@ -952,7 +1009,7 @@ mode or disagreeing repetitions is `uncertain` — never pass, never fail.
 fallback and without a provided value makes every scene `uncertain`, with the
 line number. `APP_BASE_URL` no longer exists.
 
-**Patches** (`src/patch.ts`): `--patch <file>` replaces the bundle's main
+**Patches** (`src/candidate/patch.ts`): `--patch <file>` replaces the bundle's main
 check file; `--patch <dir>` replaces every bundle file with the same relative
 path (spec, `checkly.config.ts`, both). `src/scene/config-diff.ts` compares
 the two configs: scheduling keys are allowed and noted; a change that touches
@@ -987,8 +1044,8 @@ it now contains `live` and `inject:POST /api/book -> 500` directly.
 ## 9d. The Playwright runner — Phase 4
 
 **Selection.** A bundle whose main check is a `.spec.ts` or `.test.ts` file and
-whose manifest names a Playwright config uses `src/playwright-sandbox.ts`.
-DSL checks still use `src/sandbox.ts`.
+whose manifest names a Playwright config uses `src/sandbox/playwright-sandbox.ts`.
+DSL checks still use `src/sandbox/runner.ts`.
 
 **Files and dependency.** The runner creates a temporary directory. It copies
 every captured file under `check/`, then overlays every candidate file. This
@@ -1198,7 +1255,7 @@ Git rename information follows a renamed main spec. The final source imports
 follow renamed or new helper files. A missing helper is not restored from the
 incident. Removing the stable incident check is a definite `FAILED` result.
 
-`src/patch.ts` loads the complete final Checkly project from the immutable
+`src/candidate/patch.ts` loads the complete final Checkly project from the immutable
 snapshot. That includes the check, Checkly and Playwright configuration,
 package metadata, lockfiles, path-alias helpers, ordinary imports, and binary
 test fixtures. Missing files are not restored. The repository digest also

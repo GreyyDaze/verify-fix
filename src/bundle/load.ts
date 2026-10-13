@@ -6,19 +6,19 @@
 
 import { readFileSync, existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import type { ApiRecording, Bundle, BundleConfig, Scene } from "./types.ts";
-import type { ManifestV3 } from "./bundle/types.ts";
-import { assertProtectedPolicyEnvelope } from "./protected-requirements.ts";
-import { parseCheckConfig } from "./scene/config-diff.ts";
-import { MULTISTEP_DETECTION_MODE, parseMode } from "./scene/modes.ts";
-import { recordedNestedBookingConfirmed } from "./multistep/shape.ts";
-import { validMultiStepStoredRecording } from "./multistep/recording-schema.ts";
-import { multistepProblemCategory } from "./multistep/sanitize.ts";
-import { readBoundedBundleFile, multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_FILE_BYTES, MULTISTEP_MAX_SOURCE_FILES } from "./multistep/files.ts";
-import { parseMultiStepProject } from "./multistep/source.ts";
-import { storedMultiStepIdentityProblem } from "./multistep/identity.ts";
-import { failurePointFromRecording, matchesRemoteMultiStepBinding } from "./multistep/binding.ts";
-import type { MultiStepRecording } from "./multistep/capture.ts";
+import type { ApiRecording, Bundle, BundleConfig, Scene } from "../types.ts";
+import type { ManifestV3 } from "./types.ts";
+import { assertProtectedPolicyEnvelope } from "../protected/requirements.ts";
+import { parseCheckConfig } from "../scene/config-diff.ts";
+import { MULTISTEP_DETECTION_MODE, parseMode } from "../scene/modes.ts";
+import { recordedNestedBookingConfirmed } from "../multistep/shape.ts";
+import { validMultiStepStoredRecording } from "../multistep/recording-schema.ts";
+import { multistepProblemCategory } from "../multistep/sanitize.ts";
+import { readBoundedBundleFile, multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_FILE_BYTES, MULTISTEP_MAX_SOURCE_FILES } from "../multistep/files.ts";
+import { parseMultiStepProject } from "../multistep/source.ts";
+import { storedMultiStepIdentityProblem } from "../multistep/identity.ts";
+import { failurePointFromRecording, matchesRemoteMultiStepBinding } from "../multistep/binding.ts";
+import type { MultiStepRecording } from "../multistep/capture.ts";
 
 export interface LoadedBundle {
   bundle: Bundle;

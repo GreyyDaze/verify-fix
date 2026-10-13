@@ -37,7 +37,7 @@ import { parseMultiStepConstruct, parseMultiStepProject } from "../multistep/sou
 import { parseCheckConfig } from "../scene/config-diff.ts";
 import { deployedProblem } from "../multistep/identity.ts";
 import { multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_BYTES, MULTISTEP_MAX_SOURCE_FILE_BYTES, MULTISTEP_MAX_SOURCE_FILES } from "../multistep/files.ts";
-import { buildProtectedRequirements, policyKnown, policyUnknown, protectedSourceIdentity, type ProtectedPolicyEnvelope, type ResolvedPolicyValue } from "../protected-requirements.ts";
+import { buildProtectedRequirements, policyKnown, policyUnknown, protectedSourceIdentity, type ProtectedPolicyEnvelope, type ResolvedPolicyValue } from "../protected/requirements.ts";
 import { deriveRegionalAccountMapping } from "../multistep/region-account-mapping.ts";
 
 export interface BuildOptions {

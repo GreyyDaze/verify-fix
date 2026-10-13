@@ -4,7 +4,7 @@
 // own Checkly CLI. `checkly test` uploads the pull-request source as a recorded
 // test session. It never deploys or changes a scheduled monitor.
 
-import { runChecklySandbox } from "../checkly-sandbox.ts";
+import { runChecklySandbox } from "../sandbox/checkly-sandbox.ts";
 import { regionalAccountMappingFromBundle, trustedAutomationBypass, trustedRegionalAccounts } from "../multistep/accounts.ts";
 import { multiStepDiskRebound } from "../multistep/rebind.ts";
 import { evaluateMultiStepPolicy } from "../multistep/policy.ts";

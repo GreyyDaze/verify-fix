@@ -15,7 +15,7 @@ import type { MultiStepCapture } from "../multistep/normalize.ts";
 import { parseMultiStepScript } from "../multistep/source.ts";
 import { MULTISTEP_DETECTION_MODE } from "../scene/modes.ts";
 import type { MeasureResult } from "./measure.ts";
-import type { ProtectedPolicyEnvelope } from "../protected-requirements.ts";
+import type { ProtectedPolicyEnvelope } from "../protected/requirements.ts";
 import type { DeterminismV3, FailurePoint, ManifestV3, OverlappingRun, ResultRef, SceneV3 } from "./types.ts";
 
 export interface FetchedResult {

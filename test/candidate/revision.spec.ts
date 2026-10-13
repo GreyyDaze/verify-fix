@@ -4,7 +4,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symli
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { loadBundle } from "../../src/bundle.ts";
+import { loadBundle } from "../../src/bundle/load.ts";
 import { incidentLogicalId, logicalEntries, resolveCheckIdentity } from "../../src/candidate/check-identity.ts";
 import {
   bindCandidateTarget,
@@ -14,7 +14,7 @@ import {
   snapshotLocalCandidate,
   type CandidateRevision,
 } from "../../src/candidate/revision.ts";
-import { loadCandidateRevision, patchedCheckSource, patchedFiles } from "../../src/patch.ts";
+import { loadCandidateRevision, patchedCheckSource, patchedFiles } from "../../src/candidate/patch.ts";
 import { verify } from "../../src/verify.ts";
 
 const ROOT = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");

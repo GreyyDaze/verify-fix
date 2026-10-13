@@ -5,7 +5,7 @@
 // remote asset hashes and stored recordings. This helper never exposes paths,
 // errors, raw assets, account identities or headers to a report.
 import type { Bundle } from "../types.ts";
-import { loadBundle } from "../bundle.ts";
+import { loadBundle } from "../bundle/load.ts";
 
 /** Compare DATA, not JSON.stringify output: a caller-owned toJSON() method
  * (including a non-enumerable or nested one), accessor or sparse array must

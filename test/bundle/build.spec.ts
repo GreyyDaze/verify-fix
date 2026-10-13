@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { gzipSync } from "node:zlib";
 import { buildBundle, assertNoSecretLeak, collectProjectSources } from "../../src/bundle/build.ts";
-import { loadBundle } from "../../src/bundle.ts";
+import { loadBundle } from "../../src/bundle/load.ts";
 import type { ChecklyClient } from "../../src/checkly/client.ts";
 import type { AssetManifest, CheckResult, CheckResultSummary, ErrorGroup, RootCauseAnalysis } from "../../src/checkly/types.ts";
 import { fakeTraceZip } from "../helpers/fake-trace.ts";

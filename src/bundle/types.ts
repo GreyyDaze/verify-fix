@@ -5,7 +5,7 @@
 import type { SceneType } from "../types.ts";
 import type { AssertionInventory } from "../types.ts";
 import type { ReproductionMode } from "./rca-mode.ts";
-import type { ProtectedPolicyEnvelope } from "../protected-requirements.ts";
+import type { ProtectedPolicyEnvelope } from "../protected/requirements.ts";
 
 export type SceneMode = "live" | "live-concurrent:2" | "replay:failing.har" | "replay:passing.har" | "replay:failing.api.json" | "replay:passing.api.json" | `inject:${string}` | "detect:POST /api/book -> 200:booking.confirmed=false";
 

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildCostMatrix, costMatrixMarkdown } from "../src/cost-report.ts";
+import { buildCostMatrix, costMatrixMarkdown } from "../../src/report/cost.ts";
 
 function report(candidate: string, verdict: "PASS" | "FAILED" | "UNCERTAIN", cloud: number, local: number, wall: number) {
   return {

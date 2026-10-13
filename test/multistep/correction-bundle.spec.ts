@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, linkSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildBundle } from "../../src/bundle/build.ts";
-import { loadBundle } from "../../src/bundle.ts";
+import { loadBundle } from "../../src/bundle/load.ts";
 import { buildContract } from "../../src/contract/contract.ts";
 import { assessAdequacy } from "../../src/adequacy/adequacy.ts";
 import type { ChecklyClient } from "../../src/checkly/client.ts";

@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import { readFileSync } from "node:fs";
 import { parseApiCheckProject } from "../../src/api/model.ts";
-import { loadBundle } from "../../src/bundle.ts";
+import { loadBundle } from "../../src/bundle/load.ts";
 import { verify } from "../../src/verify.ts";
-import type { PatchSet } from "../../src/patch.ts";
+import type { PatchSet } from "../../src/candidate/patch.ts";
 import type { ApiRecording, Bundle, Scene } from "../../src/types.ts";
 
 const checkFile = "checks/availability.check.ts";

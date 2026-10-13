@@ -48,7 +48,7 @@ import { promisify } from "node:util";
 import ts from "typescript";
 import type { Bundle, Scene, TraceStep } from "../types.ts";
 import { trustedMultiStepDetection } from "./detection.ts";
-import { SEED_MODULE } from "../sandbox.ts";
+import { SEED_MODULE } from "../sandbox/runner.ts";
 import { normalizeMultiStepCapture, type MultiStepCapture } from "./normalize.ts";
 import { startOriginBridge, type BridgeRequestEvidence, type OriginBridge } from "./origin-bridge.ts";
 import { knownRoute, knownStepTitle, routeFromUrl, MULTISTEP_ROUTES, MULTISTEP_STEP_TITLES, UNKNOWN_ROUTE } from "./routes.ts";

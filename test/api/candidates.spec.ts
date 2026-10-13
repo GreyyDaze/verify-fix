@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadCandidateProject } from "../../src/patch.ts";
+import { loadCandidateProject } from "../../src/candidate/patch.ts";
 import { verify } from "../../src/verify.ts";
 import { parseApiCheckProject } from "../../src/api/model.ts";
 import type { Bundle, Scene, ApiRecording } from "../../src/types.ts";

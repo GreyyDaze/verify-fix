@@ -10,7 +10,7 @@
   "files": [
     "bin/",
     "dist/",
-    "src/check-api.ts",
+    "src/sandbox/check-api.ts",
     "src/assertion/id.ts"
   ],
   "engines": {

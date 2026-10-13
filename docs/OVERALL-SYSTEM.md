@@ -121,7 +121,7 @@ The verifier does not decide what a correct fix should be. It checks whether the
 
 **Solution:** Track Git revision, dirty state, staged/unstaged changes, untracked files, PR revision, project path, and deployment metadata. Bind the candidate to the target revision.
 
-**Main code:** src/candidate/revision.ts, src/candidate/check-identity.ts, src/patch.ts.
+**Main code:** src/candidate/revision.ts, src/candidate/check-identity.ts, src/candidate/patch.ts.
 
 ### 3.8 Mutation and adequacy testing
 
@@ -129,7 +129,7 @@ The verifier does not decide what a correct fix should be. It checks whether the
 
 **Solution:** Apply controlled bad changes and require the verification scenes to detect them. Examples include weakened assertions, removed assertions, changed account/location, retry-only changes, timeout masking, swallowed errors, and hard-coded results.
 
-**Main code:** src/mutation.ts, src/adequacy/adequacy.ts, src/assertion/*.
+**Main code:** src/adequacy/mutation.ts, src/adequacy/adequacy.ts, src/assertion/*.
 
 ### 3.9 Hybrid and cloud verification
 
@@ -145,7 +145,7 @@ The verifier does not decide what a correct fix should be. It checks whether the
 
 **Solution:** Produce PASS, FAILED, or UNCERTAIN. Exit codes are 0, 1, and 2 respectively.
 
-**Main code:** src/decision/decision.ts, src/report/report.ts, src/cost-report.ts, src/verify.ts.
+**Main code:** src/decision/decision.ts, src/report/report.ts, src/report/cost.ts, src/verify.ts.
 
 ## 4. Whole system in plain English
 

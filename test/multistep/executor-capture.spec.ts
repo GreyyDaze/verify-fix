@@ -13,7 +13,7 @@ import { execSync, spawnSync } from "node:child_process";
 import { runMultiStepSandbox, resolvePlaywrightCli } from "../../src/multistep/executor.ts";
 import { buildMultiStepRecording, readMultiStepAssets, MECHANICS_ONLY_NOTE } from "../../src/multistep/capture.ts";
 import { buildBundle } from "../../src/bundle/build.ts";
-import { loadBundle } from "../../src/bundle.ts";
+import { loadBundle } from "../../src/bundle/load.ts";
 import { buildReport } from "../../src/report/report.ts";
 import { emptyExecutionCost } from "../../src/types.ts";
 import type { ContractReport } from "../../src/contract/contract.ts";

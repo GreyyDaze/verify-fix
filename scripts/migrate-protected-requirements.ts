@@ -22,7 +22,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { buildProtectedRequirements, sealProtectedRequirements, type ProtectedRequirementsInput, type ResolvedPolicyValue } from "../src/protected-requirements.ts";
+import { buildProtectedRequirements, sealProtectedRequirements, type ProtectedRequirementsInput, type ResolvedPolicyValue } from "../src/protected/requirements.ts";
 import { parseApiCheckProject } from "../src/api/model.ts";
 import { parseMultiStepProject } from "../src/multistep/source.ts";
 import { resolveEffectivePlaywrightModel } from "../src/protected/playwright-model.ts";

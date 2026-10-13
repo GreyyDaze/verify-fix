@@ -5,10 +5,10 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import { buildBundle } from "../src/bundle/build.ts";
-import { loadBundle } from "../src/bundle.ts";
+import { loadBundle } from "../src/bundle/load.ts";
 import { resolveCredentials } from "../src/checkly/credentials.ts";
 import { ChecklyClient, ChecklyApiError } from "../src/checkly/client.ts";
-import { loadPatch } from "../src/patch.ts";
+import { loadPatch } from "../src/candidate/patch.ts";
 
 const execFileAsync = promisify(execFile);
 const ROOT = resolve(import.meta.dirname, "..");

@@ -9,7 +9,7 @@
 // baseUrl is a traced step; a run with no registered check, or with no request
 // that reached the armed baseUrl, is reported as `vacuous` — never as passed.
 
-import { assertionId } from "./assertion/id.ts";
+import { assertionId } from "../assertion/id.ts";
 
 export interface TraceItem {
   kind: "step" | "assertion" | "suppression";

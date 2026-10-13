@@ -20,10 +20,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
-import { loadBundle } from "../src/bundle.ts";
+import { loadBundle } from "../src/bundle/load.ts";
 import { verify } from "../src/verify.ts";
-import { loadPatch } from "../src/patch.ts";
-import { runSandbox, parseOutcomeLine } from "../src/sandbox.ts";
+import { loadPatch } from "../src/candidate/patch.ts";
+import { runSandbox, parseOutcomeLine } from "../src/sandbox/runner.ts";
 import { SceneExecutor, detectEnvScopeDodge, DEFAULT_MAX_RUNS_PER_SCENE, repetitionSeed } from "../src/executor/scene.ts";
 import { buildContract } from "../src/contract/contract.ts";
 import { assessAdequacy } from "../src/adequacy/adequacy.ts";
@@ -91,7 +91,7 @@ describe("sandbox: a DSL run must prove it contacted ENVIRONMENT_URL", () => {
   });
 
   test("a registered check that never reaches ENVIRONMENT_URL is vacuous even if its assertions hold", async () => {
-    const src = `import { check, expect } from "./check-api.ts";\ncheck("hitless", async () => { expect(1).toBe(1); });\n`;
+    const src = `import { check, expect } from "@checkly/cli";\ncheck("hitless", async () => { expect(1).toBe(1); });\n`;
     const out = await runSandbox(src, { baseUrl: app.url, env: ENV });
     assert.equal(out.passed, false, "no contact → never a pass");
     assert.equal(out.vacuous, true);
@@ -120,7 +120,7 @@ describe("sandbox: a DSL run must prove it contacted ENVIRONMENT_URL", () => {
     process.env.VERIFY_FIX_PARENT_SECRET = "must-not-leak";
     try {
       const src = [
-        `import { check, expect } from "./check-api.ts";`,
+        `import { check, expect } from "@checkly/cli";`,
         `check("env", async ({ baseUrl }) => {`,
         `  await fetch(\`\${await baseUrl}/api/health\`);`,
         `  expect(process.env.ENVIRONMENT_NAME).toBe("staging");`,
@@ -145,7 +145,7 @@ describe("sandbox: a DSL run must prove it contacted ENVIRONMENT_URL", () => {
 
   test("seeded randomness is reproducible per repetition and differs across repetitions and runs", async () => {
     const src = [
-      `import { check, expect } from "./check-api.ts";`,
+      `import { check, expect } from "@checkly/cli";`,
       `check("rnd", async ({ baseUrl }) => {`,
       `  await fetch(\`\${await baseUrl}/api/health\`);`,
       `  expect(String(Math.random())).toBe("never");`,

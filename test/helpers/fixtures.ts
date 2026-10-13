@@ -1,5 +1,5 @@
 // Shared fake Checkly check definition for bundle tests.
-import type { ChecklyCheck } from "../../src/checkly/types.ts";
+import type { ChecklyCheck } from "../../src/capture/checkly/types.ts";
 
 export const CHECK: ChecklyCheck = {
   id: "11111111-2222-3333-4444-555555555555",

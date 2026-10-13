@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { resolveEffectivePlaywrightModel } from "../../src/protected/playwright-model.ts";
+import { resolveEffectivePlaywrightModel } from "../../src/policy/playwright-model.ts";
 
 const ROOT = new URL("../..", import.meta.url).pathname;
 const captured = (relative: string): string => {

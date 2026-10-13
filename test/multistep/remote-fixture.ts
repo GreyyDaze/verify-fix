@@ -4,11 +4,11 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildBundle } from "../../src/bundle/build.ts";
-import { buildProtectedRequirements, policyKnown, protectedSourceIdentity } from "../../src/protected/requirements.ts";
-import { loadBundle } from "../../src/bundle/load.ts";
-import type { ChecklyClient } from "../../src/checkly/client.ts";
-import type { AssetManifestEntry, CheckResultSummary } from "../../src/checkly/types.ts";
+import { buildBundle } from "../../src/capture/bundle/build.ts";
+import { buildProtectedRequirements, policyKnown, protectedSourceIdentity } from "../../src/policy/requirements.ts";
+import { loadBundle } from "../../src/capture/bundle/load.ts";
+import type { ChecklyClient } from "../../src/capture/checkly/client.ts";
+import type { AssetManifestEntry, CheckResultSummary } from "../../src/capture/checkly/types.ts";
 import { writeZip } from "../helpers/zip-writer.ts";
 import { FAKE_ACCOUNT, FAKE_ORIGIN, failingTestResults, passingTestResults, failingLogs, passingLogs } from "./helpers.ts";
 

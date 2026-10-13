@@ -3,10 +3,10 @@
 // falsifiability, (b) per-scene assertion coverage, (c) env-assumption
 // completeness, (d) mutant-kill rate. Weak → cannot PASS.
 
-import type { Assertion, Bundle, OracleStrength, SceneObservation, SceneType, WeaknessScan } from "../types.ts";
-import { parseMultiStepProject, type MultiStepScriptModel } from "../multistep/source.ts";
-import { trustedMultiStepDetection } from "../multistep/detection.ts";
-import { MULTISTEP_DETECTION_MODE } from "../scene/modes.ts";
+import type { Assertion, Bundle, OracleStrength, SceneObservation, SceneType, WeaknessScan } from "../../types.ts";
+import { parseMultiStepProject, type MultiStepScriptModel } from "../../multistep/source.ts";
+import { trustedMultiStepDetection } from "../../multistep/detection.ts";
+import { MULTISTEP_DETECTION_MODE } from "../../execution/scene/modes.ts";
 import type { ContractReport } from "../contract/contract.ts";
 
 export interface MutantResult {

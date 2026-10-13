@@ -4,7 +4,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symli
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { loadBundle } from "../../src/bundle/load.ts";
+import { loadBundle } from "../../src/capture/bundle/load.ts";
 import { incidentLogicalId, logicalEntries, resolveCheckIdentity } from "../../src/candidate/check-identity.ts";
 import {
   bindCandidateTarget,

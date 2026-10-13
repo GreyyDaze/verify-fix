@@ -20,16 +20,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
-import { loadBundle } from "../src/bundle/load.ts";
+import { loadBundle } from "../src/capture/bundle/load.ts";
 import { verify } from "../src/verify.ts";
 import { loadPatch } from "../src/candidate/patch.ts";
-import { runSandbox, parseOutcomeLine } from "../src/sandbox/runner.ts";
-import { SceneExecutor, detectEnvScopeDodge, DEFAULT_MAX_RUNS_PER_SCENE, repetitionSeed } from "../src/executor/scene.ts";
-import { buildContract } from "../src/contract/contract.ts";
-import { assessAdequacy } from "../src/adequacy/adequacy.ts";
+import { runSandbox, parseOutcomeLine } from "../src/execution/sandbox/runner.ts";
+import { SceneExecutor, detectEnvScopeDodge, DEFAULT_MAX_RUNS_PER_SCENE, repetitionSeed } from "../src/execution/executor/scene.ts";
+import { buildContract } from "../src/evidence/contract/contract.ts";
+import { assessAdequacy } from "../src/evidence/adequacy/adequacy.ts";
 import { decide } from "../src/decision/decision.ts";
-import { parseInventory, stripComments } from "../src/assertion/inventory.ts";
-import { assertionId } from "../src/assertion/id.ts";
+import { parseInventory, stripComments } from "../src/evidence/assertion/inventory.ts";
+import { assertionId } from "../src/evidence/assertion/id.ts";
 import type { Bundle, Scene, SceneObservation } from "../src/types.ts";
 import { startExampleApp, type RunningApp } from "./helpers/example-app.ts";
 

@@ -18,10 +18,10 @@ import { buildMultiStepRecording, readMultiStepAssets, MULTISTEP_DRAFT_SCHEMA } 
 import { sanitizeMultiStepCapture } from "../../src/multistep/sanitize.ts";
 import { deployedMultiStepProblem, deployedProblemFields } from "../../src/multistep/identity.ts";
 import { parseMultiStepProject } from "../../src/multistep/source.ts";
-import { buildBundle } from "../../src/bundle/build.ts";
-import { loadBundle } from "../../src/bundle/load.ts";
-import type { ChecklyClient } from "../../src/checkly/client.ts";
-import type { AssetManifestEntry, CheckResultSummary } from "../../src/checkly/types.ts";
+import { buildBundle } from "../../src/capture/bundle/build.ts";
+import { loadBundle } from "../../src/capture/bundle/load.ts";
+import type { ChecklyClient } from "../../src/capture/checkly/client.ts";
+import type { AssetManifestEntry, CheckResultSummary } from "../../src/capture/checkly/types.ts";
 import { writeZip } from "../helpers/zip-writer.ts";
 import { FAKE_ACCOUNT, FAKE_TOKEN, FAKE_ORIGIN, SELECTED_SLOT } from "./helpers.ts";
 

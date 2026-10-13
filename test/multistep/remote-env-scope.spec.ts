@@ -2,12 +2,12 @@
 // No cloud session, credentials, or Checkly account are used.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { scopedChecklyEnvironment } from "../../src/executor/checkly-cli.ts";
+import { scopedChecklyEnvironment } from "../../src/execution/executor/checkly-cli.ts";
 import type { Bundle } from "../../src/types.ts";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ChecklyCliExecutor } from "../../src/executor/checkly-cli.ts";
+import { ChecklyCliExecutor } from "../../src/execution/executor/checkly-cli.ts";
 import { syntheticRemoteBundle } from "./remote-fixture.ts";
 import { repairedNestedSpec } from "./detection-fixture.ts";
 import { multiStepDiskRebound, sameBoundedData } from "../../src/multistep/rebind.ts";

@@ -7,8 +7,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildManifest, resultErrors } from "../../src/bundle/manifest.ts";
-import type { CheckResultSummary } from "../../src/checkly/types.ts";
+import { buildManifest, resultErrors } from "../../src/capture/bundle/manifest.ts";
+import type { CheckResultSummary } from "../../src/capture/checkly/types.ts";
 import { loadRealBundle, summaryOf } from "../helpers/real-bundle.ts";
 
 const { read, captured, failingResult, passingResult, historyFile, inputs } = loadRealBundle("slots-booking-overlap");

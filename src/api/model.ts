@@ -1,7 +1,7 @@
 import path from "node:path";
 import ts from "typescript";
-import { assertionId } from "../assertion/id.ts";
-import { isFalsifiable, isWeakMatcher, matcherClass } from "../assertion/classify.ts";
+import { assertionId } from "../evidence/assertion/id.ts";
+import { isFalsifiable, isWeakMatcher, matcherClass } from "../evidence/assertion/classify.ts";
 import type { Assertion, AssertionInventory } from "../types.ts";
 
 export interface ApiAssertionModel {

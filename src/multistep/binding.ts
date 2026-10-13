@@ -1,9 +1,9 @@
 // Remote-only finalization and offline re-binding. A local --assets draft is
 // deliberately not a v3 recording; never upgrade it by assigning a field.
 import { createHash } from "node:crypto";
-import type { CheckResultSummary } from "../checkly/types.ts";
-import type { ManifestV3, FailurePoint } from "../bundle/types.ts";
-import { assertionId } from "../assertion/id.ts";
+import type { CheckResultSummary } from "../capture/checkly/types.ts";
+import type { ManifestV3, FailurePoint } from "../capture/bundle/types.ts";
+import { assertionId } from "../evidence/assertion/id.ts";
 import { MULTISTEP_RECORDING_SCHEMA, type MultiStepRecording, type MultiStepRecordingDraft,
   type MultiStepFailureAssertion } from "./capture.ts";
 import { validMultiStepStoredRecording } from "./recording-schema.ts";

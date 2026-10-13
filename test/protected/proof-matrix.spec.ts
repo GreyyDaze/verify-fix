@@ -17,7 +17,7 @@ import {
   sealProtectedRequirements,
   type CandidateEffectiveRequirements,
   type ProtectedRequirementsPolicy,
-} from "../../src/protected/requirements.ts";
+} from "../../src/policy/requirements.ts";
 
 const policy: ProtectedRequirementsPolicy = {
   schemaVersion: "protected-requirements-v2",

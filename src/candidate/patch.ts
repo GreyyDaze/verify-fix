@@ -9,7 +9,7 @@ import { existsSync, lstatSync, readFileSync, realpathSync, readdirSync, statSyn
 import { dirname, extname, join, relative, resolve } from "node:path";
 import * as ts from "typescript";
 import type { Bundle, BundleConfig } from "../types.ts";
-import { parseCheckConfig } from "../scene/config-diff.ts";
+import { parseCheckConfig } from "../execution/scene/config-diff.ts";
 import type { CandidateRevision, CandidateRevisionMetadata } from "./revision.ts";
 import { configuredPlaywrightPath, resolveCheckIdentity, sourceExtensionCandidates } from "./check-identity.ts";
 

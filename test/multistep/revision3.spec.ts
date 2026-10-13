@@ -19,7 +19,7 @@ import { sanitizeMultiStepCapture } from "../../src/multistep/sanitize.ts";
 import { buildMultiStepRecording, readMultiStepAssets, MAX_ASSET_FILE_BYTES } from "../../src/multistep/capture.ts";
 import { parseMultiStepScript } from "../../src/multistep/source.ts";
 import { evaluateMultiStepPolicy } from "../../src/multistep/policy.ts";
-import { openZipBounded, ASSET_ZIP_BOUNDS } from "../../src/archive/zip.ts";
+import { openZipBounded, ASSET_ZIP_BOUNDS } from "../../src/capture/archive/zip.ts";
 import { writeZip } from "../helpers/zip-writer.ts";
 import { FAKE_ACCOUNT, FAKE_ORIGIN, FAKE_TOKEN, passingTestResults, passingLogs, failingTestResults, failingLogs } from "./helpers.ts";
 

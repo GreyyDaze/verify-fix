@@ -3,8 +3,8 @@
 // it must contain no LLM import and no probabilistic judgment.
 
 import type { Bundle, Decision, EvidenceRow, ObservationValue, OracleExpectation, Scene, SceneObservation, VerdictValue } from "../types.ts";
-import type { ContractReport } from "../contract/contract.ts";
-import type { AdequacyOutput, MutantResult } from "../adequacy/adequacy.ts";
+import type { ContractReport } from "../evidence/contract/contract.ts";
+import type { AdequacyOutput, MutantResult } from "../evidence/adequacy/adequacy.ts";
 
 export const ORACLE_STRENGTH_THRESHOLD = 0.7;
 

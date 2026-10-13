@@ -2,15 +2,15 @@
 // supplied by a remote result, RCA, asset URL, log or arbitrary manifest field
 // is spread into stored metadata. The check/ source remains separate code;
 // the bundle writer validates/bounds that closure before writing it.
-import type { ManifestV3, SceneV3, ResultRef, FailurePoint, OverlappingRun } from "../bundle/types.ts";
-import type { CheckResultSummary } from "../checkly/types.ts";
+import type { ManifestV3, SceneV3, ResultRef, FailurePoint, OverlappingRun } from "../capture/bundle/types.ts";
+import type { CheckResultSummary } from "../capture/checkly/types.ts";
 import type { MultiStepRecording } from "./capture.ts";
 import { failurePointFromRecording, matchesRemoteMultiStepBinding } from "./binding.ts";
 import { parseMultiStepProject } from "./source.ts";
 import { knownRoute, knownStepTitle, MULTISTEP_ROUTES } from "./routes.ts";
 import { multiStepSourcePath } from "./files.ts";
 import { recordedNestedBookingConfirmed } from "./shape.ts";
-import { MULTISTEP_DETECTION_MODE } from "../scene/modes.ts";
+import { MULTISTEP_DETECTION_MODE } from "../execution/scene/modes.ts";
 import { MULTISTEP_CHECK_NAME, storedMultiStepIdentityProblem } from "./identity.ts";
 import { isSyntacticallyValidRegion, trustedMultistepScope } from "./trusted-scope.ts";
 

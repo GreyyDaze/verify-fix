@@ -3,7 +3,7 @@
 // outcomes ("recorded:<runId>") and check-code assertions ("code:assert:<id>").
 // Anything else is rejected at ingestion.
 
-import type { ProtectedPolicyEnvelope } from "./protected/requirements.ts";
+import type { ProtectedPolicyEnvelope } from "./policy/requirements.ts";
 
 export type SceneType = "REPRODUCTION" | "HEALTHY" | "DETECTION" | "MUTATION" | "REGRESSION";
 
@@ -40,7 +40,7 @@ export interface Scene {
   /** What state the target is in for this scene (prose, for the report). */
   state: string;
   /**
-   * How the scene layer puts the target into that state (src/scene/modes.ts):
+   * How the scene layer puts the target into that state (src/execution/scene/modes.ts):
    * `live`, `live-concurrent:N`, `replay:<file>.har`, `inject:<METHOD> <path> -> <status>`.
    */
   mode: string;

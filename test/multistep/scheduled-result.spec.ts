@@ -2,11 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { buildBundle } from "../../src/bundle/build.ts";
+import { buildBundle } from "../../src/capture/bundle/build.ts";
 import { MAX_ASSET_FILE_BYTES, MAX_ASSET_ZIP_BYTES } from "../../src/multistep/capture.ts";
-import { openZipBounded } from "../../src/archive/zip.ts";
-import type { ChecklyClient } from "../../src/checkly/client.ts";
-import type { AssetManifestEntry, AssetType, CheckResultSummary } from "../../src/checkly/types.ts";
+import { openZipBounded } from "../../src/capture/archive/zip.ts";
+import type { ChecklyClient } from "../../src/capture/checkly/client.ts";
+import type { AssetManifestEntry, AssetType, CheckResultSummary } from "../../src/capture/checkly/types.ts";
 import { writeZip } from "../helpers/zip-writer.ts";
 
 const web = fileURLToPath(new URL("../../examples/slots-booking/web/", import.meta.url));

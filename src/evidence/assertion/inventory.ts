@@ -3,11 +3,11 @@
 // "remove the failing step" detection) and suppression detection
 // (catch/ignore/throttle wrapping of assertions).
 
-import type { Assertion, AssertionInventory } from "../types.ts";
+import type { Assertion, AssertionInventory } from "../../types.ts";
 import { assertionId, normalizeSubject } from "./id.ts";
 import { isFalsifiable, isWeakMatcher, matcherClass } from "./classify.ts";
-import { apiInventory, parseApiCheckProject } from "../api/model.ts";
-import { parseMultiStepProject, type MultiStepSourceModel } from "../multistep/source.ts";
+import { apiInventory, parseApiCheckProject } from "../../api/model.ts";
+import { parseMultiStepProject, type MultiStepSourceModel } from "../../multistep/source.ts";
 
 /**
  * Find `expect(<subject>).<matcher>(<target>)` calls on one line with balanced

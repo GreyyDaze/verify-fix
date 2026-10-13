@@ -7,7 +7,7 @@ import { createServer, type Server } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SceneExecutor, multistepRegionForLocation } from "../../src/executor/scene.ts";
+import { SceneExecutor, multistepRegionForLocation } from "../../src/execution/executor/scene.ts";
 import { runMultiStepSandbox } from "../../src/multistep/executor.ts";
 import { buildReport } from "../../src/report/report.ts";
 import type { Bundle, Scene } from "../../src/types.ts";

@@ -3,9 +3,9 @@
 // Every sentence must reduce to "experiment X, oracle Y, matched/mismatched, strength Z".
 
 import type { Decision, EvidenceRow, ExecutionCost, SceneObservation } from "../types.ts";
-import type { ContractReport } from "../contract/contract.ts";
+import type { ContractReport } from "../evidence/contract/contract.ts";
 import type { CandidateRevisionMetadata, CandidateTargetBinding } from "../candidate/revision.ts";
-import type { ResolvedPolicyValue } from "../protected/requirements.ts";
+import type { ResolvedPolicyValue } from "../policy/requirements.ts";
 
 export interface Report {
   incidents: string;

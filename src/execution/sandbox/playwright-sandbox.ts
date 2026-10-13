@@ -16,7 +16,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
-import type { TraceStep } from "../types.ts";
+import type { TraceStep } from "../../types.ts";
 import { SEED_MODULE } from "./runner.ts";
 
 export interface PlaywrightSandboxContext {

@@ -12,7 +12,7 @@ import { isKnownMultiStepProblem, multistepProblemCategory } from "../../src/mul
 const srcDir = new URL("../../src/", import.meta.url).pathname;
 const files = [
   ...readdirSync(`${srcDir}multistep`).filter((name) => name.endsWith(".ts")).map((name) => `src/multistep/${name}`),
-  ...readdirSync(`${srcDir}bundle`).filter((name) => name.endsWith(".ts")).map((name) => `src/bundle/${name}`),
+  ...readdirSync(`${srcDir}capture/bundle`).filter((name) => name.endsWith(".ts")).map((name) => `src/capture/bundle/${name}`),
 ];
 
 const LITERAL = /"(MULTISTEP|MULTIPLE)_[A-Z_]+"/g;

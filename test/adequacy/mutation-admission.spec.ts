@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import test from "node:test";
 
-import { loadBundle } from "../../src/bundle/load.ts";
+import { loadBundle } from "../../src/capture/bundle/load.ts";
 import { emptyExecutionCost, type ExperimentExecutor, type ObservationValue } from "../../src/types.ts";
 import { verify } from "../../src/verify.ts";
 

@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { buildManifest, detectFailurePoint, detectTargetResolution, expectedReceived, failingTestOf, findOverlappingRuns, groupErrorMatches, rcaFit, rcaIsStale, rcaMentionsReceived, resultErrors, runOutcome, summarizeErrorMessage, specLocation, type ManifestInputs } from "../../src/bundle/manifest.ts";
-import { classifyRca } from "../../src/bundle/rca-mode.ts";
-import { traceZipToHar } from "../../src/trace/trace-to-har.ts";
+import { buildManifest, detectFailurePoint, detectTargetResolution, expectedReceived, failingTestOf, findOverlappingRuns, groupErrorMatches, rcaFit, rcaIsStale, rcaMentionsReceived, resultErrors, runOutcome, summarizeErrorMessage, specLocation, type ManifestInputs } from "../../src/capture/bundle/manifest.ts";
+import { classifyRca } from "../../src/capture/bundle/rca-mode.ts";
+import { traceZipToHar } from "../../src/capture/trace/trace-to-har.ts";
 import { fakeTraceZip } from "../helpers/fake-trace.ts";
-import type { ChecklyCheck, CheckResultSummary, ErrorGroup, RootCauseAnalysis } from "../../src/checkly/types.ts";
+import type { ChecklyCheck, CheckResultSummary, ErrorGroup, RootCauseAnalysis } from "../../src/capture/checkly/types.ts";
 import { CHECK } from "../helpers/fixtures.ts";
 
 const BASE = "https://slots.example.test";

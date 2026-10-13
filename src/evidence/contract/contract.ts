@@ -4,9 +4,9 @@
 // the diff for weakened/removed/guarded core-path assertions, and verifies
 // envAssumptions + the reproduction-determinism gate (PR-7).
 
-import type { Assertion, AssertionInventory, Bundle, EvidenceRow, Scene, SceneType } from "../types.ts";
-import { parseMultiStepProject } from "../multistep/source.ts";
-import { repairedBookingSubject } from "../multistep/repair.ts";
+import type { Assertion, AssertionInventory, Bundle, EvidenceRow, Scene, SceneType } from "../../types.ts";
+import { parseMultiStepProject } from "../../multistep/source.ts";
+import { repairedBookingSubject } from "../../multistep/repair.ts";
 import { parseProjectInventory, inventoryDiff, type InventoryDiff } from "../assertion/inventory.ts";
 
 export interface ContractReport {

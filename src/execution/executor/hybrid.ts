@@ -6,7 +6,7 @@
 
 import { ChecklyCliExecutor, type ChecklyCliExecutorOptions } from "./checkly-cli.ts";
 import { SceneExecutor, type SceneExecutorOptions } from "./scene.ts";
-import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExecutor, type RunContext, type Scene, type SceneObservation } from "../types.ts";
+import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExecutor, type RunContext, type Scene, type SceneObservation } from "../../types.ts";
 
 export interface HybridExecutorOptions extends Omit<SceneExecutorOptions, "target"> {
   target: string | null;

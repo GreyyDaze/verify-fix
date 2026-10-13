@@ -6,8 +6,8 @@
 // prints exactly the operations a live run would perform. The definitive live
 // proof is a build-time task once credentials exist (prod PRD §11.2).
 
-import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExecutor, type Scene, type SceneObservation, type TraceStep } from "../types.ts";
-import { sceneExpected } from "../contract/contract.ts";
+import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExecutor, type Scene, type SceneObservation, type TraceStep } from "../../types.ts";
+import { sceneExpected } from "../../evidence/contract/contract.ts";
 
 const API_BASE = process.env.CHECKLY_API_BASE ?? "https://api.checklyhq.com/v1";
 

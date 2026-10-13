@@ -8,10 +8,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseMultiStepProject, parseMultiStepScript } from "../../src/multistep/source.ts";
 import { evaluateMultiStepPolicy } from "../../src/multistep/policy.ts";
-import { parseProjectInventory } from "../../src/assertion/inventory.ts";
-import { assertionId } from "../../src/assertion/id.ts";
+import { parseProjectInventory } from "../../src/evidence/assertion/inventory.ts";
+import { assertionId } from "../../src/evidence/assertion/id.ts";
 import { deployedMultiStepProblem } from "../../src/multistep/identity.ts";
-import type { ChecklyCheck } from "../../src/checkly/types.ts";
+import type { ChecklyCheck } from "../../src/capture/checkly/types.ts";
 
 const web = fileURLToPath(new URL("../../examples/slots-booking/web/", import.meta.url));
 const constructSource = readFileSync(`${web}checks/multistep-booking.check.ts`, "utf8");

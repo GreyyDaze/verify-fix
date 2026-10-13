@@ -12,13 +12,13 @@ import { join } from "node:path";
 import { execSync, spawnSync } from "node:child_process";
 import { runMultiStepSandbox, resolvePlaywrightCli } from "../../src/multistep/executor.ts";
 import { buildMultiStepRecording, readMultiStepAssets, MECHANICS_ONLY_NOTE } from "../../src/multistep/capture.ts";
-import { buildBundle } from "../../src/bundle/build.ts";
-import { loadBundle } from "../../src/bundle/load.ts";
+import { buildBundle } from "../../src/capture/bundle/build.ts";
+import { loadBundle } from "../../src/capture/bundle/load.ts";
 import { buildReport } from "../../src/report/report.ts";
 import { emptyExecutionCost } from "../../src/types.ts";
-import type { ContractReport } from "../../src/contract/contract.ts";
-import type { ChecklyClient } from "../../src/checkly/client.ts";
-import type { CheckResult, CheckResultSummary } from "../../src/checkly/types.ts";
+import type { ContractReport } from "../../src/evidence/contract/contract.ts";
+import type { ChecklyClient } from "../../src/capture/checkly/client.ts";
+import type { CheckResult, CheckResultSummary } from "../../src/capture/checkly/types.ts";
 import { writeZip } from "../helpers/zip-writer.ts";
 import {
   FAKE_ACCOUNT,

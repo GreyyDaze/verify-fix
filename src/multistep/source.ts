@@ -17,9 +17,9 @@
 
 import path from "node:path";
 import ts from "typescript";
-import { assertionId, normalizeSubject } from "../assertion/id.ts";
-import { isKnownMatcher } from "../assertion/classify.ts";
-import { stripComments } from "../assertion/inventory.ts";
+import { assertionId, normalizeSubject } from "../evidence/assertion/id.ts";
+import { isKnownMatcher } from "../evidence/assertion/classify.ts";
+import { stripComments } from "../evidence/assertion/inventory.ts";
 import { multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_BYTES } from "./files.ts";
 import { knownRoute, MULTISTEP_ROUTES, MULTISTEP_STEP_TITLES, type MultiStepRoute } from "./routes.ts";
 

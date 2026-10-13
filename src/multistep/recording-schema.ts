@@ -9,7 +9,7 @@ import { MULTISTEP_ROUTES, MULTISTEP_STEP_TITLES, type MultiStepRoute } from "./
 import type { MultiStepCapture } from "./normalize.ts";
 import { multiStepSourcePath } from "./files.ts";
 import { multiStepShapeProblems } from "./shape.ts";
-import { assertionId } from "../assertion/id.ts";
+import { assertionId } from "../evidence/assertion/id.ts";
 
 function obj(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;

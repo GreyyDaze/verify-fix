@@ -15,7 +15,7 @@
 // Nothing here reads the check code; code-side dodges (hardcoded account,
 // generated account) stay in executor/scene detectEnvScopeDodge.
 
-import { stripComments } from "../assertion/inventory.ts";
+import { stripComments } from "../../evidence/assertion/inventory.ts";
 
 export interface CheckConfigView {
   runParallel: boolean | null;

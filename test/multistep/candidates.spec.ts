@@ -50,7 +50,7 @@ function model(spec: string) {
 }
 
 /** Counted (step, subject, matcher, target, negated) tuples, matching the
- *  identity law src/contract/contract.ts uses for Multistep. */
+ *  identity law src/evidence/contract/contract.ts uses for Multistep. */
 function tuples(m: typeof GOOD_MODEL): string[] {
   return (m.script?.assertions ?? []).map((a) =>
     JSON.stringify([a.stepTitle, a.id, a.subject, a.matcher, a.target, a.negated]));

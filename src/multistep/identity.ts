@@ -3,8 +3,8 @@
 // or from a result's human-readable name. The executed construct, its exact
 // entrypoint, deployed Checkly check, and its effective configuration must
 // all describe the same transaction before a remote recording can be bound.
-import type { ChecklyCheck } from "../checkly/types.ts";
-import type { ManifestV3 } from "../bundle/types.ts";
+import type { ChecklyCheck } from "../capture/checkly/types.ts";
+import type { ManifestV3 } from "../capture/bundle/types.ts";
 import type { MultiStepSourceModel } from "./source.ts";
 import { isSyntacticallyValidRegion } from "./trusted-scope.ts";
 

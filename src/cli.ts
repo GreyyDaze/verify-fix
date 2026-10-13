@@ -9,10 +9,10 @@
 
 import { readFileSync, existsSync, lstatSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadBundle } from "./bundle/load.ts";
+import { loadBundle } from "./capture/bundle/load.ts";
 import { verify } from "./verify.ts";
-import { SceneExecutor } from "./executor/scene.ts";
-import { HybridExecutor } from "./executor/hybrid.ts";
+import { SceneExecutor } from "./execution/executor/scene.ts";
+import { HybridExecutor } from "./execution/executor/hybrid.ts";
 import { loadCandidateRevision, loadPatch } from "./candidate/patch.ts";
 import {
   assertPullRequestStillCurrent,
@@ -22,17 +22,17 @@ import {
   snapshotPullRequestCandidate,
   type CandidateRevision,
 } from "./candidate/revision.ts";
-import { parseEnvFile } from "./sandbox/env.ts";
+import { parseEnvFile } from "./execution/sandbox/env.ts";
 import { measureLocalDeterminism } from "./cli/measure-local.ts";
 import { buildCostMatrix, costMatrixMarkdown } from "./report/cost.ts";
 import { initConfirmation, mergePackageScripts, planInit } from "./cli/init.ts";
 import { mkdirSync, statSync } from "node:fs";
 
 const isFile = (path: string): boolean => { try { return statSync(path).isFile(); } catch { return false; } };
-import { resolveCredentials, CREDENTIALS_HELP } from "./checkly/credentials.ts";
-import { ChecklyClient, ChecklyApiError } from "./checkly/client.ts";
-import { buildBundle } from "./bundle/build.ts";
-import type { BodyPolicy } from "./trace/trace-to-har.ts";
+import { resolveCredentials, CREDENTIALS_HELP } from "./capture/checkly/credentials.ts";
+import { ChecklyClient, ChecklyApiError } from "./capture/checkly/client.ts";
+import { buildBundle } from "./capture/bundle/build.ts";
+import type { BodyPolicy } from "./capture/trace/trace-to-har.ts";
 import type { ExitCode } from "./types.ts";
 
 const TOOL_VERSION = "0.1.0";

@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assessSiblingImpact, isProjectWideFile, monitorInventory } from "../../src/protected/sibling-impact.ts";
+import { assessSiblingImpact, isProjectWideFile, monitorInventory } from "../../src/policy/sibling-impact.ts";
 
 const API = "api-1";
 const BROWSER = "browser-1";

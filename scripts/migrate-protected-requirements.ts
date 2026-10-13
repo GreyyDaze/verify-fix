@@ -22,12 +22,12 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { buildProtectedRequirements, sealProtectedRequirements, type ProtectedRequirementsInput, type ResolvedPolicyValue } from "../src/protected/requirements.ts";
+import { buildProtectedRequirements, sealProtectedRequirements, type ProtectedRequirementsInput, type ResolvedPolicyValue } from "../src/policy/requirements.ts";
 import { parseApiCheckProject } from "../src/api/model.ts";
 import { parseMultiStepProject } from "../src/multistep/source.ts";
-import { resolveEffectivePlaywrightModel } from "../src/protected/playwright-model.ts";
-import { resolveCredentials } from "../src/checkly/credentials.ts";
-import { ChecklyClient } from "../src/checkly/client.ts";
+import { resolveEffectivePlaywrightModel } from "../src/policy/playwright-model.ts";
+import { resolveCredentials } from "../src/capture/checkly/credentials.ts";
+import { ChecklyClient } from "../src/capture/checkly/client.ts";
 
 const BUNDLES = [
   "fixtures/bundles/slots-booking-overlap",

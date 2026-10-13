@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
-import { buildBundle } from "../src/bundle/build.ts";
-import { loadBundle } from "../src/bundle/load.ts";
-import { resolveCredentials } from "../src/checkly/credentials.ts";
-import { ChecklyClient, ChecklyApiError } from "../src/checkly/client.ts";
+import { buildBundle } from "../src/capture/bundle/build.ts";
+import { loadBundle } from "../src/capture/bundle/load.ts";
+import { resolveCredentials } from "../src/capture/checkly/credentials.ts";
+import { ChecklyClient, ChecklyApiError } from "../src/capture/checkly/client.ts";
 import { loadPatch } from "../src/candidate/patch.ts";
 
 const execFileAsync = promisify(execFile);

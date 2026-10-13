@@ -140,7 +140,7 @@ values openly and do not claim cloud provenance for them.
 
 **Local first**
 
-1. Nothing to build. `--measure N` exists (`src/bundle/measure.ts`) and Phase 1
+1. Nothing to build. `--measure N` exists (`src/capture/bundle/measure.ts`) and Phase 1
    ran it live. Confirm the golden tests still pass against both existing
    bundles before re-capturing, so any diff is attributable to the re-measure.
 
@@ -200,7 +200,7 @@ Blocker: the gate computes but cannot block. Default is `shadow`.
 
    The 0-run cases are the important ones: they prove the static gate fires
    before any browser or cloud execution.
-3. Assert `src/assertion/id.ts` and `src/decision/decision.ts` are byte-unchanged
+3. Assert `src/evidence/assertion/id.ts` and `src/decision/decision.ts` are byte-unchanged
    (9.x forbids altering the assertion identity or the verdict law).
 
 **Then real account**
@@ -334,7 +334,7 @@ stay in the learner's environment. Rocky Automatic Repair stays off.
   projects and then through a real account-backed workshop.
 - Every phase row in §1 reads Done in all three evidence columns.
 - `npm test` green, `npm run typecheck` clean, root and example builds pass.
-- `src/assertion/id.ts` and `src/decision/decision.ts` unchanged throughout.
+- `src/evidence/assertion/id.ts` and `src/decision/decision.ts` unchanged throughout.
 
 ## 7. Standing rules
 

@@ -6,7 +6,7 @@
 //     (two requests that carried the same token still look alike) without
 //     revealing the value.
 
-import { fnv1a } from "../assertion/id.ts";
+import { fnv1a } from "../../evidence/assertion/id.ts";
 import type { Har, HarEntry, HarHeader } from "../trace/har-types.ts";
 
 const SECRET_HEADERS = new Set([

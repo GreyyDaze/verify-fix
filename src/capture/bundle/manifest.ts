@@ -2,20 +2,20 @@
 // written. No network, no filesystem: everything here is unit-testable and
 // deterministic for the same inputs.
 
-import { parseInventory, parseProjectInventory } from "../assertion/inventory.ts";
-import { fnv1a } from "../assertion/id.ts";
-import type { ApiRecording, AssertionInventory } from "../types.ts";
+import { parseInventory, parseProjectInventory } from "../../evidence/assertion/inventory.ts";
+import { fnv1a } from "../../evidence/assertion/id.ts";
+import type { ApiRecording, AssertionInventory } from "../../types.ts";
 import type { ChecklyCheck, CheckResult, CheckResultSummary, ErrorGroup, PlaywrightResultError, RootCauseAnalysis } from "../checkly/types.ts";
 import { stripAnsi, type TraceExtract } from "../trace/trace-to-har.ts";
 import type { HarEntry } from "../trace/har-types.ts";
 import { envVarNamesOnly } from "./sanitize.ts";
 import { classifyRca } from "./rca-mode.ts";
-import { parseApiCheckProject } from "../api/model.ts";
-import type { MultiStepCapture } from "../multistep/normalize.ts";
-import { parseMultiStepScript } from "../multistep/source.ts";
-import { MULTISTEP_DETECTION_MODE } from "../scene/modes.ts";
+import { parseApiCheckProject } from "../../api/model.ts";
+import type { MultiStepCapture } from "../../multistep/normalize.ts";
+import { parseMultiStepScript } from "../../multistep/source.ts";
+import { MULTISTEP_DETECTION_MODE } from "../../execution/scene/modes.ts";
 import type { MeasureResult } from "./measure.ts";
-import type { ProtectedPolicyEnvelope } from "../protected/requirements.ts";
+import type { ProtectedPolicyEnvelope } from "../../policy/requirements.ts";
 import type { DeterminismV3, FailurePoint, ManifestV3, OverlappingRun, ResultRef, SceneV3 } from "./types.ts";
 
 export interface FetchedResult {

@@ -181,7 +181,7 @@ outcome points at either a recorded run or a line of code.
 An assertion is only useful if some realistic breakage would make it fail.
 `expect(x).toBe(200)` is falsifiable; `expect(x).toBeDefined()` or
 `toBeGreaterThanOrEqual(0)` on an HTTP status is not (a 500 is defined and ≥ 0).
-`src/assertion/classify.ts` is a table classifying every matcher as
+`src/evidence/assertion/classify.ts` is a table classifying every matcher as
 `exact` (falsifiable) or `property` (usually not). The code calls the
 non-falsifiable family the "weak assertions" weakness class.
 
@@ -237,7 +237,7 @@ is the instrumented `fetch` trace (`simHits`); a run without it is classified
 ### 3.8 Stable assertion identity (FNV-1a)
 Three parties must agree on "which assertion is this": the static scanner (sees
 source text), the runtime DSL (sees values), and the manifest (names oracles by
-id). `src/assertion/id.ts` hashes `matcher|target` with FNV-1a (a tiny,
+id). `src/evidence/assertion/id.ts` hashes `matcher|target` with FNV-1a (a tiny,
 non-cryptographic 32-bit hash) and prefixes `assert:`. The subject is
 deliberately dropped from the key because the scanner sees `login.status`
 whereas the runtime sees `200`; collisions between assertions with the same
@@ -338,9 +338,9 @@ served by the parent.
 
 ## 5. Code tour — file by file
 
-Layout is organized by responsibility. Only the two entry points and the shared
-vocabulary live at the root of `src/`; everything else sits in the folder that
-owns it.
+Layout is organized by PIPELINE STAGE, so every folder name answers one
+question: what job does this code do? Only the two entry points and the shared
+vocabulary live at the root of `src/`.
 
 ```
 bin/verify-fix                 executable shim → src/cli.ts, else dist/cli.js
@@ -350,79 +350,40 @@ src/
   verify.ts                    ENTRY POINT — orchestrator (the pipeline above)
   types.ts                     shared vocabulary (Bundle, Scene, SceneObservation, Decision…)
 
-  bundle/                      the incident bundle: capture, schema, loading
-    load.ts                    loads manifest.json + the original check source
-    build.ts                   `bundle` command — Checkly API → sanitized files on disk
-    manifest.ts                v3 manifest builder (pure function of what was fetched)
-    types.ts                   ManifestV3 schema
-    measure.ts                 --measure N: real determinism numbers
-    rca-mode.ts                REPRODUCTION mode derived from Rocky's RCA text
-    sanitize.ts                credential policy for everything written out
+  capture/                     GETTING EVIDENCE OUT OF CHECKLY
+    bundle/                    load, build, manifest, types, measure, rca-mode, sanitize
+    checkly/                   the Public API boundary: client, credentials, types
+    trace/                     Playwright .trace → HAR
+    archive/                   a bounded dependency-free ZIP reader (trace + asset archives)
 
-  checkly/                     the Checkly Public API boundary
-    client.ts                  thin client; bounded requests; check/check-result/asset calls
-    credentials.ts             reads CHECKLY_API_KEY or the Checkly CLI login (never prints)
-    types.ts                   API response shapes
+  evidence/                    UNDERSTANDING THE CAPTURED EVIDENCE
+    assertion/                 id (FNV-1a of "matcher|target"), classify, inventory scanner
+    contract/contract.ts       provenance + inventory diff + static gates (the oracle)
+    adequacy/                  adequacy.ts (oracle_strength) + mutation.ts (seeded mutants)
 
-  candidate/                   what is being verified
-    revision.ts                immutable snapshot of a local tree or a GitHub PR head SHA
-    check-identity.ts          stable logical-ID matching for a complete project state
-    patch.ts                   loads the candidate monitoring tree (file or directory)
+  execution/                   RUNNING THE CANDIDATE CHECK
+    scene/                     proxy.ts (the only place a scene shapes traffic), modes,
+                               config-diff
+    sandbox/                   runner, check-api (the DSL), playwright-sandbox,
+                               checkly-sandbox, env (the ENVIRONMENT_URL contract)
+    executor/                  scene, checkly, checkly-cli, hybrid
 
-  assertion/                   assertion identity and static scanning
-    id.ts                      FNV-1a of "matcher|target" (shared by scanner and runtime DSL)
-    classify.ts                matcher → exact/property, falsifiable?
-    inventory.ts               regex scanner for expect() calls, steps, try/catch guards
-
-  contract/contract.ts         provenance + inventory diff + static gates
-  adequacy/                    is the oracle strong enough to trust?
-    adequacy.ts                oracle_strength and weakness scan
-    mutation.ts                seeded mutants of the candidate
-
-  scene/                       how a scene puts the target into a state
-    proxy.ts                   THE only place a scene shapes traffic
-    modes.ts                   live / live-concurrent:N / replay:<har> / inject:…
-    config-diff.ts             config diff + scheduling policy
-
-  executor/                    what runs each scene
-    scene.ts                   local scene executor (proxy + sandbox)
-    checkly-cli.ts             remote executor via the customer's own `checkly test`
-    hybrid.ts                  REPRODUCTION/DETECTION local; HEALTHY/REGRESSION on Checkly
-    checkly.ts                 direct Checkly API executor (dry-run without a key)
-
-  sandbox/                     running candidate code in isolation
-    check-api.ts               the sandbox DSL: check(), expect(), runCollected()
-    runner.ts                  runs a patch in a child process, parses its JSON outcome
-    playwright-sandbox.ts      runs a captured Playwright check unmodified
-    checkly-sandbox.ts         runs a DSL check through the Checkly CLI
-    env.ts                     the ENVIRONMENT_URL contract for any run
-
-  protected/                   Phase 9 protected guarantees
+  policy/                      RULES THE CANDIDATE MUST NOT BREAK
     requirements.ts            the sealed policy envelope + per-check-type adapters
     playwright-model.ts        effective Playwright model from the bundle's own evidence
     sibling-impact.ts          which other monitors a changed file can move (9.10)
 
-  multistep/                   MultiStepCheck support (the largest area)
-    source.ts                  construct + source modelling (the static half)
-    normalize.ts               real Checkly/Playwright result → normalized capture
-    capture.ts  binding.ts     recording drafts and remote finalization
-    identity.ts                derived regions/env-key names; deployed-config agreement
-    policy.ts                  static policy for Multistep candidates
-    transaction.ts             cross-step account/slot/version/token relationships
-    sanitize.ts                values-free recording
-    shape.ts                   one admission rule for every evidence kind
-    executor.ts                the Multistep transaction executor adapter
-    …                          accounts, detection, rebind, routes, trusted-scope, …
+  candidate/                   WHAT IS BEING VERIFIED
+    revision.ts                immutable snapshot of a local tree or a GitHub PR head SHA
+    check-identity.ts          stable logical-ID matching for a complete project state
+    patch.ts                   loads the candidate monitoring tree (file or directory)
 
-  api/                         ApiCheck support (model, policy, recording, executor, setup)
+  api/                         ApiCheck vertical slice (model, policy, recording, executor)
+  multistep/                   MultiStepCheck vertical slice (23 modules)
   decision/decision.ts         THE verdict law — no LLM, an ordered table
-  report/report.ts             markdown + json report
-  report/cost.ts               cost aggregation across verification reports
-  cli/init.ts                  `verify-fix init`
-  cli/measure-local.ts         local determinism measurement for an existing bundle
-  trace/                       Playwright .trace → HAR
-  archive/                     a bounded dependency-free ZIP reader (trace + asset archives)
+  report/                      report.ts + cost.ts
 
+  cli/                         init.ts, measure-local.ts
 fixtures/bundles/              committed, sanitized incident fixtures
 incidents/                     real captured Checkly incidents
 test/                          node:test suites, mirroring src/ by responsibility
@@ -447,12 +408,12 @@ docs/PROJECT-GUIDE.md          this document
   `runScene(bundle, patchSource, scene)`, `isLive()`, `costReport()`,
   `budgetExhausted`, `nondeterministicScenes`.
 
-### 5.2 `src/bundle/load.ts` — loading an incident
+### 5.2 `src/capture/bundle/load.ts` — loading an incident
 `loadBundle(dir)` reads `manifest.json`, insists on `schemaVersion: "v2"`,
 reads `check/<bundle.check.file>` into `bundle.checkSource`, and returns
 `appSimPath` if `app-sim.ts` exists (null otherwise → Checkly executor).
 
-### 5.3 `src/assertion/id.ts` — identity
+### 5.3 `src/evidence/assertion/id.ts` — identity
 ```ts
 assertionKey(_subject, matcher, target) = `${matcher}|${normalize(target)}`
 assertionId(...) = "assert:" + fnv1a(key)   // e.g. toBe|200 → assert:157dab33
@@ -460,13 +421,13 @@ assertionId(...) = "assert:" + fnv1a(key)   // e.g. toBe|200 → assert:157dab33
 This file is copied verbatim into the sandbox so the runtime and the scanner
 hash identically. Do not change it without regenerating manifests.
 
-### 5.4 `src/assertion/classify.ts` — matcher table
+### 5.4 `src/evidence/assertion/classify.ts` — matcher table
 A lookup table: `toBe/toEqual/toContainText/toHaveLength/…` are `exact` and
 falsifiable; `toBeDefined/toBeTruthy/toBeGreaterThan(OrEqual)/toBeLessThan/…` are
 `property` and not falsifiable. `isWeakMatcher`, `isFalsifiable(matcher, target)`
 are the two predicates the rest of the code uses.
 
-### 5.5 `src/assertion/inventory.ts` — the static scanner
+### 5.5 `src/evidence/assertion/inventory.ts` — the static scanner
 - `stripComments(source)` blanks `//` and `/* */` comments while keeping every
   line break (line numbers stay stable) and respecting string/template literals
   (so `"http://…"` survives). A commented-out `expect()` is not an assertion.
@@ -485,7 +446,7 @@ are the two predicates the rest of the code uses.
   reports `removed` (in original, not in patch), `weakened` (was falsifiable,
   now not), `added`, `changedTarget`, `flowChanged`.
 
-### 5.6 `src/contract/contract.ts` — the static engine
+### 5.6 `src/evidence/contract/contract.ts` — the static engine
 `buildContract(bundle, patchedSource)` returns a `ContractReport`:
 - `provenanceViolations` — scenes whose verdict provenance is not
   `recorded`(with runId+artifactId) or `code`(with `assert:` id);
@@ -498,7 +459,7 @@ are the two predicates the rest of the code uses.
 - `rows` — one per scene with `expected` from `mustFail` and `observed:
   "uncertain"` until an executor fills it in.
 
-### 5.7 `src/sandbox/check-api.ts` — the DSL the check runs against
+### 5.7 `src/execution/sandbox/check-api.ts` — the DSL the check runs against
 This file is copied into the sandbox and is what `import { check, expect }
 from "./check-api.ts"` resolves to (`sandbox.remapImports` also maps
 `@checkly/playwright` / `@checkly/cli` here so a real check file runs unmodified).
@@ -521,7 +482,7 @@ from "./check-api.ts"` resolves to (`sandbox.remapImports` also maps
   where `results[i] = { name, passed, error, trace, runCount, runs, simHits,
   assertionCount }`. `passed` is only true when `simHits > 0` and the run held.
 
-### 5.8 `src/sandbox/runner.ts` — running the patch in isolation
+### 5.8 `src/execution/sandbox/runner.ts` — running the patch in isolation
 `runSandbox(checkSource, { baseUrl, account, concurrentRuns, timeoutMs, seed })`:
 1. `mkdtemp(verify-fix-sandbox-*)`;
 2. write `check.ts` (the patch, imports remapped), `id.ts`, `check-api.ts`
@@ -542,7 +503,7 @@ from "./check-api.ts"` resolves to (`sandbox.remapImports` also maps
    `passed = !vacuous && every result passed`;
 6. always removes the temp dir.
 
-### 5.9 `src/executor/scene.ts` — the local scene executor
+### 5.9 `src/execution/executor/scene.ts` — the local scene executor
 The synthetic executor was replaced in Phase 3: there is no simulator any more.
 A real preview supplies all application behavior, and the scene executor decides
 what the target is allowed to see.
@@ -551,7 +512,7 @@ what the target is allowed to see.
 1. budget: `budgetFor(bundle) = option ?? bundle.runBudget.maxPerScene ?? 10`;
    if this scene's runs are exhausted → `uncertain("run budget exhausted")` and
    `budgetExhausted = true`;
-2. the scene mode is armed on the proxy (see `src/scene/proxy.ts`) — a real
+2. the scene mode is armed on the proxy (see `src/execution/scene/proxy.ts`) — a real
    target, a recorded HAR, or an injected failure;
 3. each repetition runs the candidate through the sandbox that its check type
    implies: a Playwright check via `runPlaywrightSandbox`, a DSL check via
@@ -561,7 +522,7 @@ what the target is allowed to see.
 5. repetitions disagree → `nondeterministicScenes.push(id)`;
 6. otherwise `{ observed, repetitions, trace, source: "scene" }`.
 
-### 5.10 `src/executor/checkly.ts` — the production executor
+### 5.10 `src/execution/executor/checkly.ts` — the production executor
 Same interface against Checkly's API: `PUT /v1/check-checks/<id>` (deploy the
 patched script with env `APP_BASE_URL`, `APP_SCENE`), `POST …/runs`, `GET
 /v1/check-results/<id>` → `successful` → pass/fail, with the result's assertion
@@ -569,7 +530,7 @@ list mapped into the trace. Without `CHECKLY_API_KEY` (or with `--dry-run`) it
 only logs the operations and reports every scene `uncertain` ("no live run was
 performed"). The route shapes have not been exercised against a live account.
 
-### 5.11 `src/adequacy/mutation.ts` — seeded mutants
+### 5.11 `src/evidence/adequacy/mutation.ts` — seeded mutants
 `seedMutants(patch, file)` takes the falsifiable `exact` assertions of the
 candidate and builds up to four mutants:
 - `mut-op-<id>` (operator family) for the first and second strong assertion:
@@ -580,7 +541,7 @@ candidate and builds up to four mutants:
   `await expect(subject).toBeDefined();`.
 Each mutant is a full alternative source text.
 
-### 5.12 `src/adequacy/adequacy.ts` — oracle strength
+### 5.12 `src/evidence/adequacy/adequacy.ts` — oracle strength
 Computes the four factors of §3.5, the `WeaknessScan` (`insufficientInputSpace`,
 `partialPathCoverage`, `weakAssertions[]`, `missingEnvContext[]`, mutant names)
 and human-readable `blockers`. Pure function of contract + observations + mutant
@@ -894,12 +855,12 @@ verify-fix bundle --check <checkId> --out ./bundle --project examples/slots-book
 3. For both: `GET /v1/check-results/{id}/{resultId}` + `…/assets?type=trace`,
    then the trace zip is downloaded from the presigned URL — **without** the
    auth headers (they are attached only to `api.checklyhq.com`).
-4. `src/trace/trace-to-har.ts`: the Playwright trace zip is parsed in memory
-   (`src/archive/zip.ts`, STORE + DEFLATE): `*.network` lines become HAR 1.2
+4. `src/capture/trace/trace-to-har.ts`: the Playwright trace zip is parsed in memory
+   (`src/capture/archive/zip.ts`, STORE + DEFLATE): `*.network` lines become HAR 1.2
    entries, bodies are inlined from `resources/<sha1>`, `*.trace`
    before/after events become an action list with the failing step and its
    error message. Traces from several files (one per test) are merged by time.
-5. `src/bundle/sanitize.ts`: authorization/cookie/set-cookie/api-key headers,
+5. `src/capture/bundle/sanitize.ts`: authorization/cookie/set-cookie/api-key headers,
    secret-looking query params and JSON fields (`token`, `password`,
    `secret`, `authorization`, …) are replaced by `REDACTED(<fnv1a>)` — same
    input → same tag, so two runs stay comparable while the value is gone.
@@ -907,12 +868,12 @@ verify-fix bundle --check <checkId> --out ./bundle --project examples/slots-book
    `errorGroupIds`) and Rocky RCA (`rootCauseAnalyses[0]`, or
    `POST /v1/root-cause-analyses/error-groups/{id}` with `--trigger-rca`,
    polled while it answers 202).
-7. `src/bundle/rca-mode.ts` maps the RCA text to a REPRODUCTION mode with a
+7. `src/capture/bundle/rca-mode.ts` maps the RCA text to a REPRODUCTION mode with a
    fixed rule table (no model in the loop): race / parallel / session-superseded
    → `live-concurrent:2`; selector / changed response / status code → 
    `replay:failing.har`; no match → `both` (primary live-concurrent, alternative
    replay). The matched rule and text are recorded so anyone can audit the choice.
-8. `src/bundle/manifest.ts` (pure function) builds `manifest.json` v3:
+8. `src/capture/bundle/manifest.ts` (pure function) builds `manifest.json` v3:
    incident, check facts, target resolution (`code` when the spec reads
    `ENVIRONMENT_URL`, `handlebars` for `{{ENVIRONMENT_URL}}` in API checks,
    else `unknown`), the failure point (last failed same-origin API call in the
@@ -920,12 +881,12 @@ verify-fix bundle --check <checkId> --out ./bundle --project examples/slots-book
    `healthy-live` (`live`, must pass, provenance = passing result id),
    `reproduction` (RCA mode, must pass, provenance = failing result id),
    `detection` (`inject:<METHOD path -> status>`, must fail) — the assertion
-   inventory of the real spec (`src/assertion/inventory.ts` now reads nested
+   inventory of the real spec (`src/evidence/assertion/inventory.ts` now reads nested
    subjects such as `expect(page.getByTestId('x'))`), environment assumptions
    (locations, `runParallel`, shared `TEST_USER`), determinism from history and
    from `--measure`, and provenance (hashed account id, result ids, asset
    sha256, every API call made).
-9. `src/bundle/build.ts` writes the directory after a last guard: if any file
+9. `src/capture/bundle/build.ts` writes the directory after a last guard: if any file
    would contain an env var value longer than seven characters, the build
    refuses to write.
 
@@ -947,14 +908,14 @@ bundle/
 ```
 
 The bundle is consumed by `verify` from Phase 3 on, which loads this v3
-manifest directly (`src/bundle/load.ts`). The only fields a person may still edit
+manifest directly (`src/capture/bundle/load.ts`). The only fields a person may still edit
 by hand are noted in the README of the bundle; every scene carries the result
 id it came from, so nothing in it has to be trusted on faith.
 
 ### Files
 
-`src/checkly/{client,credentials,types}.ts`, `src/trace/{zip,har-types,trace-to-har}.ts`,
-`src/bundle/{build,manifest,measure,rca-mode,sanitize,types}.ts`, CLI in `src/cli.ts`;
+`src/capture/checkly/{client,credentials,types}.ts`, `src/capture/trace/{zip,har-types,trace-to-har}.ts`,
+`src/capture/bundle/{build,manifest,measure,rca-mode,sanitize,types}.ts`, CLI in `src/cli.ts`;
 tests in `test/bundle/*.spec.ts` with a real ZIP writer and a fake Checkly served
 over local HTTP (`test/bundle/cli-http.spec.ts`).
 
@@ -966,15 +927,15 @@ removed that. Read those sections for the static engine, the DSL, the
 sandbox, the decision law and the report — they are unchanged — and read this
 section for how a scene is run now.
 
-**What runs the check now.** `src/executor/scene.ts` (`SceneExecutor`, kind
-`scene`). For every scene it arms `src/scene/proxy.ts` and starts one sandbox
+**What runs the check now.** `src/execution/executor/scene.ts` (`SceneExecutor`, kind
+`scene`). For every scene it arms `src/execution/scene/proxy.ts` and starts one sandbox
 per concurrent run. The check talks to `ENVIRONMENT_URL`; that is the proxy.
 The proxy forwards to the real target (`--target`), answers from a recording,
 or injects one failure. Nothing models the app any more; the target is the
 customer's app (locally `next start` of `examples/slots-booking/web`, or a
 staging URL).
 
-**The four modes** (`src/scene/modes.ts`, written into each scene's `mode`):
+**The four modes** (`src/execution/scene/modes.ts`, written into each scene's `mode`):
 
 | mode | what the proxy does | needs `--target` |
 | --- | --- | --- |
@@ -1002,7 +963,7 @@ runs at the overlap the new schedule still allows.
 with zero hits, a vacuous run, a sandbox crash, a missing target, an unrunnable
 mode or disagreeing repetitions is `uncertain` — never pass, never fail.
 
-**Environment** (`src/sandbox/env.ts`): the sandbox receives only `PATH`,
+**Environment** (`src/execution/sandbox/env.ts`): the sandbox receives only `PATH`,
 `HOME`, `ENVIRONMENT_URL`, `ENVIRONMENT_NAME` (`--env-name`, default
 `verify-fix`), the variables from `--env-file` (KEY=VALUE, like `checkly test
 --env-file`) and the scene's own `env` (the regression scene uses
@@ -1012,7 +973,7 @@ line number. `APP_BASE_URL` no longer exists.
 
 **Patches** (`src/candidate/patch.ts`): `--patch <file>` replaces the bundle's main
 check file; `--patch <dir>` replaces every bundle file with the same relative
-path (spec, `checkly.config.ts`, both). `src/scene/config-diff.ts` compares
+path (spec, `checkly.config.ts`, both). `src/execution/scene/config-diff.ts` compares
 the two configs: scheduling keys are allowed and noted; a change that touches
 only `retryStrategy` / `doubleCheck` / timeouts is rejected as masking (retries
 next to a real change are only flagged, because the runner does not simulate
@@ -1045,8 +1006,8 @@ it now contains `live` and `inject:POST /api/book -> 500` directly.
 ## 9d. The Playwright runner — Phase 4
 
 **Selection.** A bundle whose main check is a `.spec.ts` or `.test.ts` file and
-whose manifest names a Playwright config uses `src/sandbox/playwright-sandbox.ts`.
-DSL checks still use `src/sandbox/runner.ts`.
+whose manifest names a Playwright config uses `src/execution/sandbox/playwright-sandbox.ts`.
+DSL checks still use `src/execution/sandbox/runner.ts`.
 
 **Files and dependency.** The runner creates a temporary directory. It copies
 every captured file under `check/`, then overlays every candidate file. This
@@ -1101,9 +1062,9 @@ assets. Vercel was not contacted.
 
 ## 9e. The live gate — Phase 5
 
-**Hybrid execution.** `src/executor/hybrid.ts` routes REPRODUCTION and
+**Hybrid execution.** `src/execution/executor/hybrid.ts` routes REPRODUCTION and
 DETECTION to the Phase 4 scene proxy. It routes HEALTHY and REGRESSION to
-`src/executor/checkly-cli.ts`. The remote executor builds a clean temporary
+`src/execution/executor/checkly-cli.ts`. The remote executor builds a clean temporary
 project from dependency metadata plus candidate monitoring files. It invokes
 the customer's own `node_modules/.bin/checkly`. It runs
 `checkly test --record --reporter json --retries 0` once per required

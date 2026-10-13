@@ -3,31 +3,31 @@
 //
 // The patch may change the check code, the check config, or both. Code is
 // judged by the contract engine and the scenes; config by the config policy
-// (src/scene/config-diff.ts) and by the concurrency the scenes run at.
+// (src/execution/scene/config-diff.ts) and by the concurrency the scenes run at.
 
 import { createHash } from "node:crypto";
 import type { Bundle, BundleConfig, Decision, ExecutionCost, ExperimentExecutor, RunContext, Scene, SceneObservation } from "./types.ts";
-import { buildContract, type ContractReport } from "./contract/contract.ts";
-import { assessAdequacy, type MutantResult } from "./adequacy/adequacy.ts";
+import { buildContract, type ContractReport } from "./evidence/contract/contract.ts";
+import { assessAdequacy, type MutantResult } from "./evidence/adequacy/adequacy.ts";
 import { decide } from "./decision/decision.ts";
-import { seedMutants } from "./adequacy/mutation.ts";
+import { seedMutants } from "./evidence/adequacy/mutation.ts";
 import { buildReport, type Report } from "./report/report.ts";
-import { detectEnvScopeDodge, regionalUserKeys, SceneExecutor } from "./executor/scene.ts";
-import { assessSiblingImpact, monitorInventory } from "./protected/sibling-impact.ts";
-import { HybridExecutor } from "./executor/hybrid.ts";
+import { detectEnvScopeDodge, regionalUserKeys, SceneExecutor } from "./execution/executor/scene.ts";
+import { assessSiblingImpact, monitorInventory } from "./policy/sibling-impact.ts";
+import { HybridExecutor } from "./execution/executor/hybrid.ts";
 import { inlinePatch, newFiles, originalConfigSource, patchedAssets, patchedCheckSource, patchedConfig, patchedConfigSource, patchedFiles, type PatchSet } from "./candidate/patch.ts";
-import { applyConfigPolicy, diffCheckConfig, parseCheckConfig, type ConfigPolicy } from "./scene/config-diff.ts";
-import { checkEnv, type EnvCheck } from "./sandbox/env.ts";
+import { applyConfigPolicy, diffCheckConfig, parseCheckConfig, type ConfigPolicy } from "./execution/scene/config-diff.ts";
+import { checkEnv, type EnvCheck } from "./execution/sandbox/env.ts";
 import type { CandidateRevisionMetadata, CandidateTargetBinding } from "./candidate/revision.ts";
 import { evaluateApiPolicy, type ApiPolicyResult } from "./api/policy.ts";
 import { parseApiCheckProject } from "./api/model.ts";
 import { evaluateMultiStepPolicy, type MultiStepPolicyResult } from "./multistep/policy.ts";
 import { parseMultiStepProject } from "./multistep/source.ts";
 import { deriveRegionalAccountMapping } from "./multistep/region-account-mapping.ts";
-import { effectiveConcurrency, parseMode } from "./scene/modes.ts";
+import { effectiveConcurrency, parseMode } from "./execution/scene/modes.ts";
 import { multiStepDiskRebound } from "./multistep/rebind.ts";
-import { parseInventory, stripComments } from "./assertion/inventory.ts";
-import { compareProtectedRequirements, policyKnown, policyUnknown, type CandidateEffectiveRequirements, type ProtectedPolicyEnvelope, type ProtectedRequirementsComparison, type ResolvedPolicyValue } from "./protected/requirements.ts";
+import { parseInventory, stripComments } from "./evidence/assertion/inventory.ts";
+import { compareProtectedRequirements, policyKnown, policyUnknown, type CandidateEffectiveRequirements, type ProtectedPolicyEnvelope, type ProtectedRequirementsComparison, type ResolvedPolicyValue } from "./policy/requirements.ts";
 
 export const PR12_HEALTHY_RUNS = 5; // PR-12: ≥5 repeated healthy runs, else flake → UNCERTAIN
 

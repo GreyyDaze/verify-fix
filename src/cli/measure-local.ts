@@ -10,12 +10,12 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ManifestV3 } from "../bundle/types.ts";
+import type { ManifestV3 } from "../capture/bundle/types.ts";
 import type { Bundle, RunContext, Scene } from "../types.ts";
-import { SceneExecutor } from "../executor/scene.ts";
-import type { ProxyHit } from "../scene/proxy.ts";
-import { parseMode } from "../scene/modes.ts";
-import { bundleReadme } from "../bundle/build.ts";
+import { SceneExecutor } from "../execution/executor/scene.ts";
+import type { ProxyHit } from "../execution/scene/proxy.ts";
+import { parseMode } from "../execution/scene/modes.ts";
+import { bundleReadme } from "../capture/bundle/build.ts";
 
 export interface MeasurementRecord {
   checkPassed: boolean;

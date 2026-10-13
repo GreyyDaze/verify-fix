@@ -12,7 +12,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildManifest, dependencyOf, resultErrors, runOutcome } from "../../src/bundle/manifest.ts";
+import { buildManifest, dependencyOf, resultErrors, runOutcome } from "../../src/capture/bundle/manifest.ts";
 import { loadRealBundle } from "../helpers/real-bundle.ts";
 
 const { captured, failingResult, passingResult, rcaDoc, historyFile, inputs } = loadRealBundle("slots-booking-drift");

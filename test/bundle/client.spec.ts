@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ChecklyClient, ChecklyApiError, MAX_API_JSON_BYTES } from "../../src/checkly/client.ts";
-import { resolveCredentials, checklyCliConfigDir } from "../../src/checkly/credentials.ts";
+import { ChecklyClient, ChecklyApiError, MAX_API_JSON_BYTES } from "../../src/capture/checkly/client.ts";
+import { resolveCredentials, checklyCliConfigDir } from "../../src/capture/checkly/credentials.ts";
 
 type Call = { url: string; init: RequestInit };
 

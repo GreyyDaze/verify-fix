@@ -7,14 +7,14 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseMultiStepProject, parseMultiStepScript } from "../../src/multistep/source.ts";
-import { buildContract } from "../../src/contract/contract.ts";
+import { buildContract } from "../../src/evidence/contract/contract.ts";
 import { evaluateMultiStepPolicy } from "../../src/multistep/policy.ts";
 import { runMultiStepSandbox, bridgeReporterMismatch } from "../../src/multistep/executor.ts";
 import { MAX_REPORTER_AUDIT_BYTES, parseReporterAudit } from "../../src/multistep/reporter.ts";
-import { checkEnv } from "../../src/sandbox/env.ts";
+import { checkEnv } from "../../src/execution/sandbox/env.ts";
 import { emptyExecutionCost, type Bundle, type ExperimentExecutor, type Scene } from "../../src/types.ts";
 import { verify } from "../../src/verify.ts";
-import { detectMultiStepFailurePoint } from "../../src/bundle/manifest.ts";
+import { detectMultiStepFailurePoint } from "../../src/capture/bundle/manifest.ts";
 import { buildMultiStepRecording } from "../../src/multistep/capture.ts";
 import { failingTestResults, passingTestResults, failingLogs } from "./helpers.ts";
 

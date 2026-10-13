@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ChecklyClient, ChecklyApiError } from "../src/checkly/client.ts";
-import { resolveCredentials } from "../src/checkly/credentials.ts";
-import { buildBundle } from "../src/bundle/build.ts";
+import { ChecklyClient, ChecklyApiError } from "../src/capture/checkly/client.ts";
+import { resolveCredentials } from "../src/capture/checkly/credentials.ts";
+import { buildBundle } from "../src/capture/bundle/build.ts";
 
 const checkId = process.env.VERIFY_FIX_ACCEPTANCE_CHECK_ID;
 if (!checkId || !/^[A-Za-z0-9_-]{1,128}$/.test(checkId)) {

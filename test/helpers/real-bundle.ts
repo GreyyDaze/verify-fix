@@ -5,11 +5,11 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { FetchedResult, ManifestInputs } from "../../src/bundle/manifest.ts";
-import type { ChecklyCheck, CheckResult, CheckResultSummary, ErrorGroup, RootCauseAnalysis } from "../../src/checkly/types.ts";
-import type { Har } from "../../src/trace/har-types.ts";
-import type { TraceAction, TraceExtract } from "../../src/trace/trace-to-har.ts";
-import type { ManifestV3 } from "../../src/bundle/types.ts";
+import type { FetchedResult, ManifestInputs } from "../../src/capture/bundle/manifest.ts";
+import type { ChecklyCheck, CheckResult, CheckResultSummary, ErrorGroup, RootCauseAnalysis } from "../../src/capture/checkly/types.ts";
+import type { Har } from "../../src/capture/trace/har-types.ts";
+import type { TraceAction, TraceExtract } from "../../src/capture/trace/trace-to-har.ts";
+import type { ManifestV3 } from "../../src/capture/bundle/types.ts";
 
 export function summaryOf(r: CheckResult): CheckResultSummary {
   return {

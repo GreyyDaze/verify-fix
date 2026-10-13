@@ -1,5 +1,5 @@
 // Minimal ZIP writer for tests (deflate or store). Produces archives that the
-// reader in src/trace/zip.ts — and any other unzip tool — can open.
+// reader in src/capture/archive/zip.ts — and any other unzip tool — can open.
 
 import { deflateRawSync } from "node:zlib";
 

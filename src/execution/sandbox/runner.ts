@@ -12,7 +12,7 @@
 import { existsSync } from "node:fs";
 import { mkdtemp, writeFile, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 import type { CheckRunResult, CollectedOutcome } from "./check-api.ts";
 
@@ -89,36 +89,54 @@ export function parseOutcomeLine(raw: string): CollectedOutcome | null {
 export async function runSandbox(checkSource: string, ctx: SandboxContext): Promise<SandboxOutcome> {
   const dir = await mkdtemp(join(tmpdir(), "verify-fix-sandbox-"));
   try {
-    // The sandbox templates are shipped as TypeScript SOURCE assets (see the
-    // package.json "files" field), so they always live under the PACKAGE ROOT
-    // src/ directory — never next to the compiled file under dist/. The depth of
-    // this module differs between the two layouts (src/sandbox/runner.ts vs the
-    // published dist/sandbox/runner.js), so probe the known candidates rather
-    // than assuming one.
-    const templateCandidates = [
-      join(import.meta.dirname, "..", "src"),        // repo: src/sandbox -> src
-      join(import.meta.dirname, "..", "..", "src"),   // dist:  dist/sandbox -> src
-    ];
-    const sourceRoot = templateCandidates.find((root) => existsSync(join(root, "sandbox", "check-api.ts")));
+    // check-api.ts travels WITH this module in the repo, but the npm artifact ships
+    // it (and assertion/id.ts) as TypeScript SOURCE assets under the package
+    // root src/ — see package.json "files". The two templates also live at
+    // different relative depths in each layout, so resolve both by walking up
+    // from this file until a directory containing them is found.
+    const TEMPLATE_SUBDIR = join("execution", "sandbox", "check-api.ts");
+    const ID_SUBDIR = join("evidence", "assertion", "id.ts");
+
+    let sourceRoot: string | null = null;
+    // 1) beside this file (repo layout: src/execution/sandbox/)
+    if (existsSync(join(import.meta.dirname, "check-api.ts"))
+      && existsSync(join(import.meta.dirname, "..", "..", "evidence", "assertion", "id.ts"))) {
+      sourceRoot = join(import.meta.dirname, "..", "..");
+    } else {
+      // 2) walk up to a package root that ships src/ assets (published layout)
+      let probe = import.meta.dirname;
+      for (let depth = 0; depth < 6; depth++) {
+        const candidate = join(probe, "src");
+        if (existsSync(join(candidate, TEMPLATE_SUBDIR)) && existsSync(join(candidate, ID_SUBDIR))) {
+          sourceRoot = candidate;
+          break;
+        }
+        const parent = dirname(probe);
+        if (parent === probe) break;
+        probe = parent;
+      }
+    }
     if (!sourceRoot) {
-      throw new Error("SANDBOX_TEMPLATE_MISSING: packaged sandbox templates (sandbox/check-api.ts, assertion/id.ts) are required");
+      throw new Error("SANDBOX_TEMPLATE_MISSING: packaged sandbox/check-api.ts and assertion/id.ts are required");
     }
-    const checkApiPath = join(sourceRoot, "sandbox", "check-api.ts");
-    const idPath = join(sourceRoot, "assertion", "id.ts");
-    if (!existsSync(idPath)) {
-      throw new Error("SANDBOX_TEMPLATE_MISSING: packaged assertion/id.ts is required");
-    }
+    const checkApiPath = join(sourceRoot, TEMPLATE_SUBDIR);
+    const idPath = join(sourceRoot, ID_SUBDIR);
     const checkApi = await readFile(checkApiPath, "utf8");
     const idSrc = await readFile(idPath, "utf8");
     const remapped = remapImports(checkSource);
 
     await writeFile(join(dir, "check.ts"), remapped, "utf8");
     await writeFile(join(dir, "id.ts"), idSrc, "utf8");
-    // check-api.ts is written into the sandbox root next to id.ts, so its
-    // relative import of the shared assertion id must be rewritten to the flat
-    // "./id.ts" that sits beside it. The source lives at src/sandbox/, hence
-    // "../assertion/id.ts".
-    await writeFile(join(dir, "check-api.ts"), checkApi.replace("../assertion/id.ts", "./id.ts"), "utf8");
+    // check-api.ts is written into the sandbox root next to id.ts, so its import
+    // of the shared assertion id must be rewritten to the flat "./id.ts". The
+    // source import path changes whenever these folders move, so match it by
+    // shape (any relative specifier ending in assertion/id.ts) rather than by a
+    // hardcoded literal that silently stops matching after a rename.
+    const checkApiRewritten = checkApi.replace(/(from\s*")[^"]*\/assertion\/id\.ts(")/g, '$1./id.ts$2');
+    if (checkApiRewritten === checkApi) {
+      throw new Error("SANDBOX_TEMPLATE_REWRITE_FAILED: check-api.ts no longer imports assertion/id.ts; the sandbox copy would fail to resolve");
+    }
+    await writeFile(join(dir, "check-api.ts"), checkApiRewritten, "utf8");
 
     await writeFile(join(dir, "seed.ts"), SEED_MODULE, "utf8");
 

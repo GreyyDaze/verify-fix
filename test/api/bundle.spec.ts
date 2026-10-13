@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { cpSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildBundle } from "../../src/bundle/build.ts";
-import { loadBundle } from "../../src/bundle/load.ts";
-import type { ChecklyClient } from "../../src/checkly/client.ts";
-import type { CheckResult, CheckResultSummary } from "../../src/checkly/types.ts";
+import { buildBundle } from "../../src/capture/bundle/build.ts";
+import { loadBundle } from "../../src/capture/bundle/load.ts";
+import type { ChecklyClient } from "../../src/capture/checkly/client.ts";
+import type { CheckResult, CheckResultSummary } from "../../src/capture/checkly/types.ts";
 
 const secret = "bundle-api-secret";
 

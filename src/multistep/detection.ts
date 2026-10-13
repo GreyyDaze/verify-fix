@@ -2,10 +2,10 @@
 // the unchanged remote v3 loader. A caller-supplied Scene/Bundle, a passing
 // side, a local asset, or a self-declared mode cannot grant this capability.
 // This does not add a recording schema, a provenance kind, or a verdict law.
-import { loadBundle } from "../bundle/load.ts";
+import { loadBundle } from "../capture/bundle/load.ts";
 import { sameBoundedData } from "./rebind.ts";
 import type { Bundle, Scene } from "../types.ts";
-import { MULTISTEP_DETECTION_MODE } from "../scene/modes.ts";
+import { MULTISTEP_DETECTION_MODE } from "../execution/scene/modes.ts";
 import type { MultiStepFailureAssertion } from "./capture.ts";
 import { validMultiStepStoredRecording } from "./recording-schema.ts";
 import { readBoundedBundleFile } from "./files.ts";

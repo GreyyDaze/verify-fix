@@ -4,7 +4,7 @@
 // fails it — that is proof the oracle is blind there (STING weakness classes).
 
 import { parseInventory, parseProjectInventory } from "../assertion/inventory.ts";
-import type { Assertion } from "../types.ts";
+import type { Assertion } from "../../types.ts";
 
 export type MutantFamily = "operator" | "llm";
 

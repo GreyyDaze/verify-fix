@@ -26,10 +26,10 @@
 // through the proxy.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { Har, HarEntry } from "../trace/har-types.ts";
+import type { Har, HarEntry } from "../../capture/trace/har-types.ts";
 import type { InjectRule, ParsedMode } from "./modes.ts";
-import { isTrustedMultiStepDetection, type TrustedMultiStepDetection } from "../multistep/detection.ts";
-import { knownRoute } from "../multistep/routes.ts";
+import { isTrustedMultiStepDetection, type TrustedMultiStepDetection } from "../../multistep/detection.ts";
+import { knownRoute } from "../../multistep/routes.ts";
 
 export interface ProxyHit {
   runIndex: number;

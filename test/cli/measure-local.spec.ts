@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { countMeasuredPasses, type MeasurementRecord } from "../../src/cli/measure-local.ts";
-import type { ManifestV3 } from "../../src/bundle/types.ts";
+import type { ManifestV3 } from "../../src/capture/bundle/types.ts";
 
 const request = {
   method: "POST", path: "/api/book", status: 401, passingStatus: 200, failureText: null, url: "https://example.test/api/book",

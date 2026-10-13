@@ -4,8 +4,8 @@ import { readFileSync } from "node:fs";
 import { apiInventory, parseApiCheckProject } from "../../src/api/model.ts";
 import { evaluateApiPolicy } from "../../src/api/policy.ts";
 import { apiRecordingFromResult, setupProvenance } from "../../src/api/recording.ts";
-import { assertionId } from "../../src/assertion/id.ts";
-import type { CheckResult } from "../../src/checkly/types.ts";
+import { assertionId } from "../../src/evidence/assertion/id.ts";
+import type { CheckResult } from "../../src/capture/checkly/types.ts";
 
 const checkFile = "checks/availability.check.ts";
 const setupFile = "checks/availability.setup.ts";

@@ -56,12 +56,12 @@ The verifier does not decide what a correct fix should be. It checks whether the
 
 **Main code:**
 - src/cli.ts
-- src/bundle/build.ts
-- src/bundle/manifest.ts
-- src/bundle/sanitize.ts
-- src/bundle/types.ts
-- src/checkly/client.ts
-- src/checkly/credentials.ts
+- src/capture/bundle/build.ts
+- src/capture/bundle/manifest.ts
+- src/capture/bundle/sanitize.ts
+- src/capture/bundle/types.ts
+- src/capture/checkly/client.ts
+- src/capture/checkly/credentials.ts
 
 **Tests:** bundle, client, HTTP, manifest, trace, and CLI integration tests.
 
@@ -73,7 +73,7 @@ The verifier does not decide what a correct fix should be. It checks whether the
 
 **Solution:** Fetch FINAL results, paginate within the requested history limit, find the failing result, find a suitable passing result, use overlapping runs where required, and never manufacture a passing result.
 
-**Main code:** src/bundle/build.ts, src/checkly/client.ts, src/cli.ts.
+**Main code:** src/capture/bundle/build.ts, src/capture/checkly/client.ts, src/cli.ts.
 
 **To be fixed:** automated tests use synthetic result data. They prove the selection algorithm, not the current live Checkly response shape. Real authenticated acceptance must cover this.
 
@@ -91,7 +91,7 @@ The verifier does not decide what a correct fix should be. It checks whether the
 
 **Solution:** Sanitize before persistence. Bound downloads and archives. Hash remote evidence for provenance. Keep Checkly authentication separate from external or presigned asset URLs. Do not log signed URLs.
 
-**Main code:** src/checkly/client.ts, src/bundle/sanitize.ts, src/api/recording.ts, src/multistep/sanitize.ts, src/archive/zip.ts.
+**Main code:** src/capture/checkly/client.ts, src/capture/bundle/sanitize.ts, src/api/recording.ts, src/multistep/sanitize.ts, src/capture/archive/zip.ts.
 
 ### 3.5 Multistep evidence acquisition
 
@@ -99,7 +99,7 @@ The verifier does not decide what a correct fix should be. It checks whether the
 
 **Solution:** Fetch the complete result manifest, select the known evidence by asset/archive name, download with bounds, validate the manifest and archive, normalize the evidence, and reject partial capture.
 
-**Main code:** src/bundle/build.ts, src/multistep/capture.ts, src/multistep/normalize.ts, src/multistep/transaction.ts, src/multistep/bundle-evidence.ts, src/multistep/raw-evidence.ts, src/multistep/sanitize.ts.
+**Main code:** src/capture/bundle/build.ts, src/multistep/capture.ts, src/multistep/normalize.ts, src/multistep/transaction.ts, src/multistep/bundle-evidence.ts, src/multistep/raw-evidence.ts, src/multistep/sanitize.ts.
 
 **Tests:** remote manifest selection, bounded download, archive parsing, and validation-category contract tests.
 
@@ -111,7 +111,7 @@ The verifier does not decide what a correct fix should be. It checks whether the
 
 **Solution:** Reproduce the original failure against the target application first. Verification scenes describe the expected behavior and the evidence needed to prove the observation.
 
-**Main code:** src/scene, src/executor/scene.ts, src/multistep/executor.ts.
+**Main code:** src/scene, src/execution/executor/scene.ts, src/multistep/executor.ts.
 
 **Tests:** the main verification suite runs the real CLI against the seeded application and checks both failing and good candidates.
 
@@ -129,7 +129,7 @@ The verifier does not decide what a correct fix should be. It checks whether the
 
 **Solution:** Apply controlled bad changes and require the verification scenes to detect them. Examples include weakened assertions, removed assertions, changed account/location, retry-only changes, timeout masking, swallowed errors, and hard-coded results.
 
-**Main code:** src/adequacy/mutation.ts, src/adequacy/adequacy.ts, src/assertion/*.
+**Main code:** src/evidence/adequacy/mutation.ts, src/evidence/adequacy/adequacy.ts, src/evidence/assertion/*.
 
 ### 3.9 Hybrid and cloud verification
 
@@ -137,7 +137,7 @@ The verifier does not decide what a correct fix should be. It checks whether the
 
 **Solution:** Combine local deterministic verification with protected Checkly execution. Bind the execution to the expected deployment and revision. Cloud execution happens only after the required gates pass.
 
-**Main code:** src/executor/hybrid.ts, src/executor/checkly.ts, src/executor/checkly-cli.ts, src/multistep/executor.ts, src/multistep/accounts.ts, src/multistep/policy.ts.
+**Main code:** src/execution/executor/hybrid.ts, src/execution/executor/checkly.ts, src/execution/executor/checkly-cli.ts, src/multistep/executor.ts, src/multistep/accounts.ts, src/multistep/policy.ts.
 
 ### 3.10 Decision and reporting
 

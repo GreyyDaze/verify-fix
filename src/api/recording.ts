@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ApiRecording, ApiSetupProvenance, SanitizedApiRequest, SanitizedApiResponse } from "../types.ts";
-import type { CheckResult } from "../checkly/types.ts";
+import type { CheckResult } from "../capture/checkly/types.ts";
 
 const SECRET_NAME = /authorization|cookie|token|secret|password|api[-_]?key|session/i;
 const SAFE_REQUEST_HEADERS = new Set(["accept", "content-type", "user-agent", "x-request-id", "authorization", "cookie"]);

@@ -74,8 +74,8 @@ test("the packed CLI runs from an external customer project without repository f
     const packagePaths = new Set(cliPackage.files.map((file) => file.path));
     assert.ok(packagePaths.has("bin/verify-fix"), "published artifact must contain the executable");
     assert.ok(packagePaths.has("dist/cli.js"), "published artifact must contain compiled CLI code");
-    assert.ok(packagePaths.has("src/sandbox/check-api.ts"), "published artifact must contain the sandbox check API template");
-    assert.ok(packagePaths.has("src/assertion/id.ts"), "published artifact must contain the sandbox assertion-id template");
+    assert.ok(packagePaths.has("src/execution/sandbox/check-api.ts"), "published artifact must contain the sandbox check API template");
+    assert.ok(packagePaths.has("src/evidence/assertion/id.ts"), "published artifact must contain the sandbox assertion-id template");
     assert.ok(!packagePaths.has("src/cli.ts"), "installed consumers must not execute TypeScript from node_modules");
     assert.ok([...packagePaths].every((path) => !path.startsWith("examples/")), "example applications must not enter the npm package");
     assert.ok([...packagePaths].every((path) => !path.startsWith("fixtures/")), "test incidents must not enter the npm package");

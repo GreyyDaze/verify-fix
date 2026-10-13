@@ -528,5 +528,207 @@
   "notes": [
     "RCA 9e916ca1-6c4a-4fae-a660-11fef95b26a1: the captured run has no Expected/Received to compare against, so whether the RCA describes this run is not decidable from the outside — read it before trusting it",
     "REGRESSION scenes (sibling checks) are not generated yet — planned once group listing is wired (Phase 3)"
-  ]
+  ],
+  "protectedRequirements": {
+    "policy": {
+      "schemaVersion": "protected-requirements-v2",
+      "policyVersion": 2,
+      "check": {
+        "id": "5bab986c-15f6-4401-a166-3b2a8c1dcbbc",
+        "logicalId": "slots-availability-api",
+        "checkType": "API"
+      },
+      "sources": [
+        {
+          "kind": "checkly-api",
+          "identity": "5bab986c-15f6-4401-a166-3b2a8c1dcbbc",
+          "sha256": "a474be54029977b1639b8e5069c4a40ae8782e18990e1adf3ee11cc189bad796"
+        }
+      ],
+      "fields": {
+        "check.name": {
+          "effect": "metadata",
+          "comparison": "exact",
+          "original": {
+            "state": "unknown",
+            "reason": "CONFIG_NOT_RETURNED"
+          }
+        },
+        "activated": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": true
+          }
+        },
+        "muted": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": false
+          }
+        },
+        "shouldFail": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "unknown",
+            "reason": "CONFIG_NOT_RETURNED"
+          }
+        },
+        "frequency": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": 5
+          }
+        },
+        "locations": {
+          "effect": "protected",
+          "comparison": "set-equal",
+          "original": {
+            "state": "known",
+            "value": [
+              "us-east-1",
+              "eu-west-1"
+            ]
+          }
+        },
+        "privateLocations": {
+          "effect": "protected",
+          "comparison": "set-equal",
+          "original": {
+            "state": "known",
+            "value": []
+          }
+        },
+        "runParallel": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": false
+          }
+        },
+        "retryStrategy": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": {
+              "type": "FIXED",
+              "maxRetries": 1,
+              "baseBackoffSeconds": 0,
+              "maxDurationSeconds": 600,
+              "sameRegion": false
+            }
+          }
+        },
+        "alertBehavior": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "unknown",
+            "reason": "UNSUPPORTED_SETTING"
+          }
+        },
+        "environmentVariableNames": {
+          "effect": "protected",
+          "comparison": "set-equal",
+          "original": {
+            "state": "known",
+            "value": [
+              "ENVIRONMENT_URL",
+              "API_TOKEN"
+            ]
+          }
+        },
+        "targetResolution": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": "code"
+          }
+        },
+        "execution.dependencyMetadata": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "unknown",
+            "reason": "CONFIG_NOT_RETURNED"
+          }
+        },
+        "api.requestMethod": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": "GET"
+          }
+        },
+        "api.urlStructure": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": "{{ENVIRONMENT_URL}}/api/v1/availability?slot=09:30"
+          }
+        },
+        "api.assertions": {
+          "effect": "protected",
+          "comparison": "required-tuples",
+          "original": {
+            "state": "known",
+            "value": [
+              {
+                "id": "assert:f1e6a4ce",
+                "subject": "statusCode()",
+                "matcher": "equals",
+                "target": "200"
+              },
+              {
+                "id": "assert:8f1f85d7",
+                "subject": "headers(\"content-type\")",
+                "matcher": "equals",
+                "target": "\"application/json\""
+              },
+              {
+                "id": "assert:70e79638",
+                "subject": "jsonBody(\"slot\")",
+                "matcher": "equals",
+                "target": "\"09:30\""
+              },
+              {
+                "id": "assert:d1dab625",
+                "subject": "jsonBody(\"availability\")",
+                "matcher": "equals",
+                "target": "\"AVAILABLE\""
+              }
+            ]
+          }
+        },
+        "api.setupScript": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": "checks/availability.setup.ts"
+          }
+        },
+        "api.tearDownScript": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "unknown",
+            "reason": "CONFIG_NOT_RETURNED"
+          }
+        }
+      }
+    },
+    "sha256": "02d1c576fa2acc92278f7a63de8cba2f7706e0d0ee563f96d182e6144bc7733e"
+  }
 }

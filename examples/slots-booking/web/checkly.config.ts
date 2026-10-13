@@ -29,7 +29,7 @@ export default defineConfig({
 
     // Applies to every check in the project unless a check overrides it.
     frequency: Frequency.EVERY_5M,
-    locations: ['us-east-1', 'eu-west-1'],
+    locations: ['us-east-1', 'eu-central-1'],
     tags: ['slots-booking', 'verify-fix-example'],
 
     playwrightChecks: [
@@ -41,7 +41,7 @@ export default defineConfig({
         pwProjects: ['booking'],
 
         frequency: Frequency.EVERY_5M,
-        locations: ['us-east-1', 'eu-west-1'],
+        locations: ['us-east-1', 'eu-central-1'],
 
         // Keep both locations concurrent. The incident used one shared
         // TEST_USER, so one login invalidated the other session. The repair
@@ -53,7 +53,7 @@ export default defineConfig({
         environmentVariables: [
           { key: 'TEST_USER', value: 'demo' },
           { key: 'TEST_USER_US_EAST_1', value: process.env.TEST_USER_US_EAST_1 ?? '', secret: true },
-          { key: 'TEST_USER_EU_WEST_1', value: process.env.TEST_USER_EU_WEST_1 ?? '', secret: true },
+          { key: 'TEST_USER_EU_CENTRAL_1', value: process.env.TEST_USER_EU_CENTRAL_1 ?? '', secret: true },
         ],
       },
     ],
@@ -74,7 +74,7 @@ export default defineConfig({
 
   cli: {
     // Location used by `npx checkly test` (ad-hoc runs, never scheduled).
-    runLocation: 'eu-west-1',
+    runLocation: 'eu-central-1',
     reporters: ['list'],
   },
 })

@@ -1,0 +1,1666 @@
+// `verify-fix bundle` orchestrator: Checkly → files on disk.
+//
+//   1. check definition (config + env var NAMES)
+//   2. result history → pick the failing result (or --result) and the last
+//      passing result before it
+//   3. per result: detail + trace assets → HAR + actions (failure point)
+//   4. error group + Rocky RCA (optional: --trigger-rca)
+//   5. check sources from the customer's Checkly project dir (--project)
+//   6. optional determinism measurement (--measure / --measure-overlap)
+//   7. manifest v3 + recordings + config, secrets stripped, written to --out
+//
+// Nothing here decides a verdict. It only records what Checkly saw.
+
+import { createHash } from "node:crypto";
+import { gunzipSync } from "node:zlib";
+import { execFileSync } from "node:child_process";
+import { closeSync, constants, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import type { ChecklyClient } from "../checkly/client.ts";
+import type { AssetManifestEntry, ChecklyCheck, ChecklyCheckGroup, CheckResult, CheckResultSummary, ErrorGroup, RootCauseAnalysis } from "../checkly/types.ts";
+import { ASSET_ZIP_BOUNDS, isZip, openZipBounded } from "../archive/zip.ts";
+import { mergeHars, traceZipToHar, type BodyPolicy, type TraceExtract } from "../trace/trace-to-har.ts";
+import { parseInventory } from "../../evidence/assertion/inventory.ts";
+import { sanitizeHar } from "./sanitize.ts";
+import { buildManifest, detectTargetResolution, expectedReceived, findOverlappingRuns, groupErrorMatches, rcaFit, rcaMentionsReceived, resultErrors, runOutcome, type FetchedResult, type ManifestInputs } from "./manifest.ts";
+import { measureDeterminism, type MeasureResult, type Runner } from "./measure.ts";
+import type { ManifestV3 } from "./types.ts";
+import { apiRecordingFromResult, setupProvenance } from "../../checks/api/recording.ts";
+import { parseApiCheckProject } from "../../checks/api/model.ts";
+import { buildMultiStepRecording, readMultiStepAssets, MAX_ASSET_FILE_BYTES, MAX_ASSET_ZIP_BYTES, type MultiStepAssetTexts, type MultiStepRecordingDraft } from "../../checks/multistep/capture.ts";
+import { finalizeRemoteMultiStepRecording } from "../../checks/multistep/binding.ts";
+import type { MultiStepCapture } from "../../checks/multistep/normalize.ts";
+import type { MultiStepRecording } from "../../checks/multistep/capture.ts";
+import { constrainMultiStepManifest, multiStepRunMetadata } from "../../checks/multistep/bundle-evidence.ts";
+import { multistepProblemCategory } from "../../checks/multistep/sanitize.ts";
+import { parseMultiStepConstruct, parseMultiStepProject } from "../../checks/multistep/source.ts";
+import { parseCheckConfig } from "../../execution/scene/config-diff.ts";
+import { deployedProblem } from "../../checks/multistep/identity.ts";
+import { multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_BYTES, MULTISTEP_MAX_SOURCE_FILE_BYTES, MULTISTEP_MAX_SOURCE_FILES } from "../../checks/multistep/files.ts";
+import { buildProtectedRequirements, policyKnown, policyUnknown, protectedSourceIdentity, type ProtectedPolicyEnvelope, type ResolvedPolicyValue } from "../../policy/requirements.ts";
+import { deriveRegionalAccountMapping } from "../../checks/multistep/region-account-mapping.ts";
+
+export interface BuildOptions {
+  checkId: string;
+  resultId?: string | null;
+  passingResultId?: string | null;
+  outDir: string;
+  projectDir?: string | null;
+  /** Directory of assets already downloaded with `checkly assets download` (MULTI_STEP only). */
+  assetsDir?: string | null;
+  measure?: number;
+  measureOverlap?: number;
+  targetUrl?: string;
+  triggerRca?: boolean;
+  bodies?: BodyPolicy;
+  keepRaw?: boolean;
+  historyLimit?: number;
+  log?: (line: string) => void;
+}
+
+export interface BuildDeps {
+  client: ChecklyClient;
+  accountId: string;
+  toolVersion?: string;
+  now?: () => Date;
+  runner?: Runner;
+}
+
+export interface BuildOutcome {
+  manifest: ManifestV3;
+  outDir: string;
+  files: string[];
+  warnings: string[];
+}
+
+const RESULT_FIELDS = ["id", "checkId", "name", "hasFailures", "hasErrors", "isDegraded", "runLocation", "startedAt", "stoppedAt", "responseTime", "attempts", "resultType", "sequenceId", "errorGroupIds"];
+
+function sha256(value: string | Buffer): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function hasOwn(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function policySetting(check: ChecklyCheck, group: ChecklyCheckGroup | null, project: Record<string, unknown>, key: string): ResolvedPolicyValue {
+  const checkRecord = check as unknown as Record<string, unknown>;
+  const checkHas = hasOwn(checkRecord, key) && checkRecord[key] !== undefined;
+  const groupHas = group !== null && hasOwn(group, key) && group[key] !== undefined;
+  if (checkHas && checkRecord[key] !== null) return policyKnown(checkRecord[key] as never);
+  if (checkHas && checkRecord[key] === null && groupHas && group![key] !== null) {
+    // A null check field may mean either "inherit" or an explicit unset. Do
+    // not guess which Checkly interpretation applies to this resource.
+    return policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
+  }
+  if (groupHas && group![key] !== null) return policyKnown(group![key] as never);
+  if (checkHas) return policyKnown(null);
+  if (groupHas) return policyKnown(null);
+  if (hasOwn(project, key) && project[key] !== undefined) return policyKnown(project[key] as never);
+  return policyUnknown("CONFIG_NOT_RETURNED");
+}
+
+function policyUrlStructure(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  if (/\{\{[^}]+\}\}/.test(value)) return value.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_match, name: string) => `{{${name}}}`);
+  try {
+    const u = new URL(value);
+    const query = [...u.searchParams.entries()].map(([key, entry]) => [key, sha256(entry)] as const)
+      .sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => `${key}=${entry}`).join("&");
+    return `${u.protocol}//${u.host}${u.pathname}${query ? `?${query}` : ""}`;
+  } catch {
+    return value.split(/[?#]/, 1)[0] ?? value;
+  }
+}
+
+function tupleDigests(values: unknown[]): string[] {
+  return values.map((value) => sha256(JSON.stringify(value))).sort();
+}
+
+function protectedRequirementsFor(input: {
+  check: ChecklyCheck;
+  group: ChecklyCheckGroup | null;
+  sources: Array<{ path: string; content: string }>;
+  mainSource: string | null
+  logicalId: string | null;
+  playwright: ProjectSources["playwright"];
+  dependencyMetadata: Record<string, string>;
+  /** Runtime version observed on the captured FAILING result, when reported. */
+  observedRuntimeVersion?: string | null;
+}): ProtectedPolicyEnvelope | null {
+  const { check, group, sources } = input;
+  const configSource = sources.find((source) => /^checkly\.config\.[cm]?[jt]sx?$/.test(source.path));
+  const parsedConfig = configSource ? parseCheckConfig(configSource.content) : null;
+  const projectSettings: Record<string, unknown> = {};
+  if (parsedConfig) {
+    if (parsedConfig.runParallel !== null) projectSettings.runParallel = parsedConfig.runParallel;
+    if (parsedConfig.locations !== null) projectSettings.locations = parsedConfig.locations;
+    if (parsedConfig.frequency !== null) projectSettings.frequency = parsedConfig.frequency;
+    if (parsedConfig.retryStrategy !== null) projectSettings.retryStrategy = parsedConfig.retryStrategy;
+    if (parsedConfig.envKeys.length) projectSettings.environmentVariables = parsedConfig.envKeys;
+  }
+  const groupRecord = group as unknown as Record<string, unknown> | null;
+  const values: Record<string, ResolvedPolicyValue> = {
+    "check.name": policyKnown(check.name),
+    activated: policySetting(check, group, projectSettings, "activated"),
+    muted: policySetting(check, group, projectSettings, "muted"),
+    shouldFail: policySetting(check, group, projectSettings, "shouldFail"),
+    frequency: policySetting(check, group, projectSettings, "frequency"),
+    locations: policySetting(check, group, projectSettings, "locations"),
+    privateLocations: policySetting(check, group, projectSettings, "privateLocations"),
+    runParallel: policySetting(check, group, projectSettings, "runParallel"),
+    retryStrategy: policySetting(check, group, projectSettings, "retryStrategy"),
+    environmentVariableNames: (() => {
+      const names = (list: unknown): string[] | null => Array.isArray(list)
+        ? list.map((item) => typeof item === "string" ? item : item && typeof item === "object" && typeof (item as { key?: unknown }).key === "string" ? (item as { key: string }).key : null)
+            .filter((item): item is string => item !== null).sort()
+        : null;
+      const checkNames = names(check.environmentVariables);
+      const groupNames = names(group?.environmentVariables);
+      const projectNames = names(projectSettings.environmentVariables);
+      // Only the INCIDENT CHECK's own declared names are part of its monitoring
+      // contract. A shared project config also declares keys for OTHER checks in
+      // the same project (the browser check's TEST_USER_* beside the Multistep
+      // check's MULTISTEP_USER_*); admitting those makes a repair of one check
+      // look like it changed the other's contract.
+      const own = checkNames ?? null;
+      const returned = own !== null ? [own] : [groupNames, projectNames].filter((item): item is string[] => item !== null);
+      return returned.length === 0 ? policyUnknown("CONFIG_NOT_RETURNED")
+        : policyKnown([...new Set(returned.flat())].sort());
+    })(),
+    targetResolution: policyKnown(detectTargetResolution(check, sources)),
+    "execution.dependencyMetadata": Object.keys(input.dependencyMetadata).length
+      ? policyKnown(input.dependencyMetadata)
+      : policyUnknown("SOURCE_UNAVAILABLE"),
+    alertBehavior: (() => {
+      const alertKeys = ["alertChannels", "alertEscalationPolicy", "alertSettings"];
+      const from = (record: Record<string, unknown> | null): unknown[] | null => {
+        if (!record) return null;
+        const present = alertKeys.filter((key) => hasOwn(record, key)).map((key) => [key, record[key]]);
+        return present.length ? present : null;
+      };
+      const selected = from(check as unknown as Record<string, unknown>) ?? from(groupRecord);
+      return selected === null ? policyUnknown("CONFIG_NOT_RETURNED") : policyKnown(sha256(JSON.stringify(selected)));
+    })(),
+  };
+
+  const sourceMap = new Map(sources.map((source) => [source.path.replaceAll("\\", "/"), source.content]));
+  const fileHash = (path: string | null): string | null => path ? (sourceMap.has(path) ? sha256(sourceMap.get(path)!) : null) : null;
+  const main = input.mainSource ? sourceMap.get(input.mainSource) ?? null : null;
+  const targetResolution = detectTargetResolution(check, sources);
+  if (check.checkType === "API") {
+    const model = input.mainSource ? parseApiCheckProject(input.mainSource, sourceMap, input.logicalId) : null;
+    const req = check.request;
+    values["api.requestMethod"] = req?.method ? policyKnown(req.method.toUpperCase()) : model?.request.method ? policyKnown(model.request.method.toUpperCase()) : policyUnknown("SOURCE_UNAVAILABLE");
+    const url = policyUrlStructure(req?.url ?? model?.request.url);
+    values["api.urlStructure"] = (req?.url ?? model?.request.url) ? policyKnown(sha256((req?.url ?? model!.request.url))) : policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
+    const assertions = model?.request.assertions.map((item) => [item.property, item.selector, item.operator, item.target])
+      ?? (req?.assertions?.length ? req.assertions.map((item) => [item.source, item.property ?? null, item.comparison, item.target]) : null);
+    values["api.assertions"] = assertions ? policyKnown(tupleDigests(assertions)) : policyUnknown("SOURCE_UNAVAILABLE");
+    values["api.setupScript"] = model?.setupFile ? (fileHash(model.setupFile) ? policyKnown(fileHash(model.setupFile)!) : policyUnknown("SOURCE_UNAVAILABLE")) : policyKnown(null);
+    values["api.tearDownScript"] = model?.teardownFile ? (fileHash(model.teardownFile) ? policyKnown(fileHash(model.teardownFile)!) : policyUnknown("SOURCE_UNAVAILABLE")) : policyKnown(null);
+  } else if (check.checkType === "BROWSER") {
+    const inventory = input.mainSource && main ? parseInventory(input.mainSource, main) : null;
+    values["browser.entrypoint"] = input.mainSource || check.scriptPath ? policyKnown(input.mainSource ?? check.scriptPath!) : policyUnknown("SOURCE_UNAVAILABLE");
+    values["browser.runtime"] = check.runtimeId ? policyKnown(check.runtimeId) : policyUnknown("CONFIG_NOT_RETURNED");
+    values["browser.assertions"] = inventory ? policyKnown(tupleDigests(inventory.assertions.map((a) => [a.subject, a.matcher, a.target, a.negated ?? false]))) : policyUnknown("SOURCE_UNAVAILABLE");
+    values["browser.target"] = policyKnown(targetResolution);
+  } else if (check.checkType === "PLAYWRIGHT") {
+    values["playwright.configPath"] = check.playwrightConfigPath || input.playwright.configPath ? policyKnown(check.playwrightConfigPath ?? input.playwright.configPath) : policyUnknown("CONFIG_NOT_RETURNED");
+    values["playwright.projects"] = policyKnown(check.pwProjects?.length ? [...check.pwProjects].sort() : [...input.playwright.projects].sort());
+    values["playwright.tags"] = policyKnown(check.pwTags?.length ? [...check.pwTags].sort() : [...input.playwright.tags].sort());
+    values["playwright.testSelection"] = check.testCommand ? policyKnown(sha256(check.testCommand)) : policyUnknown("CONFIG_NOT_RETURNED");
+    values["playwright.retries"] = policyUnknown("CONFIG_NOT_RETURNED");
+    values["playwright.target"] = policyKnown(targetResolution);
+    values["playwright.runtime"] = check.runtimeId ? policyKnown(check.runtimeId) : policyUnknown("CONFIG_NOT_RETURNED");
+  } else if (check.checkType === "MULTI_STEP") {
+    const model = input.mainSource ? parseMultiStepProject(sourceMap, input.mainSource) : null;
+    const complete = Boolean(model?.script && model.errors.length === 0 && model.construct && model.construct.errors.length === 0);
+    const locations = Array.isArray(check.locations) && check.locations.length
+      ? check.locations
+      : model?.construct?.locations ?? [];
+    const declaredAccountKeys = [...new Set([
+      ...((check.environmentVariables ?? []).map((item) => item.key)),
+      ...(model?.construct?.environmentKeys ?? []),
+      ...(Array.isArray(projectSettings.environmentVariables) ? projectSettings.environmentVariables as string[] : []),
+    ])];
+    const regionalAccounts = complete
+      ? deriveRegionalAccountMapping(sourceMap.entries(), locations, declaredAccountKeys)
+      : null;
+    values["multistep.orderedSteps"] = complete ? policyKnown(model!.script!.steps.map((step) => sha256(step.title))) : policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
+    values["multistep.routesAndMethods"] = complete ? policyKnown(model!.script!.requests.map((request) => [request.method, request.route ? sha256(request.route) : null])) : policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
+    values["multistep.assertions"] = complete ? policyKnown(tupleDigests(model!.script!.assertions.map((a) => [a.stepTitle, a.id, a.matcher, a.target, a.negated]))) : policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
+    values["multistep.environmentMapping"] = regionalAccounts ? policyKnown(regionalAccounts) : policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
+    values["multistep.runtimeTransaction"] = complete ? policyKnown({ steps: model!.script!.steps.map((step) => sha256(step.title)), requests: model!.script!.requests.map((request) => [request.method, request.route ? sha256(request.route) : null]) }) : policyUnknown("DYNAMIC_VALUE_UNRESOLVED");
+    values["multistep.runtime"] = check.runtimeId
+      ? policyKnown(check.runtimeId)
+      : input.observedRuntimeVersion
+        ? policyKnown(`runtime:${input.observedRuntimeVersion}`)
+        : policyUnknown("CONFIG_NOT_RETURNED");
+  }
+
+  const sourceIdentities = [protectedSourceIdentity("checkly-api", `checks/${check.id}`, JSON.stringify({
+    id: check.id, name: check.name, type: check.checkType, activated: check.activated, muted: check.muted,
+    groupId: check.groupId, frequency: check.frequency, locations: check.locations,
+    privateLocations: check.privateLocations ?? null, runParallel: check.runParallel ?? null,
+    retryStrategy: check.retryStrategy ?? null, environmentVariableNames: (check.environmentVariables ?? []).map((v) => v.key).sort(),
+    requestMethod: check.request?.method ?? null, requestUrl: policyUrlStructure(check.request?.url) ? sha256(policyUrlStructure(check.request?.url)!) : null,
+  }))];
+  if (group) sourceIdentities.push(protectedSourceIdentity("check-group", `check-groups/${group.id}`, JSON.stringify({
+    id: group.id, activated: group.activated ?? null, muted: group.muted ?? null,
+    frequency: group.frequency ?? null, locations: group.locations ?? null,
+    privateLocations: group.privateLocations ?? null, runParallel: group.runParallel ?? null,
+    retryStrategy: group.retryStrategy ?? null,
+    environmentVariableNames: (group.environmentVariables ?? []).map((v) => v.key).sort(),
+    alertBehavior: group.alertChannels ?? group.alertEscalationPolicy ?? null,
+  })));
+  for (const source of sources) {
+    const kind = /^checkly\.config\.[cm]?[jt]sx?$/.test(source.path) ? "project-default"
+      : source.path === input.mainSource ? "check" : /playwright\.config\.[cm]?[jt]sx?$/.test(source.path) ? "playwright-config" : "imported-source";
+    sourceIdentities.push(protectedSourceIdentity(kind, source.path, source.content));
+  }
+  const result = buildProtectedRequirements({
+    check: { id: check.id, logicalId: input.logicalId, checkType: check.checkType },
+    sources: sourceIdentities,
+    values,
+  });
+  return result.status === "ready" ? result.envelope : null;
+}
+
+function isOk(r: CheckResultSummary): boolean {
+  return !r.hasFailures && !r.hasErrors;
+}
+
+function findSpecFiles(root: string, testDir: string, max = 200): string[] {
+  const start = resolve(root, testDir);
+  if (!existsSync(start)) return [];
+  const out: string[] = [];
+  const walk = (dir: string, depth: number) => {
+    if (out.length >= max || depth > 8) return;
+    for (const name of readdirSync(dir)) {
+      if (name === "node_modules" || name.startsWith(".") || name === "test-results" || name === "playwright-report") continue;
+      const p = join(dir, name);
+      const st = statSync(p);
+      if (st.isDirectory()) walk(p, depth + 1);
+      else if (/\.(spec|test)\.[cm]?[jt]sx?$/.test(name)) out.push(p);
+      if (out.length >= max) return;
+    }
+  };
+  walk(start, 0);
+  return out.sort();
+}
+
+function firstExisting(dir: string, names: string[]): string | null {
+  for (const n of names) if (existsSync(join(dir, n))) return join(dir, n);
+  return null;
+}
+
+function findApiCheckFiles(root: string, max = 100): string[] {
+  const out: string[] = [];
+  const walk = (dir: string, depth: number) => {
+    if (out.length >= max || depth > 8) return;
+    for (const name of readdirSync(dir)) {
+      if (["node_modules", ".git", ".next", "dist", "build", "test-results", "playwright-report"].includes(name)) continue;
+      const file = join(dir, name);
+      const stat = lstatSync(file);
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) walk(file, depth + 1);
+      else if (/\.check\.[cm]?[jt]sx?$/.test(name)) out.push(file);
+      if (out.length >= max) return;
+    }
+  };
+  walk(root, 0);
+  return out.sort();
+}
+
+function relativeModule(root: string, from: string, specifier: string): string | null {
+  const base = resolve(dirname(from), specifier);
+  const candidates = [base, `${base}.ts`, `${base}.tsx`, `${base}.js`, `${base}.mjs`, `${base}.cjs`, join(base, "index.ts"), join(base, "index.tsx"), join(base, "index.js")];
+  const file = candidates.find((candidate) => existsSync(candidate) && statSync(candidate).isFile()) ?? null;
+  return file && !relative(root, file).startsWith("..") ? file : null;
+}
+
+function collectModuleClosure(root: string, initial: string[], sources: Array<{ path: string; content: string }>): void {
+  const seen = new Set(sources.map((source) => source.path.replace(/\\/g, "/")));
+  const queue = [...initial];
+  while (queue.length) {
+    const file = queue.shift()!;
+    const rel = relative(root, file).replace(/\\/g, "/");
+    if (seen.has(rel)) continue;
+    const content = readFileSync(file, "utf8");
+    sources.push({ path: rel, content });
+    seen.add(rel);
+    for (const match of content.matchAll(/(?:import|export)\s+(?:[^'";]+?\s+from\s+)?['"](\.[^'"]+)['"]/g)) {
+      const imported = relativeModule(root, file, match[1]);
+      if (imported) queue.push(imported);
+    }
+  }
+}
+
+function boundedMultiStepSource(root: string, file: string): { path: string; content: string } {
+  const rel = relative(root, file).replaceAll("\\", "/");
+  if (!multiStepSourcePath(rel) || !realpathSync(file).startsWith(`${realpathSync(root)}/`)) {
+    throw new Error("MULTISTEP_SOURCE_PATH_UNSAFE");
+  }
+  const stat = lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("MULTISTEP_SOURCE_PATH_UNSAFE");
+  if (stat.size > MULTISTEP_MAX_SOURCE_FILE_BYTES) throw new Error("MULTISTEP_SOURCE_CLOSURE_BOUND");
+  const fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const opened = fstatSync(fd);
+    if (!opened.isFile() || opened.size > MULTISTEP_MAX_SOURCE_FILE_BYTES) throw new Error("MULTISTEP_SOURCE_CLOSURE_BOUND");
+    const chunks: Buffer[] = [];
+    let size = 0;
+    while (size <= MULTISTEP_MAX_SOURCE_FILE_BYTES) {
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, MULTISTEP_MAX_SOURCE_FILE_BYTES + 1 - size));
+      const n = readSync(fd, buffer, 0, buffer.length, null);
+      if (!n) return { path: rel, content: Buffer.concat(chunks, size).toString("utf8") };
+      size += n;
+      if (size > MULTISTEP_MAX_SOURCE_FILE_BYTES) break;
+      chunks.push(buffer.subarray(0, n));
+    }
+    throw new Error("MULTISTEP_SOURCE_CLOSURE_BOUND");
+  } finally { closeSync(fd); }
+}
+
+/**
+ * Phase 9.10: enumerate every check in the account and resolve each one's
+ * source closure from the project on disk, so the bundle records which files
+ * each monitor is built from. The closure is what makes a later impact claim
+ * ("this change cannot move that monitor") checkable instead of asserted.
+ *
+ * A sibling whose files cannot be resolved marks the inventory incomplete:
+ * we can then never claim it is unaffected.
+ */
+function captureSiblingInventory(
+  root: string,
+  checks: ChecklyCheck[],
+): NonNullable<ManifestInputs["siblingMonitors"]> {
+  const monitors: Array<{ id: string; name: string; checkType: string; files: string[] }> = [];
+  const unresolved: string[] = [];
+  const configFiles = ["checkly.config.ts", "checkly.config.js", "playwright.config.ts", "playwright.config.js"]
+    .filter((name) => existsSync(join(root, name)))
+    .map((name) => join(root, name));
+
+  for (const check of checks) {
+    const id = String(check.id);
+    const files = new Set<string>();
+    const sources: Array<{ path: string; content: string }> = [];
+    try {
+      // Constructs declare their own entrypoint; a *.check.* file also names
+      // the spec or setup module it runs. Resolve that module's closure.
+      const candidates = findApiCheckFiles(root, MULTISTEP_MAX_SOURCE_FILES + 1);
+      for (const file of candidates) {
+        if (candidates.length > MULTISTEP_MAX_SOURCE_FILES) throw new Error("SIBLING_CLOSURE_BOUND");
+        const content = boundedMultiStepSource(root, file).content;
+        // Only attribute a construct to this sibling when the construct's own
+        // name/logicalId matches this check. Never guess across monitors.
+        if (!/new\s+(MultiStepCheck|PlaywrightCheck|ApiCheck|BrowserCheck)\s*\(/.test(content)) continue;
+        const nameMatch = /\bname\s*:\s*['"`]([^'"`]+)['"`]/.exec(content)?.[1];
+        const logicalMatch = /\bnew\s+\w*Check\s*\(\s*['"`]([^'"`]+)['"`]/.exec(content)?.[1];
+        const logicalId = check.logicalId ?? null;
+        const matches = (logicalMatch !== undefined && logicalMatch === id)
+          || (logicalMatch !== undefined && logicalId !== null && logicalMatch === logicalId)
+          || (nameMatch !== undefined && nameMatch === check.name);
+        if (!matches) continue;
+        sources.length = 0;
+        // Seed the closure with the construct file AND its declared entrypoint:
+        // a Multistep check's spec is named by `entrypoint`, not by an import
+        // statement, so an import-only walk would record the check as having no
+        // code and silently scope it out of every impact assessment.
+        const seeds = [file];
+        const entrypoint = /\bentrypoint\s*:\s*(?:path\.join\(\s*__dirname\s*,\s*)?['"`]([^'"`]+)['"`]/.exec(content)?.[1];
+        if (entrypoint) {
+          const resolved = relativeModule(root, file, entrypoint);
+          if (resolved) seeds.push(resolved);
+        }
+        collectMultiStepClosure(root, seeds, sources);
+        for (const item of sources) files.add(item.path);
+      }
+      for (const file of configFiles) files.add(relative(root, file).split("\\").join("/"));
+      // A PLAYWRIGHT check owns no *.check.* file: the Checkly config lists it
+      // and names the Playwright projects it runs. Attribute its specs from
+      // playwright.config.ts so a change to tests/booking.spec.ts is seen to
+      // touch that monitor.
+      if (check.checkType === "PLAYWRIGHT") {
+        const pwConfig = join(root, "playwright.config.ts");
+        if (existsSync(pwConfig)) {
+          const content = boundedMultiStepSource(root, pwConfig).content;
+          const testDir = /testDir\s*:\s*['"`]([^'"`]+)['"`]/.exec(content)?.[1] ?? ".";
+          const declared = new Set((check.pwProjects ?? []).map(String));
+          for (const spec of findSpecFiles(dirname(pwConfig), testDir)) {
+            const rel = relative(root, spec).split("\\").join("/");
+            // With no explicit projects, every spec in testDir belongs to this
+            // check. With projects declared, only specs under a project dir
+            // of that name are attributable; a flat spec is shared.
+            if (declared.size === 0 || [...declared].some((project) => rel.startsWith(`${project}/`) || rel.includes(`/${project}/`))) {
+              files.add(rel);
+            }
+          }
+        }
+      }
+      if (files.size === 0) unresolved.push(id);
+      monitors.push({ id, name: check.name, checkType: check.checkType, files: [...files].sort() });
+    } catch {
+      unresolved.push(id);
+      monitors.push({ id, name: check.name, checkType: check.checkType, files: [] });
+    }
+  }
+  return {
+    monitors,
+    complete: unresolved.length === 0,
+    reason: unresolved.length > 0
+      ? "source closure unresolved for captured monitors"
+      : null,
+  };
+}
+
+function collectMultiStepClosure(root: string, initial: string[], sources: Array<{ path: string; content: string }>): void {
+  const seen = new Set(sources.map((item) => item.path));
+  const queue = [...initial];
+  let bytes = sources.reduce((n, item) => n + Buffer.byteLength(item.content, "utf8"), 0);
+  while (queue.length) {
+    const file = queue.shift()!;
+    const source = boundedMultiStepSource(root, file);
+    if (seen.has(source.path)) continue;
+    if (seen.size >= MULTISTEP_MAX_SOURCE_FILES || (bytes += Buffer.byteLength(source.content, "utf8")) > MULTISTEP_MAX_SOURCE_BYTES) {
+      throw new Error("MULTISTEP_SOURCE_CLOSURE_BOUND");
+    }
+    seen.add(source.path);
+    sources.push(source);
+    for (const match of source.content.matchAll(/(?:import|export)\s+(?:[^'";]+?\s+from\s+)?['"](\.[^'"]+)['"]/g)) {
+      const imported = relativeModule(root, file, match[1]);
+      if (imported) queue.push(imported);
+    }
+  }
+}
+
+interface ProjectSources {
+  sources: Array<{ path: string; content: string }>;
+  /** Hashes only: package/config metadata is compared without copying its content into the bundle. */
+  dependencyMetadata: Record<string, string>;
+  mainSource: string | null;
+  gitCommit: string | null;
+  logicalId: string | null;
+  repoUrl: string | null;
+  /** Playwright facts read from the project's checkly.config.* (the API does not return them for PLAYWRIGHT checks) */
+  playwright: { configPath: string | null; projects: string[]; tags: string[] };
+  warnings: string[];
+}
+
+/** `pwProjects: ['booking']` / `pwTags: ["@smoke"]` → ["booking"] */
+function stringList(source: string, key: string): string[] {
+  const m = new RegExp(`${key}\\s*:\\s*\\[([^\\]]*)\\]`).exec(source);
+  if (!m) return [];
+  return [...m[1].matchAll(/['"\`]([^'"\`]+)['"\`]/g)].map((x) => x[1]);
+}
+
+export function collectProjectSources(check: ChecklyCheck, projectDir: string | null | undefined, failingErrors: string[]): ProjectSources {
+  const warnings: string[] = [];
+  const sources: Array<{ path: string; content: string }> = [];
+  const dependencyMetadata: Record<string, string> = {};
+  let mainSource: string | null = null;
+  let gitCommit: string | null = null;
+  let logicalId: string | null = null;
+  let repoUrl: string | null = null;
+  const playwright: ProjectSources["playwright"] = { configPath: null, projects: [], tags: [] };
+
+  if (check.checkType === "BROWSER" || check.checkType === "MULTI_STEP") {
+    if (typeof check.script === "string" && check.script.length) {
+      const name = check.scriptPath ? basename(check.scriptPath) : "check.spec.ts";
+      if (check.checkType === "MULTI_STEP" && (!multiStepSourcePath(name)
+        || Buffer.byteLength(check.script, "utf8") > MULTISTEP_MAX_SOURCE_FILE_BYTES)) {
+        warnings.push("MULTISTEP_SOURCE_CLOSURE_BOUND");
+      } else {
+        sources.push({ path: name, content: check.script });
+        mainSource = name;
+      }
+    } else {
+      warnings.push("the API returned no script for this browser check");
+    }
+  }
+
+  if (projectDir) {
+    const root = resolve(projectDir);
+    // Runtime metadata affects how the candidate is installed and executed.
+    // Retain hashes only; never persist scripts, registry URLs, or lockfile data.
+    const dependencyFiles = new Set([
+      "package.json", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb",
+    ]);
+    try {
+      for (const name of readdirSync(root)) {
+        if (/^(?:tsconfig|jsconfig)(?:\.[^.]+)*\.json$/.test(name)) dependencyFiles.add(name);
+      }
+    } catch { warnings.push("project dependency metadata could not be enumerated"); }
+    let metadataBytes = 0;
+    for (const name of [...dependencyFiles].sort()) {
+      const path = join(root, name);
+      if (!existsSync(path)) continue;
+      try {
+        const stat = lstatSync(path);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024
+          || metadataBytes + stat.size > 12 * 1024 * 1024) {
+          warnings.push("project dependency metadata exceeded the safe capture bound");
+          continue;
+        }
+        const content = readFileSync(path);
+        metadataBytes += content.byteLength;
+        dependencyMetadata[name] = sha256(content);
+      } catch { warnings.push("project dependency metadata could not be read safely"); }
+    }
+    try {
+      gitCommit = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim() || null;
+    } catch {
+      gitCommit = null;
+    }
+    const checklyConfig = firstExisting(root, ["checkly.config.ts", "checkly.config.mts", "checkly.config.js", "checkly.config.mjs"]);
+    if (checklyConfig) {
+      const content = check.checkType === "MULTI_STEP"
+        ? boundedMultiStepSource(root, checklyConfig).content : readFileSync(checklyConfig, "utf8");
+      sources.push({ path: relative(root, checklyConfig), content });
+      logicalId = /logicalId\s*:\s*['"`]([^'"`]+)['"`]/.exec(content)?.[1] ?? null;
+      repoUrl = /repoUrl\s*:\s*['"`]([^'"`]+)['"`]/.exec(content)?.[1] ?? null;
+      playwright.configPath = /playwrightConfigPath\s*:\s*['"`]([^'"`]+)['"`]/.exec(content)?.[1] ?? null;
+      playwright.projects = stringList(content, "pwProjects");
+      playwright.tags = stringList(content, "pwTags");
+    } else {
+      warnings.push(`no checkly.config.* found in ${root}`);
+    }
+
+    if (check.checkType === "MULTI_STEP") {
+      // The Checkly API returns the DEPLOYED script (as a basename), whereas
+      // the construct names its actual project-relative entrypoint. Bind those
+      // two identities before saving: no same-basename fallback at verify time.
+      try {
+        const candidates = findApiCheckFiles(root, MULTISTEP_MAX_SOURCE_FILES + 1);
+        if (candidates.length > MULTISTEP_MAX_SOURCE_FILES) throw new Error("MULTISTEP_SOURCE_CLOSURE_BOUND");
+        for (const file of candidates) {
+          const content = boundedMultiStepSource(root, file).content;
+          if (content.includes("new MultiStepCheck(")) collectMultiStepClosure(root, [file], sources);
+        }
+      } catch (error) { warnings.push((error as Error).message.startsWith("MULTISTEP_")
+        ? (error as Error).message : "MULTISTEP_SOURCE_PATH_UNSAFE"); }
+      const construct = parseMultiStepConstruct(new Map(sources.map((item) => [item.path, item.content])));
+      if (construct?.model.errors.length) warnings.push("MULTISTEP_CONSTRUCT_UNRESOLVED");
+      else if (construct && (
+        JSON.stringify(construct.model.locations) !== JSON.stringify(check.locations ?? [])
+        || (typeof check.runParallel === "boolean" && construct.model.runParallel !== check.runParallel)
+        || (typeof check.activated === "boolean" && construct.model.activated !== check.activated)
+        || (typeof check.muted === "boolean" && construct.model.muted !== check.muted)
+        || (typeof check.frequency === "number" && construct.model.frequencyMinutes !== check.frequency)
+      )) warnings.push("MULTISTEP_DEPLOYED_CONFIG_MISMATCH");
+      const entrypoint = construct?.model.entrypoint ?? null;
+      if (entrypoint) {
+        const onDisk = resolve(root, entrypoint);
+        if (relative(root, onDisk).startsWith("..") || isAbsolute(relative(root, onDisk))) {
+          warnings.push("MULTISTEP_ENTRYPOINT_UNSAFE");
+        } else if (existsSync(onDisk)) {
+          try { collectMultiStepClosure(root, [onDisk], sources); }
+          catch (error) { warnings.push((error as Error).message.startsWith("MULTISTEP_")
+            ? (error as Error).message : "MULTISTEP_SOURCE_PATH_UNSAFE"); }
+          const deployed = sources.find((item) => item.path === mainSource);
+          const project = sources.find((item) => item.path === entrypoint);
+          if (deployed && project && deployed.content !== project.content) warnings.push("MULTISTEP_SOURCE_PROJECT_MISMATCH");
+          if (deployed && project && deployed !== project) {
+            // NEVER overwrite the construct's entrypoint with a different
+            // deployed script: the disagreement is an admission failure, not
+            // a way to make a source hash match after the fact.
+            sources.splice(sources.indexOf(deployed), 1);
+          }
+          if (project) mainSource = entrypoint;
+        } else {
+          warnings.push("MULTISTEP_ENTRYPOINT_MISSING");
+        }
+      } else warnings.push("MULTISTEP_CONSTRUCT_UNRESOLVED");
+      const sourceMap = new Map(sources.map((source) => [source.path.replaceAll("\\", "/"), source.content]));
+      const closureProblem = multiStepSourceClosureProblem(sourceMap);
+      if (closureProblem) warnings.push(closureProblem);
+      const model = mainSource && !closureProblem ? parseMultiStepProject(sourceMap, mainSource) : null;
+      if (model?.errors.length) warnings.push("MULTISTEP_SOURCE_UNPROVEN");
+      // The project config describes the *other* Playwright check too. The
+      // incident logical ID belongs to the executed Multistep construct.
+      logicalId = model?.construct?.logicalId ?? null;
+      const deployed = deployedProblem(check, model,
+        mainSource ? sourceMap.get(mainSource) ?? null : null);
+      if (deployed.problem) {
+        warnings.push(deployed.problem);
+        // Field names only — never values or raw provider text.
+        if (deployed.fields.length) warnings.push(`deployed config mismatch field: ${[...new Set(deployed.fields)].join(", ")}`);
+      }
+    }
+
+    if (check.checkType === "API") {
+      const candidates = findApiCheckFiles(root);
+      const selected = candidates.find((file) => {
+        const content = readFileSync(file, "utf8");
+        return new RegExp(`name\\s*:\\s*['\"]${check.name.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}['\"]`).test(content);
+      }) ?? (candidates.length === 1 ? candidates[0] : null);
+      if (selected) {
+        collectModuleClosure(root, [selected], sources);
+        mainSource = relative(root, selected).replace(/\\/g, "/");
+        const fileMap = new Map(sources.map((source) => [source.path.replace(/\\/g, "/"), source.content]));
+        const model = parseApiCheckProject(mainSource, fileMap);
+        if (model?.setupFile) {
+          const setup = resolve(root, model.setupFile);
+          if (existsSync(setup)) collectModuleClosure(root, [setup], sources);
+          else warnings.push(`API setup entrypoint ${model.setupFile} was not found`);
+        }
+        if (model?.teardownFile) {
+          const teardown = resolve(root, model.teardownFile);
+          if (existsSync(teardown)) collectModuleClosure(root, [teardown], sources);
+          else warnings.push(`API teardown entrypoint ${model.teardownFile} was not found`);
+        }
+      } else {
+        warnings.push(`no ApiCheck source matching ${check.name} was found in ${root}`);
+      }
+    }
+
+    if (check.checkType === "PLAYWRIGHT") {
+      const configuredPath = check.playwrightConfigPath ?? playwright.configPath;
+      const configured = configuredPath ? resolve(root, configuredPath) : null;
+      const pwConfig =
+        configured && existsSync(configured) ? configured : firstExisting(root, ["playwright.config.ts", "playwright.config.mts", "playwright.config.js", "playwright.config.mjs"]);
+      if (pwConfig) {
+        const content = readFileSync(pwConfig, "utf8");
+        sources.push({ path: relative(root, pwConfig), content });
+        const testDir = /testDir\s*:\s*['"`]([^'"`]+)['"`]/.exec(content)?.[1] ?? ".";
+        for (const f of findSpecFiles(dirname(pwConfig), testDir)) {
+          sources.push({ path: relative(root, f), content: readFileSync(f, "utf8") });
+        }
+      } else {
+        warnings.push("no playwright.config.* found in the project directory; spec files were not collected");
+      }
+    }
+  } else if (check.checkType === "PLAYWRIGHT") {
+    warnings.push("Playwright check suites keep their code in a bundle Checkly does not serve back; pass --project <dir> so the spec files are copied from your repo");
+  }
+
+  // main spec: the file named in the failing error, else the only spec
+  const specs = sources.filter((s) => /\.(spec|test)\.[cm]?[jt]sx?$/.test(s.path));
+  if (!mainSource) {
+    const errText = failingErrors.join("\n");
+    const named = specs.find((s) => errText.includes(s.path) || errText.includes(basename(s.path)));
+    mainSource = named?.path ?? (specs.length === 1 ? specs[0].path : specs[0]?.path ?? null);
+  }
+  return { sources, dependencyMetadata, mainSource, gitCommit, logicalId, repoUrl, playwright, warnings };
+}
+
+const MULTISTEP_ASSET_NAMES = ["test-results.json", "check-run-data.json", "logs.txt"];
+
+async function fetchResultWithTrace(
+  client: ChecklyClient,
+  checkId: string,
+  summary: CheckResultSummary,
+  label: "failing" | "passing",
+  bodies: BodyPolicy,
+  assetsOut: ManifestV3["provenance"]["assets"],
+  rawDir: string | null,
+  log: (l: string) => void,
+  toolVersion: string,
+  secretValues: string[],
+  assetKind: "trace" | "multistep" = "trace",
+  localAssets: MultiStepAssetTexts | null = null,
+): Promise<{ fetched: FetchedResult; warnings: string[] }> {
+  const warnings: string[] = [];
+  let detail: CheckResult | null = null;
+  try {
+    detail = await client.getResult(checkId, summary.id);
+  } catch (err) {
+    warnings.push(`${label}: could not load result detail (${(err as Error).message})`);
+  }
+  const apiRecording = detail && assetKind !== "multistep" ? apiRecordingFromResult(checkId, detail, secretValues) : null;
+
+  if (assetKind === "multistep") {
+    // Structured capture: normalize the downloaded assets (or fetch them
+    // through the API when no --assets dir was given). Raw bytes are hashed
+    // for provenance and never written to the bundle.
+    const texts: MultiStepAssetTexts = { testResults: null, checkRunData: null, logs: null, found: [], missing: [] };
+    if (localAssets) {
+      Object.assign(texts, localAssets);
+      // Hash-only provenance for locally supplied assets: every raw byte
+      // hashed BEFORE parsing, recorded in provenance, never written.
+      for (const [name, meta] of Object.entries(localAssets.hashes ?? {})) {
+        assetsOut.push({ result: label, name, type: "local-asset", bytes: meta.bytes, sha256: meta.sha256 });
+      }
+      if (localAssets.invalid) warnings.push(`${label}: local assets invalid (${localAssets.invalid}) — recorded as UNCERTAIN evidence, never a fallback`);
+      log(`[bundle] ${label}: using local --assets (${texts.found.join(", ") || "no files"})`);
+    } else {
+      let entries: AssetManifestEntry[] = [];
+      let invalid: string | null = null;
+      let rejectedCategory: string | null = null;
+      try {
+        // MULTI_STEP must fetch the complete result manifest. In particular,
+        // never pass type="trace" here: that filter is for Browser/Playwright
+        // trace acquisition and can hide the report/file assets used below.
+        const m = await client.getAssets(checkId, summary.id);
+        if (!Array.isArray(m.assets)) invalid = "MULTISTEP_ASSET_MANIFEST_INVALID";
+        else entries = m.assets;
+        if (m.truncated) invalid = "MULTISTEP_ASSET_MANIFEST_TRUNCATED";
+      } catch {
+        invalid = "MULTISTEP_ASSET_MANIFEST_UNAVAILABLE";
+      }
+      log("[bundle] " + label + ": multistep asset manifest entries=" + entries.length);
+      // Safe acquisition diagnostic: names/types only, never URLs or asset bytes.
+      if (entries.length > 0) {
+        const descriptors = entries.slice(0, ASSET_ZIP_BOUNDS.maxEntries).map((asset) => {
+          const name = asset && typeof asset.name === "string" ? basename(asset.name) : "<invalid-name>";
+          const archive = asset && asset.archive && typeof asset.archive === "object"
+            && typeof asset.archive.entryName === "string" ? basename(asset.archive.entryName) : null;
+          const type = asset && typeof asset.type === "string" ? asset.type : "<invalid-type>";
+          return archive ? `${name} [${type}; archive=${archive}]` : `${name} [${type}]`;
+        });
+        log("[bundle] " + label + ": multistep asset descriptors=" + descriptors.join(", "));
+      }
+      const byName = new Map<string, string>();
+      const archiveCache = new Map<string, ReturnType<typeof openZipBounded>>();
+      let totalDecoded = 0;
+      let totalDownloaded = 0;
+      if (entries.length > ASSET_ZIP_BOUNDS.maxEntries) {
+        invalid = "MULTISTEP_ASSET_COUNT_EXCEEDED";
+        rejectedCategory = "manifest-count";
+      }
+      const knownAssetType = new Set(["log", "trace", "video", "screenshot", "pcap", "report", "file"]);
+      for (const asset of invalid ? [] : entries) {
+        // The manifest is untrusted JSON. Validate only the provider contract
+        // needed to safely select and download the three known evidence names.
+        if (!asset || typeof asset !== "object" || typeof asset.name !== "string" || typeof asset.url !== "string") {
+          invalid = "MULTISTEP_ASSET_MANIFEST_INVALID";
+          rejectedCategory = "manifest-shape";
+          break;
+        }
+        const archiveEntry = asset.archive?.entryName;
+        if (asset.archive != null && (!asset.archive || typeof asset.archive !== "object"
+          || typeof archiveEntry !== "string" || archiveEntry.length > 256)) {
+          invalid = "MULTISTEP_ASSET_MANIFEST_INVALID";
+          rejectedCategory = "archive-descriptor";
+          break;
+        }
+        if (asset.archive != null && Object.keys(asset.archive).some((key) => key !== "entryName")) {
+          invalid = "MULTISTEP_ASSET_TYPE_INVALID";
+          rejectedCategory = "archive-descriptor";
+          break;
+        }
+        // Checkly's manifest endpoint is already scoped to checkId/resultId.
+        // The evidence selector is the archive entry/name, not type=trace.
+        const archived = typeof archiveEntry === "string" ? basename(archiveEntry) : "";
+        // Checkly's asset selector is case-insensitive and matches the archive
+        // entry name or the asset name. Normalize only the filename extension
+        // used by the Multistep evidence contract so provider-side naming
+        // variants such as "test-results" still bind to the same fixed asset.
+        const normalizeMultistepName = (value: string): string => {
+          let lower = value.toLowerCase();
+          if (lower.endsWith(".gz")) lower = lower.slice(0, -3);
+          return lower.endsWith(".json") ? lower : lower === "test-results" || lower === "check-run-data" ? lower + ".json" : lower;
+        };
+        const archivedNormalized = normalizeMultistepName(archived);
+        const assetNameNormalized = normalizeMultistepName(basename(asset.name));
+        const name = MULTISTEP_ASSET_NAMES.find((candidate) =>
+          candidate === archivedNormalized || candidate === assetNameNormalized) ?? null;
+        if (!name) {
+          rejectedCategory = rejectedCategory ?? "asset-name";
+          continue;
+        }
+        if (byName.has(name)) {
+          invalid = "MULTISTEP_DUPLICATE_ASSET";
+          rejectedCategory = "duplicate-name";
+          break;
+        }
+        let remoteUrl: URL;
+        try { remoteUrl = new URL(asset.url); }
+        catch {
+          invalid = "MULTISTEP_ASSET_MANIFEST_INVALID";
+          rejectedCategory = "asset-url";
+          break;
+        }
+        // Checkly CLI 9.5.0 defines source as the literal "check-result".
+        // Structured source objects are retained only for compatibility with
+        // older captured manifests; their IDs are checked when present.
+        const source: unknown = asset.source;
+        const sourceRecord = source && typeof source === "object" && !Array.isArray(source)
+          ? source as unknown as Record<string, unknown> : null;
+        const sourceType = typeof source === "string" ? source : sourceRecord?.type;
+        const sourceCheckId = typeof sourceRecord?.checkId === "string" ? sourceRecord.checkId : null;
+        const sourceResultId = typeof sourceRecord?.resultId === "string" ? sourceRecord.resultId : null;
+        const sourceValid = sourceRecord !== null
+          ? sourceType === "check-result"
+            && sourceCheckId === checkId
+            && sourceResultId === summary.id
+          : sourceType === "check-result";
+        const contentTypeValid = asset.contentType === undefined
+          || (typeof asset.contentType === "string" && asset.contentType.length <= 512);
+        const contentEncodingValid = asset.contentEncoding === undefined
+          || (typeof asset.contentEncoding === "string" && asset.contentEncoding.length <= 128);
+        const unexpectedAssetKeys = Object.keys(asset).filter((key) =>
+          !["name", "type", "url", "contentType", "contentEncoding", "source", "archive"].includes(key));
+        if (!knownAssetType.has(asset.type)
+          || !sourceValid
+          || !contentTypeValid
+          || !contentEncodingValid
+          || remoteUrl.protocol !== "https:" || remoteUrl.username || remoteUrl.password
+          || asset.url.length > 4096
+          || unexpectedAssetKeys.length > 0) {
+          invalid = "MULTISTEP_ASSET_TYPE_INVALID";
+          rejectedCategory = !knownAssetType.has(asset.type) ? "asset-type"
+            : !sourceValid ? "source"
+            : !contentTypeValid ? "content-type"
+            : !contentEncodingValid ? "content-encoding"
+            : "manifest-descriptor";
+          if (rejectedCategory === "manifest-descriptor") {
+            log("[bundle] " + label + ": multistep rejected descriptor keys=" + unexpectedAssetKeys.join(","));
+          }
+          break;
+        }
+        const manifestEntrySha256 = sha256(Buffer.from(JSON.stringify({
+          type: asset.type, name: asset.name, source: {
+            type: typeof source === "string" ? source : sourceRecord?.type ?? null,
+            checkId: typeof sourceRecord?.checkId === "string" ? sourceRecord.checkId : null,
+            checkName: typeof sourceRecord?.checkName === "string" ? sourceRecord.checkName : null,
+            checkType: typeof sourceRecord?.checkType === "string" ? sourceRecord.checkType : null,
+            resultId: typeof sourceRecord?.resultId === "string" ? sourceRecord.resultId : null,
+            testSessionId: typeof sourceRecord?.testSessionId === "string" ? sourceRecord.testSessionId : null,
+          }, url: asset.url,
+          contentType: asset.contentType ?? null, contentEncoding: asset.contentEncoding ?? null,
+          archive: asset.archive?.entryName ?? null,
+        }), "utf8"));
+        try {
+          let buf: Buffer;
+          if (asset.archive) {
+            let zip = archiveCache.get(asset.url);
+            if (!zip) {
+              const archive = await client.download(asset.url, Math.min(MAX_ASSET_ZIP_BYTES, ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalDownloaded));
+              if (archive.length > MAX_ASSET_ZIP_BYTES || archive.length > ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalDownloaded) throw new Error("zip: archive exceeds byte bound");
+              totalDownloaded += archive.length;
+              // The HTTP client has already enforced HTTPS-only origin rules and
+              // the streaming byte bound. Retain those validated downloaded
+              // bytes BEFORE opening/parsing the archive, so --keep-raw still
+              // recovers the exact provider artifact when ZIP validation fails.
+              if (rawDir) {
+                mkdirSync(rawDir, { recursive: true });
+                writeFileSync(join(rawDir, "archive-" + sha256(asset.url) + ".zip"), archive);
+              }
+              zip = openZipBounded(archive, ASSET_ZIP_BOUNDS);
+              archiveCache.set(asset.url, zip);
+            }
+            const entry = zip.get(asset.archive.entryName);
+            if (!entry) throw new Error("zip: required asset entry is missing");
+            buf = entry();
+          } else {
+            buf = await client.download(asset.url, Math.min(MAX_ASSET_FILE_BYTES, ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalDownloaded));
+            if (buf.length > ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalDownloaded) throw new Error("asset download exceeds byte bound");
+            totalDownloaded += buf.length;
+            // Direct assets are already HTTPS-origin and byte-bound validated
+            // by client.download. Retain them before any evidence parsing.
+            if (rawDir) {
+              mkdirSync(rawDir, { recursive: true });
+              writeFileSync(join(rawDir, basename(asset.name) || name), buf);
+            }
+          }
+          const selectedSourceName = archiveEntry || asset.name;
+          const selectedName = basename(selectedSourceName).toLowerCase();
+          if (selectedName.endsWith(".gz")) {
+            try {
+              buf = gunzipSync(buf);
+            } catch {
+              throw new Error("asset gzip decompression failed");
+            }
+          }
+          if (buf.length > MAX_ASSET_FILE_BYTES || buf.length > ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalDecoded) {
+            throw new Error("asset exceeds decoded byte bound");
+          }
+          totalDecoded += buf.length;
+          assetsOut.push({ result: label, name, type: "remote-asset", resultId: summary.id, assetType: asset.type,
+            manifestEntrySha256, bytes: buf.length, sha256: sha256(buf) });
+          byName.set(name, buf.toString("utf8"));
+        } catch (err) {
+          rejectedCategory = "download-or-archive";
+          if (err instanceof Error) {
+            log(`[bundle] remote Multistep asset acquisition failed: ${err.name}: ${err.message}`);
+            if ("status" in err && typeof (err as { status?: unknown }).status === "number") {
+              const status = (err as { status: number }).status;
+              log(`[bundle] remote Multistep asset download failed: HTTP ${status}`);
+            }
+          } else {
+            log("[bundle] remote Multistep asset acquisition failed: non-Error");
+          }
+          invalid = multistepProblemCategory(err instanceof Error ? err.message : "asset invalid");
+          break; // partial remote capture is not admissible evidence
+        }
+      }
+      if (invalid) {
+        texts.invalid = invalid;
+        assetsOut.splice(0, assetsOut.length, ...assetsOut.filter((asset) => asset.result !== label));
+        log("[bundle] " + label + ": multistep asset rejected category=" + (rejectedCategory ?? "manifest"));
+        warnings.push(`${label}: remote Multistep asset capture is invalid (${invalid}) — UNCERTAIN`);
+      } else {
+        texts.testResults = byName.get("test-results.json") ?? null;
+        texts.checkRunData = byName.get("check-run-data.json") ?? null;
+        texts.logs = byName.get("logs.txt") ?? null;
+        texts.found = MULTISTEP_ASSET_NAMES.filter((name) => byName.has(name));
+        texts.missing = MULTISTEP_ASSET_NAMES.filter((name) => !byName.has(name));
+        log("[bundle] " + label + ": multistep asset selected=" + byName.size);
+      if (entries.length > 0 && byName.size === 0) {
+        log("[bundle] " + label + ": multistep asset rejected category=" + (rejectedCategory ?? "manifest"));
+      }
+      }
+    }
+    if (texts.testResults === null && !texts.missing.includes("test-results.json")) texts.missing.push("test-results.json");
+    return {
+      fetched: { summary, detail, extract: null, apiRecording: null, multistep: null, multistepTexts: texts, multistepProblems: [] },
+      warnings,
+    };
+  }
+
+  let manifestEntries: AssetManifestEntry[] = [];
+  try {
+    const m = await client.getAssets(checkId, summary.id, apiRecording ? undefined : "trace");
+    manifestEntries = m.assets ?? [];
+    if (m.truncated) warnings.push(`${label}: asset manifest truncated (${m.entriesReturned}/${m.entriesTotal})`);
+  } catch (err) {
+    warnings.push(`${label}: could not list assets (${(err as Error).message})`);
+  }
+  if (!apiRecording && manifestEntries.length === 0) warnings.push(`${label}: no Playwright trace asset on result ${summary.id} (is trace: 'on' in playwright.config.ts?)`);
+
+  const archiveCache = new Map<string, Buffer>();
+  const extracts: TraceExtract[] = [];
+  let totalRemoteDownloaded = 0;
+  const downloadBounded = async (url: string): Promise<Buffer> => {
+    const remaining = ASSET_ZIP_BOUNDS.maxTotalUncompressedBytes - totalRemoteDownloaded;
+    const budget = Math.min(MAX_ASSET_ZIP_BYTES, remaining);
+    if (budget <= 0) throw new Error("remote trace download aggregate bound exceeded");
+    const data = await client.download(url, budget);
+    if (data.length > budget) throw new Error("remote trace download aggregate bound exceeded");
+    totalRemoteDownloaded += data.length;
+    return data;
+  };
+  for (const asset of manifestEntries) {
+    try {
+      let buf: Buffer;
+      if (asset.archive) {
+        let archive = archiveCache.get(asset.url);
+        if (!archive) {
+          archive = await downloadBounded(asset.url);
+          archiveCache.set(asset.url, archive);
+        }
+        const entry = openZipBounded(archive).get(asset.archive.entryName);
+        if (!entry) throw new Error("trace asset entry is missing from archive");
+        buf = entry();
+      } else {
+        buf = await downloadBounded(asset.url);
+      }
+      assetsOut.push({ result: label, name: asset.name, type: asset.type, bytes: buf.length, sha256: sha256(buf) });
+      // API assets may contain wire-level authorization data. Hash them for
+      // provenance, but never write or parse them into a bundle.
+      if (apiRecording) continue;
+      if (rawDir) {
+        mkdirSync(rawDir, { recursive: true });
+        writeFileSync(join(rawDir, basename(asset.archive?.entryName ?? asset.name) || "trace.zip"), buf);
+      }
+      if (!isZip(buf)) throw new Error("asset is not a zip file");
+      extracts.push(traceZipToHar(buf, { bodies, creatorVersion: toolVersion }));
+      log(`[bundle] ${label}: trace ${asset.name} → ${extracts.at(-1)!.har.log.entries.length} requests, ${extracts.at(-1)!.actions.length} actions`);
+    } catch (err) {
+      warnings.push(`${label}: trace ${asset.name} skipped (${(err as Error).message})`);
+    }
+  }
+  let extract: TraceExtract | null = null;
+  if (extracts.length === 1) extract = extracts[0];
+  else if (extracts.length > 1) {
+    const withFailure = extracts.find((e) => e.failingAction) ?? extracts[0];
+    extract = {
+      har: mergeHars(extracts.map((e) => e.har), toolVersion),
+      actions: extracts.flatMap((e) => e.actions),
+      failingAction: withFailure.failingAction,
+      baseURL: withFailure.baseURL ?? extracts.find((e) => e.baseURL)?.baseURL ?? null,
+      browserName: withFailure.browserName,
+      files: {
+        network: extracts.flatMap((e) => e.files.network),
+        trace: extracts.flatMap((e) => e.files.trace),
+        resources: extracts.reduce((n, e) => n + e.files.resources, 0),
+      },
+    };
+  }
+  return { fetched: { summary, detail, extract, apiRecording }, warnings };
+}
+
+function trimmedResult(detail: CheckResult | null, apiRecording?: FetchedResult["apiRecording"], multistep = false): Record<string, unknown> | null {
+  if (!detail) return null;
+  if (multistep) return multiStepRunMetadata(detail as CheckResultSummary);
+  const r = detail.playwrightCheckResult ?? detail.browserCheckResult ?? detail.multiStepCheckResult ?? null;
+  return {
+    id: detail.id,
+    runLocation: detail.runLocation,
+    startedAt: detail.startedAt,
+    stoppedAt: detail.stoppedAt ?? null,
+    hasFailures: detail.hasFailures,
+    hasErrors: detail.hasErrors,
+    attempts: detail.attempts ?? null,
+    resultType: detail.resultType ?? null,
+    errorGroupIds: detail.errorGroupIds ?? [],
+    errors: r?.errors ?? [],
+    runtimeVersion: r?.runtimeVersion ?? null,
+    pages: r?.pages?.map((p) => ({ url: p.url })) ?? [],
+    traceSummary: r?.traceSummary ?? null,
+    apiCheckResult: apiRecording
+      ? {
+          request: apiRecording.request ? { method: apiRecording.request.method, url: apiRecording.request.url } : null,
+          response: apiRecording.response ? { status: apiRecording.response.status, contentType: apiRecording.response.contentType, readable: apiRecording.response.readable, truncated: apiRecording.response.truncated } : null,
+          requestError: detail.apiCheckResult?.requestError ? "request error present; sensitive message omitted" : null,
+          assertionCount: detail.apiCheckResult?.assertions?.length ?? null,
+          recording: `recordings/${detail.hasFailures || detail.hasErrors ? "failing" : "passing"}.api.json`,
+        }
+      : null,
+  };
+}
+
+/** Defense in depth: no env var VALUE may appear in any written text. */
+export function assertNoSecretLeak(texts: Array<{ file: string; text: string }>, values: string[]): void {
+  const needles = values.filter((v) => typeof v === "string" && v.length >= 6);
+  for (const { file, text } of texts) {
+    for (const v of needles) {
+      if (text.includes(v)) throw new Error(`refusing to write ${file}: it contains the value of a Checkly environment variable`);
+    }
+  }
+}
+
+const MULTISTEP_OUTPUT_FILES = new Set([
+  "manifest.json", "check.config.json", "README.md", ".gitignore",
+  "results/failing.json", "results/passing.json", "results/history.json",
+  "recordings/failing.multistep.json", "recordings/passing.multistep.json",
+]);
+
+/** A Multistep bundle has a small, explicit set of output paths. Reject
+ * symlinks/hardlinks in a reused output directory rather than following them
+ * when replacing an earlier synthetic capture. The caller chooses outDir, but
+ * data-derived paths can never escape it or introduce arbitrary artifacts. */
+function writeMultiStepBundleFiles(outDir: string, files: Array<{ file: string; text: string }>, secrets: string[]): Array<{ file: string; text: string }> {
+  const seen = new Set<string>();
+  let totalBytes = 0;
+  if (files.length > MULTISTEP_MAX_SOURCE_FILES + MULTISTEP_OUTPUT_FILES.size) throw new Error("MULTISTEP_OUTPUT_BOUND");
+  for (const entry of files) {
+    const name = entry.file.replaceAll("\\", "/");
+    if (entry.file !== name || seen.has(name)
+      || !(MULTISTEP_OUTPUT_FILES.has(name) || (name.startsWith("check/") && multiStepSourcePath(name.slice(6)) === name.slice(6)))) {
+      throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+    }
+    seen.add(name);
+    const bytes = Buffer.byteLength(entry.text, "utf8");
+    const limit = name.startsWith("recordings/") ? 2 * 1024 * 1024 : 4 * 1024 * 1024;
+    if (bytes > limit || (totalBytes += bytes) > 16 * 1024 * 1024) throw new Error("MULTISTEP_OUTPUT_BOUND");
+  }
+  const statOrNull = (file: string): ReturnType<typeof lstatSync> | null => {
+    try { return lstatSync(file); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  };
+  const dirs = new Set<string>();
+  for (const file of seen) {
+    const parts = file.split("/");
+    for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join("/"));
+  }
+  // Inspect the ENTIRE existing tree (including stale files) before writing.
+  // Neither a valid old bundle nor a planted secret may leave an unexamined
+  // path. Directory walks and reads are bounded before allocation.
+  const inspect = (dir: string, rel = "", collected: Array<{ file: string; text: string }> = []): Array<{ file: string; text: string }> => {
+    for (const name of readdirSync(dir)) {
+      if (collected.length > MULTISTEP_MAX_SOURCE_FILES + MULTISTEP_OUTPUT_FILES.size
+        || name === "." || name === "..") throw new Error("MULTISTEP_OUTPUT_BOUND");
+      const path = rel ? `${rel}/${name}` : name;
+      const stat = lstatSync(join(dir, name));
+      if (stat.isSymbolicLink()) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+      if (stat.isDirectory()) {
+        if (!dirs.has(path)) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+        inspect(join(dir, name), path, collected);
+      } else {
+        if (!seen.has(path) || !stat.isFile() || stat.nlink !== 1
+          || stat.size > (path.startsWith("recordings/") ? 2 : 4) * 1024 * 1024) {
+          throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+        }
+        collected.push({ file: path, text: readFileSync(join(dir, name), "utf8") });
+      }
+    }
+    if (collected.length > files.length || collected.reduce((n, f) => n + Buffer.byteLength(f.text), 0) > 16 * 1024 * 1024) {
+      throw new Error("MULTISTEP_OUTPUT_BOUND");
+    }
+    return collected;
+  };
+  let ancestor = dirname(outDir);
+  while (true) {
+    const stat = statOrNull(ancestor);
+    if (stat) {
+      // Resolve OS-level symlinks (macOS /var → /private/var, /tmp →
+      // /private/tmp): the resolved parent must be a real directory. The
+      // outDir itself and its contents stay lstat-checked (no-follow) below.
+      const target = stat.isSymbolicLink() ? statOrNull(realpathSync(ancestor)) : stat;
+      if (!target || !target.isDirectory()) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+    }
+    if (ancestor === dirname(ancestor)) break;
+    ancestor = dirname(ancestor);
+  }
+  const root = statOrNull(outDir);
+  if (root && (!root.isDirectory() || root.isSymbolicLink())) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+  if (root) assertNoSecretLeak(inspect(outDir), secrets);
+  mkdirSync(outDir, { recursive: true });
+  if (!lstatSync(outDir).isDirectory() || lstatSync(outDir).isSymbolicLink()) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+  // Preflight every existing path before writing any file, including broken
+  // symlinks and hardlinks whose target is outside the output directory.
+  for (const entry of files) {
+    const parts = entry.file.split("/");
+    let parent = outDir;
+    for (const segment of parts.slice(0, -1)) {
+      parent = join(parent, segment);
+      const stat = statOrNull(parent);
+      if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+    }
+    const existing = statOrNull(join(outDir, entry.file));
+    if (existing && (!existing.isFile() || existing.isSymbolicLink() || existing.nlink !== 1)) {
+      throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+    }
+  }
+  const written: Array<{ file: string; text: string }> = [];
+  for (const entry of files) {
+    const p = join(outDir, entry.file);
+    mkdirSync(dirname(p), { recursive: true });
+    // Never truncate before verifying the opened descriptor. O_NOFOLLOW and
+    // O_EXCL protect final-component symlinks and race-created replacements.
+    const exists = statOrNull(p) !== null;
+    const fd = openSync(p, exists ? constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0)
+      : constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
+    try {
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.nlink !== 1) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+      if (exists) ftruncateSync(fd, 0);
+      writeFileSync(fd, entry.text);
+    } finally { closeSync(fd); }
+    written.push({ file: entry.file, text: readFileSync(p, "utf8") });
+  }
+  const tree = inspect(outDir);
+  if (tree.length !== files.length || tree.some((entry) => !seen.has(entry.file))) throw new Error("MULTISTEP_OUTPUT_PATH_UNSAFE");
+  assertNoSecretLeak(tree, secrets); // full postflight, not just our writes
+  return written;
+}
+
+export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<BuildOutcome> {
+  const log = opts.log ?? (() => {});
+  const client = deps.client;
+  const toolVersion = deps.toolVersion ?? "0.1.0";
+  const now = (deps.now ?? (() => new Date()))().toISOString();
+  const bodies: BodyPolicy = opts.bodies ?? "api";
+  const warnings: string[] = [];
+  const outDir = resolve(opts.outDir);
+
+  // 1. check
+  const check = await client.getCheck(opts.checkId);
+  // Phase 9.10: record the account's real sibling monitors. A failure here is
+  // non-fatal to capture but marks the inventory incomplete, which forces the
+  // verifier to answer UNCERTAIN instead of claiming no other monitor moved.
+  let siblingInventory: NonNullable<ManifestInputs["siblingMonitors"]> | null = null;
+  if (opts.projectDir) {
+    try {
+      siblingInventory = captureSiblingInventory(resolve(opts.projectDir), await client.listChecks());
+      log(`[bundle] sibling monitors captured: ${siblingInventory.monitors.length} (complete=${siblingInventory.complete})`);
+    } catch (error) {
+      siblingInventory = { monitors: [], complete: false, reason: (error as Error).message };
+      log("[bundle] sibling monitor inventory unavailable; regression scope will be UNCERTAIN");
+    }
+  }
+  if (check.checkType === "MULTI_STEP") log("[bundle] Multistep deployed check fetched; configuration and script require exact local binding");
+  else log(`[bundle] check ${check.id} "${check.name}" type=${check.checkType} locations=${(check.locations ?? []).join(",")} runParallel=${Boolean(check.runParallel)}`);
+  const secretValues = (check.environmentVariables ?? []).map((v) => v.value).filter((v): v is string => typeof v === "string");
+  let checkGroup: ChecklyCheckGroup | null = null;
+  if (check.groupId !== null && check.groupId !== undefined) {
+    try {
+      checkGroup = await client.getCheckGroup(check.groupId);
+    } catch (error) {
+      // Keep capture useful in shadow/migration mode, but policy fields that
+      // may inherit from this group remain unknown. The verifier will not
+      // substitute a guessed default if enforcement is requested.
+      warnings.push(`check group settings unresolved (${error instanceof Error ? error.constructor.name : "provider error"})`);
+    }
+  }
+  const isMultiStep = check.checkType === "MULTI_STEP";
+  // Raw retention for this protected transaction never lands INSIDE the
+  // sanitized bundle (which must stay origin-free and bounded): for a
+  // Multistep check the downloaded artifact bytes — already Checkly-redacted
+  // at the source — go to a SIBLING "<outDir>-raw" directory so a failed
+  // validation can actually be recovered and diagnosed. The bundle tree
+  // itself is unchanged and the postflight below still scans only outDir.
+  const rawDir = !opts.keepRaw ? null
+    : isMultiStep ? resolve(`${outDir}-raw`)
+      : join(outDir, "raw");
+  if (isMultiStep && opts.keepRaw) warnings.push(`keep-raw: raw downloaded artifacts (Checkly-redacted, unverified) will be written beside the bundle at ${rawDir}`);
+  const multistepAssets = opts.assetsDir && isMultiStep ? readMultiStepAssets(opts.assetsDir) : null;
+  if (opts.assetsDir && !isMultiStep) warnings.push("--assets is only used for MULTI_STEP checks; ignored for this check type");
+  if (opts.assetsDir && isMultiStep) {
+    log(`[bundle] local assets supplied: failing [${multistepAssets?.failing?.found.join(", ") ?? "none"}], passing [${multistepAssets?.passing?.found.join(", ") ?? "none"}]`);
+  }
+
+  // 2. history
+  // Result history is cursor-paginated. The API's first page is not a
+  // sufficient history window when a check has been failing for a while:
+  // keep fetching bounded FINAL pages until we find the requested/incident
+  // result and a passing control, or exhaust the caller's explicit history
+  // budget. Never synthesize a passing result.
+  const historyLimit = opts.historyLimit ?? 1000;
+  const history: CheckResultSummary[] = [];
+  let nextId: string | null = null;
+  do {
+    const remaining = historyLimit - history.length;
+    if (remaining <= 0) break;
+    const page = await client.listResults(check.id, {
+      limit: Math.min(100, remaining), nextId: nextId ?? undefined,
+      resultType: "FINAL", fields: RESULT_FIELDS,
+    });
+    const entries = Array.isArray(page.entries) ? page.entries : [];
+    history.push(...entries.slice(0, remaining));
+    const previousNextId: string | null = nextId;
+    nextId = typeof page.nextId === "string" && page.nextId.length > 0 ? page.nextId : null;
+    if (!entries.length || nextId === previousNextId) break;
+    // Once both sides exist, older pages cannot improve the selected passing
+    // control. Stop early while preserving the explicit bound.
+    const hasRequestedFailure = !opts.resultId || history.some((r) => r.id === opts.resultId);
+    const hasRequestedPass = !opts.passingResultId || history.some((r) => r.id === opts.passingResultId);
+    const hasFailure = opts.resultId ? hasRequestedFailure : history.some((r) => !isOk(r));
+    const hasPass = opts.passingResultId ? hasRequestedPass : history.some((r) => isOk(r));
+    if (hasFailure && hasPass) break;
+  } while (nextId !== null);
+  history.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  log(`[bundle] ${history.length} recent FINAL results (${history.filter(isOk).length} passed, ${history.filter((r) => !isOk(r)).length} failed)`);
+
+  let failingSummary: CheckResultSummary | null = null;
+  if (opts.resultId) {
+    failingSummary = history.find((r) => r.id === opts.resultId) ?? null;
+    if (!failingSummary) {
+      const d = await client.getResult(check.id, opts.resultId);
+      failingSummary = d;
+    }
+    if (isOk(failingSummary)) warnings.push(`--result ${opts.resultId} is a passing result; it is used as the incident anyway because you asked for it`);
+  } else {
+    failingSummary = history.find((r) => !isOk(r)) ?? null;
+  }
+  // The passing reference, best first:
+  //   a) a run from another location that overlapped the failing run and
+  //      passed — same code, same minute, the closest control there is;
+  //   b) the last passing run before the failing one;
+  //   c) any passing run.
+  const overlapping = findOverlappingRuns(failingSummary, history);
+  const sibling = overlapping.find((o) => o.passed && o.runLocation !== failingSummary?.runLocation);
+  let passingSummary: CheckResultSummary | null = null;
+  if (opts.passingResultId) {
+    passingSummary = history.find((r) => r.id === opts.passingResultId) ?? null;
+    if (!passingSummary) {
+      const d = await client.getResult(check.id, opts.passingResultId);
+      passingSummary = d;
+    }
+    if (!isOk(passingSummary)) {
+      throw new Error(`--passing-result ${opts.passingResultId} is not a passing result`);
+    }
+    if (failingSummary?.id === passingSummary.id) {
+      throw new Error(`--passing-result ${opts.passingResultId} must differ from the failing result`);
+    }
+  } else {
+    passingSummary =
+      (sibling ? history.find((r) => r.id === sibling.runId) : null) ??
+      history.find((r) => isOk(r) && (!failingSummary || r.startedAt < failingSummary!.startedAt) && r.id !== failingSummary?.id) ??
+      history.find((r) => isOk(r) && r.id !== failingSummary?.id) ??
+      null;
+  }
+  log(`[bundle] failing=${failingSummary?.id ?? "none"} passing=${passingSummary?.id ?? "none"}${sibling ? ` (overlapping run from ${sibling.runLocation}, started ${(sibling.startDeltaMs / 1000).toFixed(1)} s before)` : ""}`);
+  if (overlapping.length) log(`[bundle] ${overlapping.length} run(s) overlapped the failing run in time: ${overlapping.map((o) => `${o.runId}@${o.runLocation} ${o.passed ? "passed" : "failed"}`).join(", ")}`);
+
+  // 3. results + traces
+  const assets: ManifestV3["provenance"]["assets"] = [];
+  let failing: FetchedResult | null = null;
+  let passing: FetchedResult | null = null;
+  const assetKind: "trace" | "multistep" = isMultiStep ? "multistep" : "trace";
+  if (failingSummary) {
+    const r = await fetchResultWithTrace(client, check.id, failingSummary, "failing", bodies, assets, rawDir ? join(rawDir, "failing") : null, log, toolVersion, secretValues, assetKind, multistepAssets?.failing ?? null);
+    failing = r.fetched;
+    warnings.push(...r.warnings);
+  }
+  if (passingSummary) {
+    const r = await fetchResultWithTrace(client, check.id, passingSummary, "passing", bodies, assets, rawDir ? join(rawDir, "passing") : null, log, toolVersion, secretValues, assetKind, multistepAssets?.passing ?? (!failingSummary ? multistepAssets?.failing : null) ?? null);
+    passing = r.fetched;
+    warnings.push(...r.warnings);
+  }
+
+  // 3b. Multistep: normalize → extract relationships → sanitize → record.
+  // Only sanitized structured evidence is ever written; problems become
+  // manifest.multistep so `verify` maps them to UNCERTAIN.
+  const multistepRecordings: { failing: string | null; passing: string | null } = { failing: null, passing: null };
+  const multistepDrafts: Partial<Record<"failing" | "passing", { recording: MultiStepRecordingDraft; capture: MultiStepCapture }>> = {};
+  const boundRecordings: Partial<Record<"failing" | "passing", MultiStepRecording>> = {};
+  const multistepProblems: { failing: string[] | null; passing: string[] | null } = { failing: null, passing: null };
+  const multistepSecrets: string[] = [];
+  for (const [side, fetched] of [["failing", failing], ["passing", passing]] as const) {
+    if (!fetched?.multistepTexts) continue;
+    const expectFailing = side === "failing";
+    if (isOk(fetched.summary) === expectFailing) {
+      const problems = ["MULTISTEP_RESULT_SIDE_MISMATCH"];
+      fetched.multistepProblems = problems;
+      multistepProblems[side] = problems;
+      warnings.push(`${side}: result summary contradicts the evidence side — UNCERTAIN`);
+      continue;
+    }
+    const capture = buildMultiStepRecording({ texts: fetched.multistepTexts, attempts: fetched.summary.attempts ?? null });
+    if (capture.ok && capture.recording.kind === side) {
+      multistepDrafts[side] = { recording: capture.recording, capture: capture.capture };
+      // No draft can become a manifest failure point or recording pointer.
+      fetched.multistep = null;
+      fetched.multistepProblems = [];
+      multistepProblems[side] = null;
+      multistepSecrets.push(...capture.secrets);
+      log(`[bundle] ${side}: multistep capture normalized (${capture.capture.kind}, ${capture.capture.steps.length} step entries)`);
+    } else {
+      const problems = capture.ok ? ["MULTISTEP_CAPTURE_SIDE_MISMATCH"] : capture.problems;
+      fetched.multistep = null;
+      fetched.multistepProblems = problems;
+      multistepProblems[side] = problems;
+      warnings.push(`${side}: multistep evidence unresolved (${problems[0]}) — UNCERTAIN, never PASS/FAIL`);
+    }
+  }
+
+  // 4. error group + RCA
+  let errorGroup: ErrorGroup | null = null;
+  let rca: RootCauseAnalysis | null = null;
+  let replacedRca: RootCauseAnalysis | null = null;
+  if (failing && !isMultiStep) {
+    const ids = failing.summary.errorGroupIds ?? failing.detail?.errorGroupIds ?? [];
+    try {
+      if (ids.length) errorGroup = await client.getErrorGroup(ids[0]);
+      else {
+        const groups = await client.errorGroupsForCheck(check.id);
+        errorGroup = groups.sort((a, b) => b.lastSeen.localeCompare(a.lastSeen))[0] ?? null;
+        if (errorGroup) warnings.push(`failing result carries no errorGroupIds; using the check's most recent error group ${errorGroup.id}`);
+      }
+    } catch (err) {
+      warnings.push(`error group lookup failed (${(err as Error).message})`);
+    }
+    if (errorGroup) {
+      // newest completed analysis first; a PENDING/FAILED entry has no `analysis`
+      const analyses = (errorGroup.rootCauseAnalyses ?? []).filter((a) => a && a.analysis && typeof a.created_at === "string").sort((a, b) => b.created_at.localeCompare(a.created_at));
+      rca = analyses[0] ?? null;
+      // Rocky analyzes only the first failure of a group. When the captured
+      // run's "Received" differs from the group's first failure, the existing
+      // RCA is about another incident (seen live: a UI rename landed in the
+      // 401 group). Then --trigger-rca asks for a fresh analysis.
+      const runErrors = resultErrors(failing.detail);
+      const matches = groupErrorMatches(errorGroup.cleanedErrorMessage, runErrors);
+      const mentions = rcaMentionsReceived(rca, runErrors);
+      const createdBefore = rca ? Date.parse(rca.created_at) < Date.parse(failing.summary.startedAt) : null;
+      const fit = rcaFit({ rca, createdBefore, groupMatches: matches, mentions });
+      const stale = fit.stale;
+      if (rca) {
+        log(
+          `[bundle] RCA fit: group first received ${expectedReceived(errorGroup.cleanedErrorMessage).received ?? "?"}, this run received ${runOutcome(runErrors).received ?? "?"}; ` +
+            `RCA created ${createdBefore ? "before" : "after"} this run, mentions the run's received value: ${mentions ?? "n/a"} → ` +
+            (stale ? "STALE (about an earlier failure)" : fit.describes === true ? "describes this run" : "not decidable from the outside (read it before trusting it)"),
+        );
+      }
+      if ((!rca || stale) && opts.triggerRca) {
+        try {
+          log(`[bundle] triggering Rocky RCA for error group ${errorGroup.id} …`);
+          const { id } = await client.triggerRca(errorGroup.id);
+          const fresh = await client.waitForRca(id);
+          if (fresh) {
+            if (rca) replacedRca = rca;
+            rca = fresh;
+          } else warnings.push(`RCA ${id} did not finish within the wait window; re-run bundle later to include it`);
+        } catch (err) {
+          warnings.push(`RCA trigger failed (${(err as Error).message})`);
+        }
+      } else if (!rca) {
+        warnings.push("no Rocky RCA on this error group yet (enable Auto Analysis in Checkly, or pass --trigger-rca)");
+      } else if (stale) {
+        warnings.push(`RCA ${rca.id} describes the group's first failure, not this run's — pass --trigger-rca to request a fresh analysis`);
+      }
+    }
+    log(`[bundle] errorGroup=${errorGroup?.id ?? "none"} rca=${rca?.id ?? "none"}${rca ? ` (${rca.analysis.classification})` : ""}${replacedRca ? ` replaces ${replacedRca.id} (${replacedRca.analysis.classification})` : ""}`);
+  }
+
+  // 5. sources
+  const proj = collectProjectSources(check, opts.projectDir, failing?.detail ? (failing.detail.playwrightCheckResult ?? failing.detail.browserCheckResult ?? failing.detail.multiStepCheckResult)?.errors ?? [] : []);
+  warnings.push(...proj.warnings);
+  if (isMultiStep && proj.warnings.some((warning) => warning.startsWith("MULTISTEP_"))) {
+    const problem = proj.warnings.find((warning) => warning.startsWith("MULTISTEP_"))!;
+    for (const side of ["failing", "passing"] as const) {
+      if (side === "failing" && !failing || side === "passing" && !passing) continue;
+      multistepProblems[side] = [...new Set([...(multistepProblems[side] ?? []), problem])];
+    }
+  }
+  if (isMultiStep) {
+    const source = proj.sources.find((item) => item.path === proj.mainSource);
+    const model = proj.mainSource ? parseMultiStepProject(
+      new Map(proj.sources.map((item) => [item.path, item.content])), proj.mainSource) : null;
+    const unsafeSource = proj.warnings.some((warning) => warning.startsWith("MULTISTEP_"));
+    for (const [side, fetched] of [["failing", failing], ["passing", passing]] as const) {
+      const draft = multistepDrafts[side];
+      if (!draft || !fetched) continue;
+      // --assets supplies useful normalization/sanitization mechanics, but
+      // never an authenticated result-scoped manifest or a bound v3 record.
+      const remote = assets.filter((item) => item.result === side && item.name === "test-results.json" && item.type === "remote-asset");
+      const problem = multistepAssets?.[side] ? "MULTISTEP_MECHANICS_ONLY" : "MULTISTEP_CAPTURE_BINDING_INVALID";
+      const record = !source || unsafeSource || remote.length !== 1 ? null : finalizeRemoteMultiStepRecording(draft.recording, {
+        side, checkId: check.id, result: fetched.summary,
+        // The exact FINAL summary came from authenticated paginated Checkly history.
+        // Some older Multistep runs have downloadable assets but no longer resolve
+        // through the per-result detail endpoint; bind against that exact summary.
+        detail: fetched.detail ?? fetched.summary,
+        sourceFile: model?.script?.file ?? source.path, sourceText: source.content, sourceModel: model, asset: remote[0]!,
+      });
+      if (!record) {
+        fetched.multistep = null;
+        fetched.multistepProblems = [...new Set([...(multistepProblems[side] ?? []), problem])];
+        multistepProblems[side] = fetched.multistepProblems;
+        continue;
+      }
+      fetched.multistep = draft.capture;
+      fetched.multistepProblems = [];
+      boundRecordings[side] = record;
+      multistepRecordings[side] = JSON.stringify(record, null, 2) + "\n";
+    }
+  }
+  if (check.checkType === "API" && proj.mainSource) {
+    const sourceMap = new Map(proj.sources.map((source) => [source.path.replace(/\\/g, "/"), source.content]));
+    const model = parseApiCheckProject(proj.mainSource, sourceMap);
+    if (model?.setupFile) {
+      const source = sourceMap.get(model.setupFile);
+      if (source) {
+        if (failing?.apiRecording) failing.apiRecording.setup = setupProvenance(model.setupFile, source);
+        if (passing?.apiRecording) passing.apiRecording.setup = setupProvenance(model.setupFile, source);
+      } else {
+        warnings.push(`API setup provenance is missing because ${model.setupFile} was not captured`);
+      }
+    }
+  }
+  log(`[bundle] sources: ${proj.sources.map((s) => s.path).join(", ") || "none"}; main=${proj.mainSource ?? "none"}`);
+  const protectedRequirements = protectedRequirementsFor({
+    check,
+    group: checkGroup,
+    sources: proj.sources,
+    mainSource: proj.mainSource,
+    logicalId: proj.logicalId,
+    playwright: proj.playwright,
+    dependencyMetadata: proj.dependencyMetadata,
+    // The runtime version the deployed runner actually used. Only observed on
+    // the captured result; never assumed.
+    observedRuntimeVersion: failing?.detail?.multiStepCheckResult?.runtimeVersion
+      ?? failing?.detail?.browserCheckResult?.runtimeVersion ?? null,
+  });
+  if (!protectedRequirements) warnings.push(`protected requirements unsupported for check type ${check.checkType}`);
+  else log(`[bundle] protected requirements ${protectedRequirements.policy.schemaVersion} sha256=${protectedRequirements.sha256} sources=${protectedRequirements.policy.sources.length}`);
+
+  // 6. measurement
+  let measurement: MeasureResult | null = null;
+  if ((opts.measure ?? 0) > 0 || (opts.measureOverlap ?? 0) > 0) {
+    if (!opts.projectDir) warnings.push("--measure needs --project <checkly project dir>; skipped");
+    else {
+      measurement = await measureDeterminism({
+        projectDir: opts.projectDir,
+        sequentialRuns: opts.measure ?? 0,
+        overlapPairs: opts.measureOverlap ?? 0,
+        targetUrl: opts.targetUrl,
+        grep: check.name,
+        runner: deps.runner,
+        log,
+      });
+    }
+  }
+
+  // 7. manifest + files
+  const recordings = {
+    failing: failing?.extract ? "recordings/failing.har" : null,
+    passing: passing?.extract ? "recordings/passing.har" : null,
+    apiFailing: failing?.apiRecording ? "recordings/failing.api.json" : null,
+    apiPassing: passing?.apiRecording ? "recordings/passing.api.json" : null,
+    multistepFailing: multistepRecordings.failing ? "recordings/failing.multistep.json" : null,
+    multistepPassing: multistepRecordings.passing ? "recordings/passing.multistep.json" : null,
+    bodies,
+  };
+  let manifest = buildManifest({
+    check,
+    failing,
+    passing,
+    replacedRca,
+    errorGroup,
+    rca,
+    history,
+    sources: proj.sources,
+    mainSource: proj.mainSource,
+    project: { dir: opts.projectDir ?? null, gitCommit: proj.gitCommit, logicalId: proj.logicalId, repoUrl: proj.repoUrl, playwright: proj.playwright },
+    measurement,
+    recordings,
+    multistep: isMultiStep
+      ? { failing: multistepProblems.failing ? { problems: multistepProblems.failing } : null, passing: multistepProblems.passing ? { problems: multistepProblems.passing } : null }
+      : null,
+    assets,
+    apiCalls: client.calls.map((c) => ({ ...c })),
+    accountId: deps.accountId,
+    siblingMonitors: siblingInventory,
+    now,
+    toolVersion,
+    protectedRequirements,
+  });
+  if (isMultiStep) manifest = constrainMultiStepManifest(manifest, boundRecordings,
+    new Map(proj.sources.map((item) => [item.path, item.content])));
+  else manifest.notes.push(...warnings.map((w) => `warning: ${w}`));
+
+  const files: Array<{ file: string; text: string }> = [];
+  files.push({ file: "manifest.json", text: JSON.stringify(manifest, null, 2) + "\n" });
+  files.push({ file: "check.config.json", text: JSON.stringify({ check: manifest.check, config: manifest.config, target: manifest.target }, null, 2) + "\n" });
+  for (const s of proj.sources) files.push({ file: join("check", s.path), text: s.content });
+  if (failing?.extract) files.push({ file: "recordings/failing.har", text: JSON.stringify(sanitizeHar(failing.extract.har), null, 1) + "\n" });
+  if (passing?.extract) files.push({ file: "recordings/passing.har", text: JSON.stringify(sanitizeHar(passing.extract.har), null, 1) + "\n" });
+  if (failing?.apiRecording) files.push({ file: "recordings/failing.api.json", text: JSON.stringify(failing.apiRecording, null, 2) + "\n" });
+  if (passing?.apiRecording) files.push({ file: "recordings/passing.api.json", text: JSON.stringify(passing.apiRecording, null, 2) + "\n" });
+  if (multistepRecordings.failing) files.push({ file: "recordings/failing.multistep.json", text: multistepRecordings.failing });
+  if (multistepRecordings.passing) files.push({ file: "recordings/passing.multistep.json", text: multistepRecordings.passing });
+  if (failing?.extract) files.push({ file: "recordings/failing.actions.json", text: JSON.stringify(failing.extract.actions.map(({ params: _p, ...a }) => a), null, 1) + "\n" });
+  if (passing?.extract) files.push({ file: "recordings/passing.actions.json", text: JSON.stringify(passing.extract.actions.map(({ params: _p, ...a }) => a), null, 1) + "\n" });
+  if (failing) files.push({ file: "results/failing.json", text: JSON.stringify(trimmedResult(failing.detail, failing.apiRecording, isMultiStep) ?? (isMultiStep ? multiStepRunMetadata(failing.summary) : failing.summary), null, 2) + "\n" });
+  if (passing) files.push({ file: "results/passing.json", text: JSON.stringify(trimmedResult(passing.detail, passing.apiRecording, isMultiStep) ?? (isMultiStep ? multiStepRunMetadata(passing.summary) : passing.summary), null, 2) + "\n" });
+  if (!isMultiStep && (rca || errorGroup)) files.push({ file: "rca.json", text: JSON.stringify({ errorGroup: manifest.errorGroup, rca, ...(replacedRca ? { replacedRca } : {}) }, null, 2) + "\n" });
+  // the result window the decisions were made from (ids + timestamps only), so
+  // the overlap evidence and the pass rate can be re-checked offline
+  files.push({
+    file: "results/history.json",
+    text:
+      JSON.stringify(
+        history.map((r) => isMultiStep ? multiStepRunMetadata(r) : ({
+          id: r.id,
+          runLocation: r.runLocation,
+          startedAt: r.startedAt,
+          stoppedAt: r.stoppedAt ?? null,
+          hasFailures: r.hasFailures,
+          hasErrors: r.hasErrors,
+          resultType: r.resultType ?? null,
+          attempts: r.attempts ?? null,
+          errorGroupIds: r.errorGroupIds ?? [],
+        })),
+        null,
+        1,
+      ) + "\n",
+  });
+  files.push({ file: ".gitignore", text: "raw/\n" });
+  files.push({ file: "README.md", text: bundleReadme(manifest) });
+
+  // Final leak check over EVERY original sensitive value: Checkly env vars
+  // plus the original account/token/origin values the sanitizer labeled.
+  const allSecrets = [...new Set([...secretValues, ...multistepSecrets])];
+  // The generic builder tolerates short public fixture values because they
+  // collide with ordinary words. A Multistep bundle cannot make that trade:
+  // fail closed rather than persist a value we cannot reliably screen.
+  if (isMultiStep && allSecrets.some((value) => value.length > 0 && value.length < 6)) {
+    throw new Error("MULTISTEP_SECRET_UNSCREENABLE");
+  }
+  assertNoSecretLeak(files, allSecrets);
+
+  const written: Array<{ file: string; text: string }> = isMultiStep
+    ? writeMultiStepBundleFiles(outDir, files, allSecrets)
+    : (() => {
+        mkdirSync(outDir, { recursive: true });
+        const output: Array<{ file: string; text: string }> = [];
+        for (const f of files) {
+          const p = isAbsolute(f.file) ? f.file : join(outDir, f.file);
+          mkdirSync(dirname(p), { recursive: true });
+          writeFileSync(p, f.text);
+          output.push({ file: f.file, text: readFileSync(p, "utf8") });
+        }
+        return output;
+      })();
+  // And again over every file ACTUALLY written, straight from disk.
+  assertNoSecretLeak(written, allSecrets);
+  log(`[bundle] wrote ${files.length} files to ${outDir} (post-write leak check over ${allSecrets.length} original sensitive value(s): clean)`);
+  return { manifest, outDir, files: files.map((f) => f.file), warnings };
+}
+
+export function bundleReadme(m: ManifestV3): string {
+  // Older captured bundles predate the Rocky repair fields. Regenerating their
+  // README during local measurement must remain safe.
+  const repair = m.config.repair ?? { intent: null, aiAutoRepairEnabled: null };
+  const lines = [
+    `# Bundle: ${m.incidentId}`,
+    "",
+    `Generated by \`${m.generatedBy}\` at ${m.generatedAt}. Status: **${m.incident.status}**.`,
+    "",
+    `- Check: **${m.check.name}** (${m.check.checkType}, id \`${m.check.id}\`)`,
+    `- Config: every ${m.config.frequencyMinutes ?? "?"} min from ${m.config.locations.join(", ") || "no locations"}, runParallel=${m.config.runParallel}, env vars: ${m.config.environmentVariables.map((v) => v.key).join(", ") || "none"} (names only)`,
+    `- Failing result: ${m.results.failing ? `\`${m.results.failing.id}\` (${m.results.failing.runLocation}, ${m.results.failing.startedAt})` : "none yet"}`,
+    `- Passing result: ${m.results.passing ? `\`${m.results.passing.id}\` (${m.results.passing.runLocation}, ${m.results.passing.startedAt})` : "none"}`,
+    `- RCA: ${m.rca ? `${m.rca.classification}${m.rca.repairRecommendation ? ` / ${m.rca.repairRecommendation}` : ""} — ${m.rca.rootCause.slice(0, 200)}` : "none"}`,
+    `- Rocky guardrails: intent ${repair.intent ? `"${repair.intent.goal}" (${repair.intent.mustPreserve.length} mustPreserve, ${repair.intent.requiredOutcomes.length} requiredOutcomes)` : "none"}; automatic repair ${repair.aiAutoRepairEnabled === null ? "inherits the account default" : repair.aiAutoRepairEnabled ? "ON for this check" : "OFF for this check"}`,
+    `- Reproduction mode: **${m.reproduction.mode}** (decided by ${m.reproduction.decidedBy}) — ${m.reproduction.reason}`,
+    m.failurePoint?.request
+      ? `- Failure point: ${m.failurePoint.request.method} ${m.failurePoint.request.path} → ${m.failurePoint.request.status}${m.failurePoint.request.passingStatus !== null ? ` (passing run: ${m.failurePoint.request.passingStatus})` : ""}`
+      : m.failurePoint?.dependency
+        ? `- Step dependency: ${m.failurePoint.dependency.method} ${m.failurePoint.dependency.path} (observed in the failing run${m.failurePoint.dependency.passingStatus === null ? "" : `; passing-run status ${m.failurePoint.dependency.passingStatus}`}; ${m.check.checkType === "MULTI_STEP" ? "trusted local detection flips only nested booking.confirmed to false at HTTP 200" : "detection injects 500"})`
+        : "- Failure point: not identified",
+    m.failurePoint?.action ? `- Failing step: \`${m.failurePoint.action.title}\` — ${m.failurePoint.action.error.split("\n")[0]}` : "",
+    m.failurePoint?.assertion
+      ? `- Failing assertion: ${m.failurePoint.assertion.file ?? "spec"}:${m.failurePoint.assertion.line}${m.failurePoint.assertion.assertionId ? ` (${m.failurePoint.assertion.assertionId})` : ""}`
+      : "",
+    "",
+    "## Scenes",
+    "",
+    "| scene | type | mode | must | provenance | environment |",
+    "|---|---|---|---|---|---|",
+    ...m.scenes.map(
+      (s) =>
+        `| ${s.sceneId} | ${s.type} | \`${s.mode}\`${s.alternativeMode ? ` (alt \`${s.alternativeMode}\`)` : ""} | ${s.verdict.mustFail ? "fail" : "pass"} | ${s.verdict.provenance.kind === "recorded" ? `recorded:${s.verdict.provenance.runId}` : `code:${s.verdict.provenance.assertionId}`} | ${s.environment} |`,
+    ),
+    "",
+    "## Determinism",
+    "",
+    `- History (${m.determinism.history.finalRuns} final runs): pass rate ${m.determinism.history.passRate ?? "n/a"}; by location: ${Object.entries(m.determinism.history.byLocation).map(([l, v]) => `${l} ${v.passed}/${v.runs}`).join(", ") || "n/a"}`,
+    `- Measured sequential: ${m.determinism.sequential ? `${m.determinism.sequential.passed}/${m.determinism.sequential.runs}` : "not measured"}`,
+    `- Measured overlap: ${m.determinism.overlap ? `${m.determinism.overlap.pairsWithFailure}/${m.determinism.overlap.pairs} pairs failed` : "not measured"}`,
+    `- Measurement method: ${m.determinism.method ?? "none"}; last verified ${m.determinism.lastVerifiedAt}`,
+    "",
+    "## Notes",
+    "",
+    ...m.notes.map((n) => `- ${n}`),
+    "",
+  ];
+  return lines.filter((l) => l !== null).join("\n");
+}

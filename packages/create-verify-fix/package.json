@@ -1,0 +1,11 @@
+{
+  "name": "create-verify-fix",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Copy the maintained slots-booking example into a standalone verify-fix learning project.",
+  "type": "module",
+  "bin": { "create-verify-fix": "bin/create-verify-fix" },
+  "scripts": { "test": "node --no-warnings --test \"test/**/*.spec.ts\"" },
+  "engines": { "node": ">=24" },
+  "devDependencies": { "@types/node": "^24.0.0" }
+}

@@ -521,5 +521,195 @@
   "notes": [
     "Rocky classified the failure as INFRASTRUCTURE_ERROR (DO_NOT_REPAIR); the result timestamps show an overlapping run from another location, which the RCA text does not name — the tool follows the timestamps",
     "REGRESSION scenes (sibling checks) are not generated yet — planned once group listing is wired (Phase 3)"
-  ]
+  ],
+  "protectedRequirements": {
+    "policy": {
+      "schemaVersion": "protected-requirements-v2",
+      "policyVersion": 2,
+      "check": {
+        "id": "72409245-a334-4a09-ac0d-9a28faff1377",
+        "logicalId": "slots-booking-monitoring",
+        "checkType": "PLAYWRIGHT"
+      },
+      "sources": [
+        {
+          "kind": "checkly-api",
+          "identity": "72409245-a334-4a09-ac0d-9a28faff1377",
+          "sha256": "3465c7481437e589180e032a8041f023f1d0ce35063fb763dab3b132d5e3106a"
+        }
+      ],
+      "fields": {
+        "check.name": {
+          "effect": "metadata",
+          "comparison": "exact",
+          "original": {
+            "state": "unknown",
+            "reason": "CONFIG_NOT_RETURNED"
+          }
+        },
+        "activated": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": true
+          }
+        },
+        "muted": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": false
+          }
+        },
+        "shouldFail": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "unknown",
+            "reason": "CONFIG_NOT_RETURNED"
+          }
+        },
+        "frequency": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": 5
+          }
+        },
+        "locations": {
+          "effect": "protected",
+          "comparison": "set-equal",
+          "original": {
+            "state": "known",
+            "value": [
+              "us-east-1",
+              "eu-west-1"
+            ]
+          }
+        },
+        "privateLocations": {
+          "effect": "protected",
+          "comparison": "set-equal",
+          "original": {
+            "state": "known",
+            "value": []
+          }
+        },
+        "runParallel": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": true
+          }
+        },
+        "retryStrategy": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": null
+          }
+        },
+        "alertBehavior": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "unknown",
+            "reason": "UNSUPPORTED_SETTING"
+          }
+        },
+        "environmentVariableNames": {
+          "effect": "protected",
+          "comparison": "set-equal",
+          "original": {
+            "state": "known",
+            "value": [
+              "TEST_USER"
+            ]
+          }
+        },
+        "targetResolution": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": "code"
+          }
+        },
+        "execution.dependencyMetadata": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "unknown",
+            "reason": "CONFIG_NOT_RETURNED"
+          }
+        },
+        "playwright.configPath": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": "playwright.config.ts"
+          }
+        },
+        "playwright.projects": {
+          "effect": "protected",
+          "comparison": "set-equal",
+          "original": {
+            "state": "known",
+            "value": [
+              "booking"
+            ]
+          }
+        },
+        "playwright.tags": {
+          "effect": "protected",
+          "comparison": "set-equal",
+          "original": {
+            "state": "known",
+            "value": null
+          }
+        },
+        "playwright.testSelection": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": [
+              "booking"
+            ]
+          }
+        },
+        "playwright.retries": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": 0
+          }
+        },
+        "playwright.target": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": "env:ENVIRONMENT_URL|fallback:https://slots-booking-verify-fix.vercel.app"
+          }
+        },
+        "playwright.runtime": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "unknown",
+            "reason": "CONFIG_NOT_RETURNED"
+          }
+        }
+      }
+    },
+    "sha256": "d271fdf1631f7b61a20013b3be409ccbce2ad02390a6a7362d290dc461a9e0d7"
+  }
 }

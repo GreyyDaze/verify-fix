@@ -59,12 +59,12 @@ export default function BookPage() {
         body: JSON.stringify({ slot }),
       })
       const data = (await res.json().catch(() => ({}))) as {
-        booking?: string
+        booking?: { status?: string }
         error?: string
         tokenVersion?: number
         currentVersion?: number
       }
-      const result = res.ok ? (data.booking ?? 'CONFIRMED') : 'REJECTED'
+      const result = res.ok ? (data.booking?.status ?? 'CONFIRMED') : 'REJECTED'
       const detail = res.ok
         ? `slot ${slot} booked for ${session.account} (session v${session.version})`
         : `${data.error ?? 'error'} (token v${data.tokenVersion ?? '?'}, current v${data.currentVersion ?? '?'})`

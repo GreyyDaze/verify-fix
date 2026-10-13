@@ -1,0 +1,4 @@
+#!/usr/bin/env node
+// npm create verify-fix@latest <dir> -- --template slots-booking-live
+import { runCreate } from "../src/cli.ts";
+process.exit(await runCreate(process.argv.slice(2), import.meta.url));

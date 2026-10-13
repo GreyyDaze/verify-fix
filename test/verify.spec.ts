@@ -9,28 +9,27 @@
 //      maps it to UNCERTAIN (exit 2) with an explicit reason.
 //   2. The scene layer reproduces the incident from the real app: two
 //      interleaved runs on one account → 401 on booking, deterministically.
-//   3. The seeded suite keeps its oracle verdicts: the good config patches PASS
-//      (exit 0) with scene-c observing a real `fail`; every fooling seed is
-//      FAILED (1); the flaky seed is never PASS. Outcomes are stable across
-//      re-runs.
+//   3. Phase 9 protected policy is enforced for the seeded suite. Deliberate
+//      scheduling reductions are FAILED before any scene runs; code-only
+//      repairs still reach the experiment layer. The flaky seed is never PASS.
 
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
-import { loadBundle } from "../src/bundle.ts";
+import { loadBundle } from "../src/capture/bundle/load.ts";
 import { verify } from "../src/verify.ts";
-import { loadPatch } from "../src/patch.ts";
-import { runSandbox, parseOutcomeLine } from "../src/sandbox.ts";
-import { SceneExecutor, detectEnvScopeDodge, DEFAULT_MAX_RUNS_PER_SCENE, repetitionSeed } from "../src/executor/scene.ts";
-import { buildContract } from "../src/contract/contract.ts";
-import { assessAdequacy } from "../src/adequacy/adequacy.ts";
+import { loadPatch } from "../src/candidate/patch.ts";
+import { runSandbox, parseOutcomeLine } from "../src/execution/sandbox/runner.ts";
+import { SceneExecutor, detectEnvScopeDodge, DEFAULT_MAX_RUNS_PER_SCENE, repetitionSeed } from "../src/execution/executor/scene.ts";
+import { buildContract } from "../src/evidence/contract/contract.ts";
+import { assessAdequacy } from "../src/evidence/adequacy/adequacy.ts";
 import { decide } from "../src/decision/decision.ts";
-import { parseInventory, stripComments } from "../src/assertion/inventory.ts";
-import { assertionId } from "../src/assertion/id.ts";
+import { parseInventory, stripComments } from "../src/evidence/assertion/inventory.ts";
+import { assertionId } from "../src/evidence/assertion/id.ts";
 import type { Bundle, Scene, SceneObservation } from "../src/types.ts";
 import { startExampleApp, type RunningApp } from "./helpers/example-app.ts";
 
@@ -44,7 +43,7 @@ const ENV = { ACCOUNT: "demo" };
 
 /** Expected verdict per seeded patch, as documented in each patch header. */
 const SEEDED: Array<{ name: string; exit: 0 | 1 | 2 | "never-pass" }> = [
-  { name: "01-good-run-parallel-false", exit: 0 },
+  { name: "01-good-run-parallel-false", exit: 1 },
   { name: "02-mutation-d-weakened-good", exit: 1 },
   { name: "03-weaken-assertion.ts", exit: 1 },
   { name: "04-catch-ignore.ts", exit: 1 },
@@ -55,7 +54,7 @@ const SEEDED: Array<{ name: string; exit: 0 | 1 | 2 | "never-pass" }> = [
   { name: "09-remove-step.ts", exit: 1 },
   { name: "10-regression-symptom-fix.ts", exit: 1 },
   { name: "11-flaky.ts", exit: "never-pass" },
-  { name: "12-good-one-location", exit: 0 },
+  { name: "12-good-one-location", exit: 1 },
   { name: "13-config-retry-only", exit: 1 },
 ];
 
@@ -92,7 +91,7 @@ describe("sandbox: a DSL run must prove it contacted ENVIRONMENT_URL", () => {
   });
 
   test("a registered check that never reaches ENVIRONMENT_URL is vacuous even if its assertions hold", async () => {
-    const src = `import { check, expect } from "./check-api.ts";\ncheck("hitless", async () => { expect(1).toBe(1); });\n`;
+    const src = `import { check, expect } from "@checkly/cli";\ncheck("hitless", async () => { expect(1).toBe(1); });\n`;
     const out = await runSandbox(src, { baseUrl: app.url, env: ENV });
     assert.equal(out.passed, false, "no contact → never a pass");
     assert.equal(out.vacuous, true);
@@ -121,7 +120,7 @@ describe("sandbox: a DSL run must prove it contacted ENVIRONMENT_URL", () => {
     process.env.VERIFY_FIX_PARENT_SECRET = "must-not-leak";
     try {
       const src = [
-        `import { check, expect } from "./check-api.ts";`,
+        `import { check, expect } from "@checkly/cli";`,
         `check("env", async ({ baseUrl }) => {`,
         `  await fetch(\`\${await baseUrl}/api/health\`);`,
         `  expect(process.env.ENVIRONMENT_NAME).toBe("staging");`,
@@ -146,7 +145,7 @@ describe("sandbox: a DSL run must prove it contacted ENVIRONMENT_URL", () => {
 
   test("seeded randomness is reproducible per repetition and differs across repetitions and runs", async () => {
     const src = [
-      `import { check, expect } from "./check-api.ts";`,
+      `import { check, expect } from "@checkly/cli";`,
       `check("rnd", async ({ baseUrl }) => {`,
       `  await fetch(\`\${await baseUrl}/api/health\`);`,
       `  expect(String(Math.random())).toBe("never");`,
@@ -395,47 +394,64 @@ describe("decision table: uncertain observations", () => {
   });
 });
 
+test("PR-10: an inconclusive mutation cannot be a kill or a survivor, even when candidate scenes match", () => {
+  const { bundle } = loadBundle(INCIDENT_DIR);
+  const contract = buildContract(bundle, bundle.checkSource);
+  const observations = new Map(bundle.scenes.map((scene): [string, SceneObservation] => [scene.sceneId, {
+    sceneId: scene.sceneId, observed: scene.verdict.mustFail ? "fail" : "pass",
+    repetitions: 5, trace: [], source: "scene", environment: "synthetic-target",
+  }]));
+  const mutation = { name: "synthetic-inconclusive", family: "operator" as const,
+    detail: "no admitted result", survived: false, inconclusive: true };
+  const adequacy = assessAdequacy({ contract, sceneObservations: observations, mutants: [mutation] });
+  assert.equal(adequacy.strength.mutantKillRate, 0);
+  const result = decide({ contract, observations, adequacy, healthyRepetitionsMet: true,
+    nonDeterministicScenes: [], runBudgetExhausted: false });
+  assert.equal(result.verdict, "UNCERTAIN");
+  assert.equal(result.exitCode, 2);
+  assert.ok(result.reasons.some((reason) => /mutation runs lack conclusive evidence/.test(reason)));
+});
+
 // ───────────────────────── seeded suite (integration) ─────────────────────────
 
 describe("seeded slots-booking suite keeps its oracle verdicts against the real app", () => {
   const run = (name: string) => {
     const { bundle } = loadBundle(INCIDENT_DIR);
-    return verify({ bundle, patch: loadPatch(join(PATCH_DIR, name), bundle), target: app.url, env: ENV });
+
+    return verify({
+      bundle,
+      patch: loadPatch(join(PATCH_DIR, name), bundle),
+      target: app.url,
+      env: ENV,
+    });
   };
 
-  test("good config patch PASSes (exit 0): every scene observed with evidence, scene-c fails under injection, stable across re-runs", async () => {
-    const a = await run("01-good-run-parallel-false");
-    assert.equal(a.decision.verdict, "PASS", a.decision.reasons.join("\n"));
-    assert.equal(a.decision.exitCode, 0);
-    assert.equal(a.envDodge, null);
+  const runPhase9 = (name: string) => {
+    const { bundle } = loadBundle(INCIDENT_DIR);
+
+    if (!bundle.protectedRequirements) {
+      throw new Error("seeded fixture must carry a trusted Phase 9 policy");
+    }
+
+    return verify({
+      bundle,
+      patch: loadPatch(join(PATCH_DIR, name), bundle),
+      target: app.url,
+      env: ENV,
+      protectedRequirementsMode: "enforce",
+      protectedRequirementsDigest: bundle.protectedRequirements.sha256,
+    });
+  };
+
+  test("01-good-run-parallel-false → FAILED before execution under Phase 9", async () => {
+    const a = await runPhase9("01-good-run-parallel-false");
+    assert.equal(a.decision.verdict, "FAILED", a.decision.reasons.join("\n"));
+    assert.equal(a.decision.exitCode, 1);
     assert.equal(a.configPolicy.rejected, null);
-    assert.deepEqual(a.configPolicy.changes.map((c) => `${c.family}:${c.key}`), ["scheduling:runParallel"]);
-    assert.equal(a.patchedConfig?.runParallel, false);
-    for (const row of a.decision.rows) {
-      assert.notEqual(row.observed, "uncertain", `${row.experiment} must be observed`);
-      assert.equal(row.matched, true, `${row.experiment} must match its oracle`);
-      assert.match(row.environment, /^target 127\.0\.0\.1:\d+/, `${row.experiment} names the host it ran against`);
-    }
-    const sceneC = a.observations.get("scene-c-auth-failure")!;
-    assert.equal(sceneC.observed, "fail");
-    assert.equal(sceneC.repetitions, 5);
-    assert.ok(sceneC.trace.some((t) => t.what === "fetch POST /api/book → 401"));
-    for (const o of a.observations.values()) {
-      assert.ok(o.trace.some((t) => t.kind === "step" && /^fetch /.test(t.what) && /→ \d{3}$/.test(t.what)), `${o.sceneId}: trace proves contact with the app`);
-    }
-    assert.ok(a.mutants.length > 0);
-    assert.ok(a.mutants.every((m) => !m.survived), "every seeded mutant is killed by the verifier");
-    assert.ok(a.cost.localRuns > 0);
-    assert.equal(a.cost.browserProcesses, 0, "the seeded DSL suite starts no browser process");
-    assert.ok(a.cost.wallTimeMs > 0);
-    assert.match(a.report.markdown, /\*\*Cost:\*\*/);
-    assert.deepEqual(a.report.json.cost, a.cost);
-
-    const b = await run("01-good-run-parallel-false");
-    assert.deepEqual(b.decision.rows, a.decision.rows, "deterministic scenes: identical evidence on re-run");
-    assert.equal(b.decision.verdict, "PASS");
+    assert.ok(a.protectedRequirements.reasonCodes.includes("PROTECTED_REQUIREMENT_CHANGED"));
+    assert.equal(a.protectedRequirements.staticVerdict, "FAILED");
+    assert.equal(a.cost.runs, 0, "protected scheduling reduction must block before any run");
   });
-
   test("the unpatched check with its original config FAILS: the overlap is reproduced from the real app, not assumed", async () => {
     const { bundle } = loadBundle(INCIDENT_DIR);
     const r = await verify({ bundle, patch: bundle.checkSource, target: app.url, env: ENV });
@@ -470,10 +486,11 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
     });
   }
 
-  test("12-good-one-location PASSes: a single location cannot overlap itself", async () => {
-    const r = await run("12-good-one-location");
-    assert.equal(r.decision.verdict, "PASS", r.decision.reasons.join("\n"));
-    assert.deepEqual(r.configPolicy.changes.map((c) => `${c.family}:${c.key}`), ["scheduling:locations"]);
+  test("12-good-one-location → FAILED before execution under Phase 9", async () => {
+    const r = await runPhase9("12-good-one-location");
+    assert.equal(r.decision.verdict, "FAILED", r.decision.reasons.join("\n"));
+    assert.ok(r.protectedRequirements.reasonCodes.includes("PROTECTED_REQUIREMENT_CHANGED"));
+    assert.equal(r.cost.runs, 0, "location reduction must block before any run");
   });
 
   test("weak-oracle bundle: a behaving patch never PASSes", async () => {
@@ -482,14 +499,15 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
     assert.notEqual(r.decision.verdict, "PASS", r.decision.reasons.join("\n"));
   });
 
-  test("CLI: --target + --env-file, directory patch, exit code from the verdict (good patch → 0), environment column", async () => {
+  test("CLI: Phase 9 scheduling reduction is FAILED before any run", async () => {
     const dir = mkdtempSync(join(tmpdir(), "verify-fix-env-"));
     const envFile = join(dir, ".env");
-    writeFileSync(envFile, "# the check's own variable, as `checkly test --env-file` would pass it\nACCOUNT=demo\n");
+    writeFileSync(envFile, "# the check's own variable, as `checkly test --env-file` would pass it\nACCOUNT=demo\n", { mode: 0o600 });
+    chmodSync(envFile, 0o600);
     const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
       const child = spawn(
         process.execPath,
-        ["--no-warnings", join(ROOT, "src/cli.ts"), "verify", "--patch", join(PATCH_DIR, "01-good-run-parallel-false"), "--bundle", INCIDENT_DIR, "--target", app.url, "--env-file", envFile, "--env-name", "ci"],
+        ["--no-warnings", join(ROOT, "src/cli.ts"), "verify", "--patch", join(PATCH_DIR, "01-good-run-parallel-false"), "--bundle", INCIDENT_DIR, "--target", app.url, "--env-file", envFile, "--env-name", "ci", "--requirements-mode", "enforce", "--requirements-digest", "511a0a4cd40bb92fdfa8a47d789f1fd17f9637991c415d1eb5428b005b91e0b5"],
         { cwd: ROOT }
       );
       let stdout = "";
@@ -498,11 +516,10 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
       child.stderr.on("data", (d) => (stderr += String(d)));
       child.on("close", (code) => resolve({ code, stdout, stderr }));
     });
-    assert.equal(result.code, 0, result.stdout + result.stderr);
-    assert.match(result.stdout, /\*\*Verdict:\*\* PASS \(exit 0\)/);
-    assert.match(result.stdout, /\| experiment \| environment \| oracle \|/);
-    assert.match(result.stdout, /\| scene-c-auth-failure \| target 127\.0\.0\.1:\d+ \+ inject POST \/api\/book -> 401 \| [^|]+ \| fail \| fail \| ✓ \|/);
-    assert.match(result.stdout, /Live rows ran against 127\.0\.0\.1:\d+/);
+    assert.equal(result.code, 1, result.stdout + result.stderr);
+    assert.match(result.stdout, /\*\*Verdict:\*\* FAILED \(exit 1\)/);
+    assert.match(result.stdout, /PROTECTED_REQUIREMENT_CHANGED/);
+    assert.match(result.stdout, /local runs: 0/i);
   });
 
   test("CLI: the retired direct-API executor cannot be selected", async () => {
@@ -518,7 +535,11 @@ describe("seeded slots-booking suite keeps its oracle verdicts against the real 
 
   test("CLI: without --target the verdict is UNCERTAIN (exit 2), never PASS", async () => {
     const result = await new Promise<{ code: number | null; stdout: string }>((resolve) => {
-      const child = spawn(process.execPath, ["--no-warnings", join(ROOT, "src/cli.ts"), "verify", "--patch", join(PATCH_DIR, "01-good-run-parallel-false"), "--bundle", INCIDENT_DIR], { cwd: ROOT });
+      // Shadow mode: this fixture bundle predates the sealed policy and its
+      // API-only fields are legitimately UNKNOWN. The subject here is the
+      // --target requirement, so the protected gate is held off and exercised
+      // on its own in the proof matrix and the real-account acceptance run.
+      const child = spawn(process.execPath, ["--no-warnings", join(ROOT, "src/cli.ts"), "verify", "--patch", join(PATCH_DIR, "01-good-run-parallel-false"), "--bundle", INCIDENT_DIR, "--requirements-mode", "shadow"], { cwd: ROOT });
       let stdout = "";
       child.stdout.on("data", (d) => (stdout += String(d)));
       child.on("close", (code) => resolve({ code, stdout }));

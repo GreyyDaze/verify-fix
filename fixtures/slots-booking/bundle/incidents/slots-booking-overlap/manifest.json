@@ -10,7 +10,8 @@
     "repo": "slots-booking",
     "file": "booking.check.ts",
     "logicalId": "slots-booking",
-    "deployedId": null
+    "deployedId": "fixture-slots-booking",
+    "checkType": "BROWSER"
   },
   "recordedOrigin": null,
   "scenes": [
@@ -189,5 +190,177 @@
   "oracleProvenance": {
     "recorded": 3,
     "codeDerived": 5
+  },
+  "protectedRequirements": {
+    "policy": {
+      "schemaVersion": "protected-requirements-v2",
+      "policyVersion": 2,
+      "check": {
+        "id": "fixture-slots-booking",
+        "logicalId": "slots-booking",
+        "checkType": "BROWSER"
+      },
+      "sources": [
+        {
+          "kind": "checkly-api",
+          "identity": "fixture-checkly-api:slots-booking",
+          "sha256": "67f78cb2d3ef19f6879a9b9c8826a87c748f01823925c77586b730b54d759bc4"
+        },
+        {
+          "kind": "project-default",
+          "identity": "fixture:checkly.config.ts",
+          "sha256": "102689bbe6e2478f8460359a1c98b67845702f1fa6208a61201a1ddad12b59da"
+        }
+      ],
+      "fields": {
+        "check.name": {
+          "effect": "metadata",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": "slots-booking flow"
+          }
+        },
+        "activated": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": true
+          }
+        },
+        "muted": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": false
+          }
+        },
+        "shouldFail": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": null
+          }
+        },
+        "frequency": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": 5
+          }
+        },
+        "locations": {
+          "effect": "protected",
+          "comparison": "set-equal",
+          "original": {
+            "state": "known",
+            "value": [
+              "eu-west-1",
+              "us-east-1"
+            ]
+          }
+        },
+        "privateLocations": {
+          "effect": "protected",
+          "comparison": "set-equal",
+          "original": {
+            "state": "known",
+            "value": []
+          }
+        },
+        "runParallel": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": true
+          }
+        },
+        "retryStrategy": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": null
+          }
+        },
+        "alertBehavior": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": null
+          }
+        },
+        "environmentVariableNames": {
+          "effect": "protected",
+          "comparison": "set-equal",
+          "original": {
+            "state": "known",
+            "value": [
+              "ACCOUNT"
+            ]
+          }
+        },
+        "targetResolution": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": "code"
+          }
+        },
+        "execution.dependencyMetadata": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": {}
+          }
+        },
+        "browser.entrypoint": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": "booking.check.ts"
+          }
+        },
+        "browser.runtime": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": null
+          }
+        },
+        "browser.assertions": {
+          "effect": "protected",
+          "comparison": "required-tuples",
+          "original": {
+            "state": "known",
+            "value": [
+              "163c3a47af588bf56689855f89d9c3ca0b3fe010954b86d0bb575d4fa9b971de",
+              "7d447f703c2b626604a924818794cf3c6b75015ea6be2413390f3069d16d21a3",
+              "a5fccc26a335df993d0d4f3b2556c9e5c11bb66374d7f4692c009229b0b7e8d7",
+              "d52769868dabbf945d113b723d9b079939b334e462a7419f0b7593722f607c5c"
+            ]
+          }
+        },
+        "browser.target": {
+          "effect": "protected",
+          "comparison": "exact",
+          "original": {
+            "state": "known",
+            "value": "code"
+          }
+        }
+      }
+    },
+    "sha256": "511a0a4cd40bb92fdfa8a47d789f1fd17f9637991c415d1eb5428b005b91e0b5"
   }
 }

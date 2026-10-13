@@ -5,11 +5,11 @@
 // test session. It never deploys or changes a scheduled monitor.
 
 import { runChecklySandbox } from "../sandbox/checkly-sandbox.ts";
-import { regionalAccountMappingFromBundle, trustedAutomationBypass, trustedRegionalAccounts } from "../../multistep/accounts.ts";
-import { multiStepDiskRebound } from "../../multistep/rebind.ts";
-import { evaluateMultiStepPolicy } from "../../multistep/policy.ts";
-import { parseMultiStepProject } from "../../multistep/source.ts";
-import { deriveRegionalAccountMapping, sameRegionAccountMapping } from "../../multistep/region-account-mapping.ts";
+import { regionalAccountMappingFromBundle, trustedAutomationBypass, trustedRegionalAccounts } from "../../checks/multistep/accounts.ts";
+import { multiStepDiskRebound } from "../../checks/multistep/rebind.ts";
+import { evaluateMultiStepPolicy } from "../../checks/multistep/policy.ts";
+import { parseMultiStepProject } from "../../checks/multistep/source.ts";
+import { deriveRegionalAccountMapping, sameRegionAccountMapping } from "../../checks/multistep/region-account-mapping.ts";
 import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExecutor, type ObservationValue, type RunContext, type Scene, type SceneObservation, type TraceStep } from "../../types.ts";
 
 /** Only the identities required by the checked Multistep construct and the

@@ -21,20 +21,20 @@ import { join } from "node:path";
 import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExecutor, type ObservationValue, type RunContext, type Scene, type SceneObservation, type TraceStep } from "../../types.ts";
 import { runSandbox } from "../sandbox/runner.ts";
 import { runPlaywrightSandbox } from "../sandbox/playwright-sandbox.ts";
-import { AUTOMATION_BYPASS_INPUT, trustedAutomationBypass, trustedRegionalAccounts } from "../../multistep/accounts.ts";
-import { trustedMultiStepDetection } from "../../multistep/detection.ts";
-import { multiStepDiskRebound } from "../../multistep/rebind.ts";
-import { runMultiStepSandbox } from "../../multistep/executor.ts";
-import { parseMultiStepProject } from "../../multistep/source.ts";
-import { deriveRegionalAccountMapping } from "../../multistep/region-account-mapping.ts";
-import { isSyntacticallyValidRegion } from "../../multistep/trusted-scope.ts";
-import { knownRoute } from "../../multistep/routes.ts";
+import { AUTOMATION_BYPASS_INPUT, trustedAutomationBypass, trustedRegionalAccounts } from "../../checks/multistep/accounts.ts";
+import { trustedMultiStepDetection } from "../../checks/multistep/detection.ts";
+import { multiStepDiskRebound } from "../../checks/multistep/rebind.ts";
+import { runMultiStepSandbox } from "../../checks/multistep/executor.ts";
+import { parseMultiStepProject } from "../../checks/multistep/source.ts";
+import { deriveRegionalAccountMapping } from "../../checks/multistep/region-account-mapping.ts";
+import { isSyntacticallyValidRegion } from "../../checks/multistep/trusted-scope.ts";
+import { knownRoute } from "../../checks/multistep/routes.ts";
 import { sceneExpected } from "../../evidence/contract/contract.ts";
 import { fnv1a } from "../../evidence/assertion/id.ts";
 import { effectiveConcurrency, needsTarget, parseMode, type ParsedMode } from "../scene/modes.ts";
 import { SceneProxy, type ProxyHit } from "../scene/proxy.ts";
 import type { Har } from "../../capture/trace/har-types.ts";
-import { ApiSceneExecutor } from "../../api/executor.ts";
+import { ApiSceneExecutor } from "../../checks/api/executor.ts";
 
 /** Reproducible per-run randomness seed: same scene + repetition + run → same seed. */
 export function repetitionSeed(sceneId: string, repetition: number, runIndex = 0): number {

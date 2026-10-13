@@ -19,13 +19,13 @@ import { inlinePatch, newFiles, originalConfigSource, patchedAssets, patchedChec
 import { applyConfigPolicy, diffCheckConfig, parseCheckConfig, type ConfigPolicy } from "./execution/scene/config-diff.ts";
 import { checkEnv, type EnvCheck } from "./execution/sandbox/env.ts";
 import type { CandidateRevisionMetadata, CandidateTargetBinding } from "./candidate/revision.ts";
-import { evaluateApiPolicy, type ApiPolicyResult } from "./api/policy.ts";
-import { parseApiCheckProject } from "./api/model.ts";
-import { evaluateMultiStepPolicy, type MultiStepPolicyResult } from "./multistep/policy.ts";
-import { parseMultiStepProject } from "./multistep/source.ts";
-import { deriveRegionalAccountMapping } from "./multistep/region-account-mapping.ts";
+import { evaluateApiPolicy, type ApiPolicyResult } from "./checks/api/policy.ts";
+import { parseApiCheckProject } from "./checks/api/model.ts";
+import { evaluateMultiStepPolicy, type MultiStepPolicyResult } from "./checks/multistep/policy.ts";
+import { parseMultiStepProject } from "./checks/multistep/source.ts";
+import { deriveRegionalAccountMapping } from "./checks/multistep/region-account-mapping.ts";
 import { effectiveConcurrency, parseMode } from "./execution/scene/modes.ts";
-import { multiStepDiskRebound } from "./multistep/rebind.ts";
+import { multiStepDiskRebound } from "./checks/multistep/rebind.ts";
 import { parseInventory, stripComments } from "./evidence/assertion/inventory.ts";
 import { compareProtectedRequirements, policyKnown, policyUnknown, type CandidateEffectiveRequirements, type ProtectedPolicyEnvelope, type ProtectedRequirementsComparison, type ResolvedPolicyValue } from "./policy/requirements.ts";
 

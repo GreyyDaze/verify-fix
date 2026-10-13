@@ -83,7 +83,7 @@ The verifier does not decide what a correct fix should be. It checks whether the
 
 **Solution:** Bind the Checkly check, logical ID, deployed configuration, project source, Multistep construct, entrypoint, and imported source closure. Reject unsafe paths, oversized files, symlinks, source mismatches, and configuration mismatches.
 
-**Main code:** src/multistep/source.ts, src/multistep/files.ts, src/multistep/identity.ts, src/candidate/check-identity.ts, src/candidate/revision.ts.
+**Main code:** src/checks/multistep/source.ts, src/checks/multistep/files.ts, src/checks/multistep/identity.ts, src/candidate/check-identity.ts, src/candidate/revision.ts.
 
 ### 3.4 Evidence sanitization and secret protection
 
@@ -91,7 +91,7 @@ The verifier does not decide what a correct fix should be. It checks whether the
 
 **Solution:** Sanitize before persistence. Bound downloads and archives. Hash remote evidence for provenance. Keep Checkly authentication separate from external or presigned asset URLs. Do not log signed URLs.
 
-**Main code:** src/capture/checkly/client.ts, src/capture/bundle/sanitize.ts, src/api/recording.ts, src/multistep/sanitize.ts, src/capture/archive/zip.ts.
+**Main code:** src/capture/checkly/client.ts, src/capture/bundle/sanitize.ts, src/checks/api/recording.ts, src/checks/multistep/sanitize.ts, src/capture/archive/zip.ts.
 
 ### 3.5 Multistep evidence acquisition
 
@@ -99,7 +99,7 @@ The verifier does not decide what a correct fix should be. It checks whether the
 
 **Solution:** Fetch the complete result manifest, select the known evidence by asset/archive name, download with bounds, validate the manifest and archive, normalize the evidence, and reject partial capture.
 
-**Main code:** src/capture/bundle/build.ts, src/multistep/capture.ts, src/multistep/normalize.ts, src/multistep/transaction.ts, src/multistep/bundle-evidence.ts, src/multistep/raw-evidence.ts, src/multistep/sanitize.ts.
+**Main code:** src/capture/bundle/build.ts, src/checks/multistep/capture.ts, src/checks/multistep/normalize.ts, src/checks/multistep/transaction.ts, src/checks/multistep/bundle-evidence.ts, src/checks/multistep/raw-evidence.ts, src/checks/multistep/sanitize.ts.
 
 **Tests:** remote manifest selection, bounded download, archive parsing, and validation-category contract tests.
 
@@ -111,7 +111,7 @@ The verifier does not decide what a correct fix should be. It checks whether the
 
 **Solution:** Reproduce the original failure against the target application first. Verification scenes describe the expected behavior and the evidence needed to prove the observation.
 
-**Main code:** src/scene, src/execution/executor/scene.ts, src/multistep/executor.ts.
+**Main code:** src/scene, src/execution/executor/scene.ts, src/checks/multistep/executor.ts.
 
 **Tests:** the main verification suite runs the real CLI against the seeded application and checks both failing and good candidates.
 
@@ -137,7 +137,7 @@ The verifier does not decide what a correct fix should be. It checks whether the
 
 **Solution:** Combine local deterministic verification with protected Checkly execution. Bind the execution to the expected deployment and revision. Cloud execution happens only after the required gates pass.
 
-**Main code:** src/execution/executor/hybrid.ts, src/execution/executor/checkly.ts, src/execution/executor/checkly-cli.ts, src/multistep/executor.ts, src/multistep/accounts.ts, src/multistep/policy.ts.
+**Main code:** src/execution/executor/hybrid.ts, src/execution/executor/checkly.ts, src/execution/executor/checkly-cli.ts, src/checks/multistep/executor.ts, src/checks/multistep/accounts.ts, src/checks/multistep/policy.ts.
 
 ### 3.10 Decision and reporting
 

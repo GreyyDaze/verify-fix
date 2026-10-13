@@ -378,12 +378,14 @@ src/
     check-identity.ts          stable logical-ID matching for a complete project state
     patch.ts                   loads the candidate monitoring tree (file or directory)
 
-  api/                         ApiCheck vertical slice (model, policy, recording, executor)
-  multistep/                   MultiStepCheck vertical slice (23 modules)
-  decision/decision.ts         THE verdict law — no LLM, an ordered table
+  checks/                      PER-CHECK-TYPE VERTICAL SLICES (a different axis)
+    api/                       ApiCheck: model, policy, recording, executor, setup
+    multistep/                 MultiStepCheck: 23 modules of source, capture, identity,
+                               policy, executor, evidence
   report/                      report.ts + cost.ts
 
   cli/                         init.ts, measure-local.ts
+  decision/                    THE verdict law — no LLM, an ordered table
 fixtures/bundles/              committed, sanitized incident fixtures
 incidents/                     real captured Checkly incidents
 test/                          node:test suites, mirroring src/ by responsibility

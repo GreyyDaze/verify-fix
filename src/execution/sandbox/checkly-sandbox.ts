@@ -12,8 +12,8 @@ import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from
 import { tmpdir } from "node:os";
 import { dirname, join, normalize, resolve } from "node:path";
 import type { TraceStep } from "../../types.ts";
-import { rawJsonUniqueKeys, rawTreeBounded } from "../../multistep/raw-evidence.ts";
-import { trustedAutomationBypass } from "../../multistep/accounts.ts";
+import { rawJsonUniqueKeys, rawTreeBounded } from "../../checks/multistep/raw-evidence.ts";
+import { trustedAutomationBypass } from "../../checks/multistep/accounts.ts";
 
 export interface ChecklySandboxContext {
   /** Trusted region -> account-env-key NAME mapping. Names only, never values.

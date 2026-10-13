@@ -11,14 +11,14 @@ import type { ManifestV3 } from "./types.ts";
 import { assertProtectedPolicyEnvelope } from "../../policy/requirements.ts";
 import { parseCheckConfig } from "../../execution/scene/config-diff.ts";
 import { MULTISTEP_DETECTION_MODE, parseMode } from "../../execution/scene/modes.ts";
-import { recordedNestedBookingConfirmed } from "../../multistep/shape.ts";
-import { validMultiStepStoredRecording } from "../../multistep/recording-schema.ts";
-import { multistepProblemCategory } from "../../multistep/sanitize.ts";
-import { readBoundedBundleFile, multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_FILE_BYTES, MULTISTEP_MAX_SOURCE_FILES } from "../../multistep/files.ts";
-import { parseMultiStepProject } from "../../multistep/source.ts";
-import { storedMultiStepIdentityProblem } from "../../multistep/identity.ts";
-import { failurePointFromRecording, matchesRemoteMultiStepBinding } from "../../multistep/binding.ts";
-import type { MultiStepRecording } from "../../multistep/capture.ts";
+import { recordedNestedBookingConfirmed } from "../../checks/multistep/shape.ts";
+import { validMultiStepStoredRecording } from "../../checks/multistep/recording-schema.ts";
+import { multistepProblemCategory } from "../../checks/multistep/sanitize.ts";
+import { readBoundedBundleFile, multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_FILE_BYTES, MULTISTEP_MAX_SOURCE_FILES } from "../../checks/multistep/files.ts";
+import { parseMultiStepProject } from "../../checks/multistep/source.ts";
+import { storedMultiStepIdentityProblem } from "../../checks/multistep/identity.ts";
+import { failurePointFromRecording, matchesRemoteMultiStepBinding } from "../../checks/multistep/binding.ts";
+import type { MultiStepRecording } from "../../checks/multistep/capture.ts";
 
 export interface LoadedBundle {
   bundle: Bundle;

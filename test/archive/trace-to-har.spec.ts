@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { listZip, openZip, readZipEntry, isZip } from "../../src/trace/zip.ts";
+import { listZip, openZip, readZipEntry, isZip } from "../../src/archive/zip.ts";
 import { traceZipToHar, mergeHars } from "../../src/trace/trace-to-har.ts";
 import { sanitizeHar, redact, envVarNamesOnly, redactJsonText } from "../../src/bundle/sanitize.ts";
 import { writeZip } from "../helpers/zip-writer.ts";

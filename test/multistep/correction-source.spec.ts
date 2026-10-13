@@ -11,7 +11,7 @@ import { buildContract } from "../../src/contract/contract.ts";
 import { evaluateMultiStepPolicy } from "../../src/multistep/policy.ts";
 import { runMultiStepSandbox, bridgeReporterMismatch } from "../../src/multistep/executor.ts";
 import { MAX_REPORTER_AUDIT_BYTES, parseReporterAudit } from "../../src/multistep/reporter.ts";
-import { checkEnv } from "../../src/scene/env.ts";
+import { checkEnv } from "../../src/sandbox/env.ts";
 import { emptyExecutionCost, type Bundle, type ExperimentExecutor, type Scene } from "../../src/types.ts";
 import { verify } from "../../src/verify.ts";
 import { detectMultiStepFailurePoint } from "../../src/bundle/manifest.ts";

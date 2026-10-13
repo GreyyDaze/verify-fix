@@ -17,7 +17,7 @@ import { assessSiblingImpact, monitorInventory } from "./protected/sibling-impac
 import { HybridExecutor } from "./executor/hybrid.ts";
 import { inlinePatch, newFiles, originalConfigSource, patchedAssets, patchedCheckSource, patchedConfig, patchedConfigSource, patchedFiles, type PatchSet } from "./candidate/patch.ts";
 import { applyConfigPolicy, diffCheckConfig, parseCheckConfig, type ConfigPolicy } from "./scene/config-diff.ts";
-import { checkEnv, type EnvCheck } from "./scene/env.ts";
+import { checkEnv, type EnvCheck } from "./sandbox/env.ts";
 import type { CandidateRevisionMetadata, CandidateTargetBinding } from "./candidate/revision.ts";
 import { evaluateApiPolicy, type ApiPolicyResult } from "./api/policy.ts";
 import { parseApiCheckProject } from "./api/model.ts";

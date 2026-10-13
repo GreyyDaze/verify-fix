@@ -382,7 +382,6 @@ src/
   scene/                       how a scene puts the target into a state
     proxy.ts                   THE only place a scene shapes traffic
     modes.ts                   live / live-concurrent:N / replay:<har> / inject:…
-    env.ts                     Checkly's ENVIRONMENT_URL convention
     config-diff.ts             config diff + scheduling policy
 
   executor/                    what runs each scene
@@ -396,6 +395,7 @@ src/
     runner.ts                  runs a patch in a child process, parses its JSON outcome
     playwright-sandbox.ts      runs a captured Playwright check unmodified
     checkly-sandbox.ts         runs a DSL check through the Checkly CLI
+    env.ts                     the ENVIRONMENT_URL contract for any run
 
   protected/                   Phase 9 protected guarantees
     requirements.ts            the sealed policy envelope + per-check-type adapters
@@ -420,7 +420,8 @@ src/
   report/cost.ts               cost aggregation across verification reports
   cli/init.ts                  `verify-fix init`
   cli/measure-local.ts         local determinism measurement for an existing bundle
-  trace/                       Playwright .trace → HAR, plus a bounded ZIP reader
+  trace/                       Playwright .trace → HAR
+  archive/                     a bounded dependency-free ZIP reader (trace + asset archives)
 
 fixtures/bundles/              committed, sanitized incident fixtures
 incidents/                     real captured Checkly incidents
@@ -894,7 +895,7 @@ verify-fix bundle --check <checkId> --out ./bundle --project examples/slots-book
    then the trace zip is downloaded from the presigned URL — **without** the
    auth headers (they are attached only to `api.checklyhq.com`).
 4. `src/trace/trace-to-har.ts`: the Playwright trace zip is parsed in memory
-   (`src/trace/zip.ts`, STORE + DEFLATE): `*.network` lines become HAR 1.2
+   (`src/archive/zip.ts`, STORE + DEFLATE): `*.network` lines become HAR 1.2
    entries, bodies are inlined from `resources/<sha1>`, `*.trace`
    before/after events become an action list with the failing step and its
    error message. Traces from several files (one per test) are merged by time.
@@ -1001,7 +1002,7 @@ runs at the overlap the new schedule still allows.
 with zero hits, a vacuous run, a sandbox crash, a missing target, an unrunnable
 mode or disagreeing repetitions is `uncertain` — never pass, never fail.
 
-**Environment** (`src/scene/env.ts`): the sandbox receives only `PATH`,
+**Environment** (`src/sandbox/env.ts`): the sandbox receives only `PATH`,
 `HOME`, `ENVIRONMENT_URL`, `ENVIRONMENT_NAME` (`--env-name`, default
 `verify-fix`), the variables from `--env-file` (KEY=VALUE, like `checkly test
 --env-file`) and the scene's own `env` (the regression scene uses

@@ -21,7 +21,7 @@
 //                      ("expect(locator).toHaveText(expected) failed … Expected … Received …").
 // A trace zip may contain several chunks (0-trace.*, 1-trace.*, test.trace).
 
-import { openZipBounded } from "./zip.ts";
+import { openZipBounded } from "../archive/zip.ts";
 import type { Har, HarEntry } from "./har-types.ts";
 
 export type BodyPolicy = "api" | "all" | "none";

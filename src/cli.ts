@@ -22,7 +22,7 @@ import {
   snapshotPullRequestCandidate,
   type CandidateRevision,
 } from "./candidate/revision.ts";
-import { parseEnvFile } from "./scene/env.ts";
+import { parseEnvFile } from "./sandbox/env.ts";
 import { measureLocalDeterminism } from "./cli/measure-local.ts";
 import { buildCostMatrix, costMatrixMarkdown } from "./report/cost.ts";
 import { initConfirmation, mergePackageScripts, planInit } from "./cli/init.ts";

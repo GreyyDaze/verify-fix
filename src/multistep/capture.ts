@@ -20,7 +20,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
-import { ASSET_ZIP_BOUNDS, openZipBounded } from "../trace/zip.ts";
+import { ASSET_ZIP_BOUNDS, openZipBounded } from "../archive/zip.ts";
 import { normalizeMultiStepCapture, type MultiStepCapture } from "./normalize.ts";
 import { extractTransaction, type MultiStepTransaction } from "./transaction.ts";
 import { multistepProblemCategory, sanitizeMultiStepCapture } from "./sanitize.ts";

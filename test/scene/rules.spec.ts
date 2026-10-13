@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseMode, effectiveConcurrency, needsTarget } from "../../src/scene/modes.ts";
 import { parseCheckConfig, diffCheckConfig, applyConfigPolicy } from "../../src/scene/config-diff.ts";
-import { parseEnvFile, referencedEnvVars, checkEnv } from "../../src/scene/env.ts";
+import { parseEnvFile, referencedEnvVars, checkEnv } from "../../src/sandbox/env.ts";
 import { loadBundle } from "../../src/bundle/load.ts";
 import { loadCandidateProject, loadPatch, patchedConfig, patchedCheckSource, newFiles } from "../../src/candidate/patch.ts";
 import { parseInventory, inventoryDiff } from "../../src/assertion/inventory.ts";

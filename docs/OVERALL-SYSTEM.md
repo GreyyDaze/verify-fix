@@ -91,7 +91,7 @@ The verifier does not decide what a correct fix should be. It checks whether the
 
 **Solution:** Sanitize before persistence. Bound downloads and archives. Hash remote evidence for provenance. Keep Checkly authentication separate from external or presigned asset URLs. Do not log signed URLs.
 
-**Main code:** src/checkly/client.ts, src/bundle/sanitize.ts, src/api/recording.ts, src/multistep/sanitize.ts, src/trace/zip.ts.
+**Main code:** src/checkly/client.ts, src/bundle/sanitize.ts, src/api/recording.ts, src/multistep/sanitize.ts, src/archive/zip.ts.
 
 ### 3.5 Multistep evidence acquisition
 

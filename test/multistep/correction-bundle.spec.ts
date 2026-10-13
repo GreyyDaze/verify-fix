@@ -12,7 +12,7 @@ import { buildContract } from "../../src/contract/contract.ts";
 import { assessAdequacy } from "../../src/adequacy/adequacy.ts";
 import type { ChecklyClient } from "../../src/checkly/client.ts";
 import type { AssetManifestEntry, CheckResultSummary } from "../../src/checkly/types.ts";
-import { openZip, openZipBounded, readZipEntry, listZip } from "../../src/trace/zip.ts";
+import { openZip, openZipBounded, readZipEntry, listZip } from "../../src/archive/zip.ts";
 import { writeZip } from "../helpers/zip-writer.ts";
 import { buildMultiStepRecording, readMultiStepAssets } from "../../src/multistep/capture.ts";
 import { validMultiStepStoredRecording } from "../../src/multistep/recording-schema.ts";

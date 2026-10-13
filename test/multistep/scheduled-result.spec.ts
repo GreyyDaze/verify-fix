@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { buildBundle } from "../../src/bundle/build.ts";
 import { MAX_ASSET_FILE_BYTES, MAX_ASSET_ZIP_BYTES } from "../../src/multistep/capture.ts";
-import { openZipBounded } from "../../src/trace/zip.ts";
+import { openZipBounded } from "../../src/archive/zip.ts";
 import type { ChecklyClient } from "../../src/checkly/client.ts";
 import type { AssetManifestEntry, AssetType, CheckResultSummary } from "../../src/checkly/types.ts";
 import { writeZip } from "../helpers/zip-writer.ts";

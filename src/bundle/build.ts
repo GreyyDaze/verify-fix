@@ -18,7 +18,7 @@ import { closeSync, constants, existsSync, fstatSync, ftruncateSync, lstatSync, 
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { ChecklyClient } from "../checkly/client.ts";
 import type { AssetManifestEntry, ChecklyCheck, ChecklyCheckGroup, CheckResult, CheckResultSummary, ErrorGroup, RootCauseAnalysis } from "../checkly/types.ts";
-import { ASSET_ZIP_BOUNDS, isZip, openZipBounded } from "../trace/zip.ts";
+import { ASSET_ZIP_BOUNDS, isZip, openZipBounded } from "../archive/zip.ts";
 import { mergeHars, traceZipToHar, type BodyPolicy, type TraceExtract } from "../trace/trace-to-har.ts";
 import { parseInventory } from "../assertion/inventory.ts";
 import { sanitizeHar } from "./sanitize.ts";

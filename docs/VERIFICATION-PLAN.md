@@ -86,7 +86,7 @@ Blocker: the entire family is unproven. Code is complete; evidence is synthetic.
 **Local first**
 
 1. Add the missing fake-candidate fixtures under
-   `fixtures/patches/slots-booking-multistep-nested-response/`:
+   `examples/slots-booking/patches/multistep/`:
    - `01-good-nested-field` (already present, rename for clarity)
    - `02-loose-operator` — `toBe(true)` weakened to a property matcher
    - `03-delete-assertion` — remove the booking assertion
@@ -237,7 +237,7 @@ files driven through the CLI.
 
 **Local first**
 
-1. Create `fixtures/patches/slots-availability-api/` as real directories, one
+1. Create `examples/slots-booking/patches/api/` as real directories, one
    per candidate, matching the layout already used for the Playwright families:
    - `01-good-field-rename` — `jsonBody("availability")` → `jsonBody("status")`
    - `02-remove-assertion`

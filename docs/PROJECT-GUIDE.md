@@ -70,7 +70,7 @@ always fail. That is the incident `slots-booking-overlap`.
 
 An agent asked to "make the check pass" has many cheap moves that produce a green
 check without fixing anything. The repo seeds nine of them as fixtures
-(`fixtures/slots-booking/patches/03…11`):
+(`examples/slots-booking/patches/booking-check/03…11`):
 
 | vector | what the patch does | why it is bad |
 |---|---|---|
@@ -112,7 +112,7 @@ numbered requirements (`PR-1`, `PR-3`, `PR-6`, `PR-7`, `PR-10`, `PR-12`).
 ### 2.1 Inputs
 
 1. **A candidate patch** — the full source of the repaired check file
-   (`--patch fixtures/slots-booking/patches/01-good-serialize.ts`).
+   (`--patch examples/slots-booking/patches/booking-check/01-good-serialize.ts`).
 2. **An incident bundle** — a directory (`--bundle fixtures/.../slots-booking-overlap`)
    containing:
    - `manifest.json` — the incident's description, the check's identity, a list of
@@ -998,7 +998,7 @@ Checkly and be given through `--env-file` to run here.
 `recording <file>`; a note under the table says which host the live rows
 ran against and that they prove nothing about any other host.
 
-**Seeded suite after the migration.** `fixtures/slots-booking/patches/`:
+**Seeded suite after the migration.** `examples/slots-booking/patches/booking-check/`:
 `01-good-run-parallel-false/` and `12-good-one-location/` PASS (config
 patches, check unchanged); `02` (weakened twin of 01) and `03`–`10` FAILED;
 `11-flaky` never PASS; `13-config-retry-only/` FAILED by the config policy.
@@ -1063,11 +1063,11 @@ needs a 100% healthy one-at-a-time API baseline and a 100% failing overlap. A
 persistent `live` drift incident needs the original stale check to fail 100%;
 it does not need a meaningless overlap number.
 
-**Real results.** `fixtures/patches/slots-booking-overlap/` contains the 13
+**Real results.** `examples/slots-booking/patches/overlap/` contains the 13
 Phase 4 candidates plus the Phase 5 per-location-user candidate.
 `runParallel:false`, one location, and per-location users PASS. Candidates
 02–10 and 13 FAILED. Candidate 11 produced mixed repetitions and was
-UNCERTAIN, never PASS. `fixtures/patches/slots-booking-drift/` contains the
+UNCERTAIN, never PASS. `examples/slots-booking/patches/drift/` contains the
 correct rename plus four fakes. The rename PASSed. All four fakes FAILED.
 These were run with Chromium against the local `next start` app. A real
 Playwright replay also passed with recorded API responses plus local page

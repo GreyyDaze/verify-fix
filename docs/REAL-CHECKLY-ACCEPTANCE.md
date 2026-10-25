@@ -24,7 +24,7 @@ VERIFY_FIX_ACCEPTANCE_RESULT_ID=01a0e54e-298a-79b4-befe-5d4416ead2e5 \
 VERIFY_FIX_ACCEPTANCE_PASS_RESULT_ID=01a0da9c-a20d-779d-b580-1858634db851 \
 VERIFY_FIX_ACCEPTANCE_TARGET=https://slots-booking-verify-fix.vercel.app \
 VERIFY_FIX_ACCEPTANCE_ENV_FILE=/absolute/path/to/private/checkly.env \
-VERIFY_FIX_ACCEPTANCE_PATCH=fixtures/patches/slots-booking-multistep-nested-response \
+VERIFY_FIX_ACCEPTANCE_PATCH=examples/slots-booking/patches/slots-booking-multistep-nested-response \
 VERIFY_FIX_ACCEPTANCE_PROJECT=examples/slots-booking/web \
 npm run test:checkly:verify
 ```

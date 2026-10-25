@@ -1,223 +1,160 @@
-# Example 1 — slots-booking (browser + API + staged Multistep)
+# slots-booking
 
-A real, deployable app with real Checkly checks. This is the customer side of
-the verify-fix story: verify-fix does not mutate the customer project — it
-reads candidate source, monitoring configuration, imports, dependencies, and
-recorded evidence.
+A small slot-booking app with real Checkly checks (Playwright, API, Multistep),
+used as the customer-side example for verify-fix.
 
-```
-examples/slots-booking/
-├── web/                    ONE project, one package.json (Vercel "Root Directory")
-│   ├── app/, lib/          Next.js app → deployed to Vercel (incl. the Phase 6 API route)
-│   ├── playwright.config.ts
-│   ├── tests/booking.spec.ts   the Playwright test that becomes the check
-│   ├── checks/availability.check.ts  auto-discovered ApiCheck construct
-│   ├── checks/availability.setup.ts  its setup entrypoint
-│   ├── checks/multistep-booking.check.ts  third construct (not deployed here)
-│   ├── checks/multistep-booking.spec.ts   five-step transaction entrypoint
-│   └── checkly.config.ts   defines the Checkly project and Playwright suite → `npx checkly deploy`
-└── README.md               this file
-```
+## What it shows
 
-The check lives inside the app project, the layout Checkly's Playwright Check
-Suite quickstart assumes ("an existing repository that already contains
-Playwright tests"). The same Checkly project contains both checks:
-`checkly.config.ts` defines the project and the Playwright suite, and Checkly
-discovers the ApiCheck construct from `checks/availability.check.ts`, so a
-single `npx checkly deploy` keeps the whole project in sync. Playwright Check
-Suites install *your* `package.json` on
-Checkly's runners, so `checkly.config.ts` sets
-`bundle.packages.prune: { dependencies: true }`: the bundled copy of
-`package.json` loses `next`, `react`, `@upstash/redis`, the shipped lockfile is
-pruned to match, and the runner installs only the dev side
-(`@playwright/test`, `checkly`). Files on disk are never modified. Verified
-offline with the CLI's own bundler (`npx checkly debug parse-project`): the
-tarball holds `package.json` (devDependencies only), a 237-package lockfile
-without `next`/`react`, `playwright.config.ts`, `tests/booking.spec.ts`,
-`tsconfig.json`.
+- A Playwright Check Suite running from two regions with a shared account.
+- An authenticated `ApiCheck` with a setup entrypoint.
+- A five-step Multistep transaction.
+- Real monitoring incidents: overlapping sessions, locator drift, API field
+  rename, and a nested response change.
+- Candidate repairs (good and bad) in `patches/`, used to exercise the CLI.
 
-## The app in one paragraph
+## Prerequisites
 
-Log in with an account name, get a session token, book a time slot. The app has
-one deliberate rule: **one active session per account — the newest login wins.**
-Every `POST /api/login` bumps the account's session version
-(`acct:<user>:version`) and returns `tok-<user>-<version>`. `POST /api/book`
-only accepts a token that carries the *current* version; anything older gets
-`401 session superseded by a newer login`. Between login and booking, the
-booking page loads availability (`GET /api/slots`, deliberately ~1.5 s). That
-delay is the race window.
+- Node.js 24+
+- npm
+- A Checkly account for cloud runs and deploys
+- Vercel and Upstash only if you want to deploy the app
 
-| Route | What it does |
-| --- | --- |
-| `GET /` | login page (label **Account**, button **Log in**) |
-| `GET /book` | booking page (`login-status`, `session-version`, **Book 09:30**, `book-status`, `booking-result`) |
-| `POST /api/login` | `{ account }` → `{ token, version }`, bumps the version |
-| `GET /api/slots` | `{ slots }` after `SLOT_LOAD_DELAY_MS` (default 1500) |
-| `POST /api/book` | Bearer token + `{ slot }` → HTTP 200 `{ booking: { confirmed, status, account, slot, sessionVersion } }` or 401 if superseded; the Multistep book assertion intentionally still expects the old *flat* field |
-| `GET /api/v1/availability` | bearer `API_TOKEN` + `?slot=` → `{ slot, status }` (the Phase 6 API contract) |
-| `GET /api/session` | diagnostic: token version vs current version |
-| `GET /api/health` | `{ ok, store: "memory" \| "upstash" }` |
-
-Sessions live in memory locally and in Upstash Redis on Vercel
-(`lib/store.ts` picks automatically from env vars).
-
-## The check in one paragraph
-
-`web/tests/booking.spec.ts` is a normal Playwright test with four alarms:
-login answered 200 → we are on `/book` → booking answered 200 → result reads
-`CONFIRMED`. `web/checkly.config.ts` turns it into a **Playwright Check
-Suite**: every 5 minutes, from `us-east-1` **and** `eu-west-1`, with
-`runParallel: true` and one shared `TEST_USER=demo`.
-
-## The incident this will produce (Phase 2 of the plan)
-
-Two locations start at the same moment and both log in as `demo`. The second
-login bumps the version. The first run is still waiting for slots, then books
-with the old token → `401` → alarm 3 and 4 fail. Nothing is broken for real
-users; the check is fighting itself. That is a very common real-world Checkly
-incident, and it is the incident the tool must learn to bundle, replay and
-judge fixes against.
-
-## Phase 6 — the authenticated availability API (complete)
-
-Phase 6 added a second check to the browser suite: one
-**ApiCheck** (`web/checks/availability.check.ts`) on
-`GET /api/v1/availability?slot=09:30`. The route requires a bearer token from
-`API_TOKEN` — the value lives only in the environment (Vercel, GitHub
-secrets/variables, your shell) and never in this repository — and answers
-`{ "slot": "09:30", "status": "AVAILABLE" }`. The setup entrypoint
-(`web/checks/availability.setup.ts`) attaches the `Authorization` and
-`x-request-id` headers before every request.
-
-Phase 6 is complete: the field-rename incident (`availability` → `status`,
-app-only, check left stale) was captured locally with the packed CLI (the
-bundle is not committed), the strict repair was verified through the
-protected preview and production proofs, and `checkly deploy` ran only after
-PASS. The `status` contract above is current; `availability` was the
-historical baseline the incident was built from. Commands, environment
-preparation, and the gate procedure live in
-[`web/README.md`](web/README.md) — this file does not repeat them.
-
-## Phase 7 — checked-in baseline, not yet an account-backed proof
-
-One additional `MultiStepCheck` construct is already in this same project,
-with its five ordered awaited steps: login, session, slots, book, confirm.
-The app success response is now nested under `booking`; the canonical stale
-Multistep check still reads flat `body.confirmed` at the book step on purpose.
-The two regional Multistep account **names** (`MULTISTEP_USER_US_EAST_1` and
-`MULTISTEP_USER_EU_WEST_1`) are separate from the browser `TEST_USER*` names;
-no account values or environment-specific bypass values are committed. The
-Multistep check is not deployed or green in Checkly on the basis of this repo.
-Local synthetic tests only prove verifier mechanics, not a real passing or
-failing Checkly recording, cloud run, deployment or protected PASS.
-
-The staged reusable gate resolves *two statuses for the same deployment*: an
-immutable generated verification URL from the Vercel GitHub App and a stable
-monitoring URL verified by a human status with exact marker
-`verify-fix:stable-alias-verified` (`auto_inactive: false`). It requires the
-current `main` SHA and matching deployment/status IDs **before** requesting
-production approval, verifies the generated URL, and deploys monitoring only
-to the stable alias after PASS and a final status recheck. The old immutable
-caller pin in `.github/workflows/gate.yml` is intentionally unchanged; this
-workflow is staged, not active. A separate review must supply a real sanitized
-Multistep bundle, verify the protection bypass, advance the caller pin and
-approve real parity/deployment. Do not infer any of those from synthetic PASS.
-See [`../../docs/PLAN.md`](../../docs/PLAN.md) for the stage table and deferred
-evidence checkpoints.
-
-## Run it locally
+## Quick start
 
 ```bash
-# app
 cd examples/slots-booking/web
 npm ci --ignore-scripts
-npm run build && npm run start          # http://localhost:3000
-npm run collision                       # proves the rule at the API level (5 rows)
+npm run build && npm run start      # http://localhost:3000
+```
 
-# check, against the local app (same folder, same node_modules)
+Prove the session rule without a browser:
+
+```bash
+npm run collision
+```
+
+Run the Playwright check against the local app:
+
+```bash
 npx playwright install chromium
 ENVIRONMENT_URL=http://localhost:3000 TEST_USER=demo npx playwright test
 ```
 
-`npm run collision` output on a healthy build:
+## Project layout
 
+```text
+examples/slots-booking/
+├── web/                             Next.js app + Checkly project
+│   ├── app/, lib/                   application and session store
+│   ├── playwright.config.ts
+│   ├── tests/booking.spec.ts        Playwright check source
+│   ├── checks/
+│   │   ├── availability.check.ts    ApiCheck
+│   │   ├── availability.setup.ts    API auth setup
+│   │   ├── multistep-booking.check.ts
+│   │   └── multistep-booking.spec.ts
+│   └── checkly.config.ts            project + Playwright Check Suite
+├── patches/                         candidate repairs
+└── README.md
 ```
-PASS  healthy: login                       expected: 200            got: 200
-PASS  healthy: book with own token         expected: 200 CONFIRMED  got: 200 CONFIRMED
-PASS  overlap: B version = A version + 1   expected: 3              got: 3
-PASS  overlap: A books after B logged in   expected: 401 ...        got: 401 session superseded by a newer login
-PASS  overlap: B books                     expected: 200 CONFIRMED  got: 200 CONFIRMED
+
+## Configuration
+
+| Variable | Purpose | Required |
+| --- | --- | --- |
+| `ENVIRONMENT_URL` | Target deployment for every check | yes |
+| `TEST_USER` | Shared browser account | local / browser |
+| `API_TOKEN` | Bearer token for `/api/v1/availability` | API check |
+| `MULTISTEP_USER_US_EAST_1` | Multistep account for `us-east-1` | Multistep |
+| `MULTISTEP_USER_EU_CENTRAL_1` | Multistep account for `eu-central-1` | Multistep |
+| `VERCEL_AUTOMATION_BYPASS_SECRET` | Protected preview access | protected preview |
+
+Secret values live in the environment or Checkly; never commit them.
+
+## The checks and incidents
+
+| Check | Incident |
+| --- | --- |
+| `tests/booking.spec.ts` | Two regions log in as the same account; the slower run books with a superseded token and gets `401`. |
+| `tests/booking.spec.ts` locator | App renames `data-testid="book-status"` to `booking-status`; the stale check fails. |
+| `checks/availability.check.ts` | App renames the response field `availability` to `status`; the check still asserts the old field. |
+| `checks/multistep-booking.spec.ts` | App moves the booking fields under `booking.*`; the check still reads the flat fields. |
+
+## Patches
+
+`patches/` holds candidate repairs grouped by incident:
+
+```text
+patches/
+├── overlap/         browser session-overlap candidates
+├── drift/           locator-drift candidates
+├── api/             API field-rename candidates
+├── multistep/       Multistep nested-response candidates
+└── booking-check/   candidates for the booking DSL check
 ```
 
-## One-time setup (needs your accounts — nothing here is automated on purpose)
+Each group contains at least one correct repair and several deliberately weak
+ones (removed assertion, weakened operator, catch/ignore, hardcoded value,
+retry or timeout masking). Feed them to the CLI with `--patch`.
 
-### 1. Vercel
+## Capture and verify
 
-1. Vercel → **Add New Project** → import `GreyyDaze/verify-fix`.
-2. **Root Directory** → `examples/slots-booking/web`. Framework: Next.js (auto).
-3. Deploy. Note the production URL and put it in
-   `web/playwright.config.ts` (`PRODUCTION_URL`).
-
-`web/vercel.json` contains
-`"ignoreCommand": "git diff --quiet HEAD^ HEAD -- :/examples/slots-booking/web"`,
-so commits that only touch the tool (`src/`, `docs/`, …) do **not** trigger a
-deploy. Caveat (Vercel's, not ours): it only compares the newest commit, so a
-batch push whose last commit did not touch `web/` skips the build.
-
-### 2. Upstash Redis (shared session store)
-
-Vercel → project → **Storage** → **Upstash for Redis** → create. Vercel injects
-`KV_REST_API_URL` / `KV_REST_API_TOKEN`; the app reads those (or
-`UPSTASH_REDIS_REST_*` if you create the database on upstash.com). Redeploy once.
-`GET /api/health` must then say `"store":"upstash"`. Without it every serverless
-instance has its own memory and overlapping logins never collide.
-
-### 3. Checkly
+Capture an incident (keep the bundle outside the repo, or under the ignored
+`incidents/` directory):
 
 ```bash
+./bin/verify-fix bundle \
+  --check <checkId> \
+  --project examples/slots-booking/web \
+  --out "$HOME/.verify-fix/bundles/slots-booking" \
+  --verbose
+```
+
+Verify a candidate against that bundle:
+
+```bash
+./bin/verify-fix verify \
+  --patch examples/slots-booking/patches/api/01-good-field-rename \
+  --bundle "$HOME/.verify-fix/bundles/slots-booking" \
+  --executor scene
+```
+
+Exit codes: `0` PASS, `1` FAILED, `2` UNCERTAIN.
+
+## Testing
+
+```bash
+# repository suite (no bundles, no live provider)
+npm test
+
+# typecheck
+npm run typecheck
+
+# example app and checks
 cd examples/slots-booking/web
-npx checkly login                       # or export CHECKLY_API_KEY + CHECKLY_ACCOUNT_ID
+npm run typecheck
+npm run build
+```
 
-# ad-hoc run on Checkly's cloud — session-only, never touches scheduled monitors
-npx checkly test -e ENVIRONMENT_URL=https://<preview-or-prod>.vercel.app --record
+Cloud runs and deploys are separate and need Checkly credentials:
 
-# create/update the scheduled check from checkly.config.ts
+```bash
+npx checkly test -e ENVIRONMENT_URL=https://<deployment> --record
 npx checkly deploy
 ```
 
-Then in the Checkly dashboard:
+## Troubleshooting
 
-- confirm the check **slots booking flow** is green from both locations;
-- enable **Rocky AI** automatic root-cause analysis for alerts (Settings → AI),
-  so Phase 2 can read a real RCA with `npx checkly rca get <id> --output json`;
-- optional: the Vercel integration, so previews are tested automatically.
+| Symptom | Cause |
+| --- | --- |
+| `/api/health` says `"store":"memory"` | Upstash is not configured; overlapping logins will not collide. |
+| `401 session superseded by a newer login` | Expected during the overlap incident. |
+| Check fails at `book-status` | The locator was renamed; this is the drift incident. |
+| API check expects `availability` | The app now returns `status`; this is the field-rename incident. |
+| Multistep reads flat `body.confirmed` | The app now nests it under `booking.confirmed`. |
 
-Phase 0 is "done" when the check has been green on production for a few hours.
+## Related docs
 
-### 4. Capture with the tool (Phase 1)
-
-```bash
-cd <repo root>
-(cd examples/slots-booking/web && npx checkly checks list)   # find the check id (or copy it from the dashboard URL)
-./bin/verify-fix bundle --check <checkId> --out ./bundle --project examples/slots-booking/web --verbose
-```
-
-While the check is still green this produces a *baseline* bundle (status
-`no-failure-yet`, one `healthy-live` scene). After the Phase 2 incident the same
-command produces the full bundle: failing + passing HAR, Rocky RCA, three scenes.
-Add `--measure 3 --measure-overlap 2` to also run the check on Checkly's cloud
-(sequentially, then two copies at once) and record pass rates.
-
-## What lives where (so the tool's later phases make sense)
-
-| Thing | Comes from | Read by the tool in |
-| --- | --- | --- |
-| check source, locations, frequency, `runParallel`, env-var **names** | `web/checkly.config.ts` + `web/tests/booking.spec.ts` via `checkly deploy` | Phase 1 `verify-fix bundle` |
-| failing / passing run traces (→ HAR) | Checkly check results + assets (`trace: 'on'`) | Phase 1 |
-| root cause classification | Rocky RCA | Phase 1 (`REPRODUCTION` mode selection) |
-| env var **values** (`TEST_USER`, credentials) | Checkly (encrypted) / your `.env` — never git | Phase 3 (`--env-file`) |
-
-Alternative wiring, if a customer prefers classic Browser Checks: replace
-`playwrightChecks` with `checks.browserChecks.testMatch: '**/*.spec.ts'` or an
-explicit `new BrowserCheck(id, { code: { entrypoint: './tests/booking.spec.ts' } })`.
-The tool treats both the same way.
+- [`web/README.md`](web/README.md) — deployment, protected gate, and full walkthrough
+- [`../../docs/VERIFICATION-PLAN.md`](../../docs/VERIFICATION-PLAN.md)
+- [`../../docs/BUNDLE-STORAGE-PLAN.md`](../../docs/BUNDLE-STORAGE-PLAN.md)

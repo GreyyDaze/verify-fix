@@ -49,7 +49,7 @@ These test failure boundaries deterministically. They do not prove that the live
 
 Important tests include:
 
-- test/sandbox-evidence.spec.ts
+- test/execution/sandbox/evidence.spec.ts
 - test/checks/multistep/*
 - test/capture/bundle/*
 - test/execution/scene/*

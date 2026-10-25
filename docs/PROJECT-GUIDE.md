@@ -634,7 +634,7 @@ State: `mode` and a `Map<account, {version, lockHolders}>`. Endpoints:
 `expect(book.status).toBe(200)` weakened to `toBeGreaterThanOrEqual(0)` (must be
 caught).
 
-### 5.18 `test/sandbox-evidence.spec.ts`
+### 5.18 `test/execution/sandbox/evidence.spec.ts`
 Sandbox evidence rules that need no captured bundle: empty registry and a
 hitless check are vacuous, the sandbox gets only Checkly's variables plus the
 check's own, the outcome marker is explicit, seeded randomness is reproducible,

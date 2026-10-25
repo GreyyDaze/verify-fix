@@ -3,10 +3,10 @@
 // Checkly's variables and the check's own, and the outcome marker is explicit.
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { runSandbox, parseOutcomeLine } from "../src/execution/sandbox/runner.ts";
-import { repetitionSeed } from "../src/execution/executor/scene.ts";
-import { parseInventory, stripComments } from "../src/evidence/assertion/inventory.ts";
-import { startExampleApp, type RunningApp } from "./helpers/example-app.ts";
+import { runSandbox, parseOutcomeLine } from "../../../src/execution/sandbox/runner.ts";
+import { repetitionSeed } from "../../../src/execution/executor/scene.ts";
+import { parseInventory, stripComments } from "../../../src/evidence/assertion/inventory.ts";
+import { startExampleApp, type RunningApp } from "../../helpers/example-app.ts";
 
 const ENV = { ACCOUNT: "demo" };
 

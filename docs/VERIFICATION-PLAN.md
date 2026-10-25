@@ -215,8 +215,8 @@ Blocker: the gate computes but cannot block. Default is `shadow`.
    change. Confirm zero false positives and zero false UNCERTAIN.
 5. Stage 2 — migration: add versioned requirements to the active bundles
    captured for the live account (kept outside the repository), pin their
-   digests in `.github/workflows/protected-gate.yml`, and confirm requirements
-   are derived from trusted config, never from candidate files.
+   digests in the gate configuration, and confirm requirements are derived
+   from trusted config, never from candidate files.
 6. Stage 3 — enforcement: flip the default in `src/cli.ts` from `shadow` to
    `enforce`, run the full suite, then prove the real gate blocks a bad fix and
    passes a good one on a live pull request.

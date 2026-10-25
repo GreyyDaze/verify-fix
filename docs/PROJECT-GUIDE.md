@@ -1112,37 +1112,25 @@ stable declared `TEST_USER_<REGION>` variable. Partial mappings, duplicate
 runtime values, hard-coded replacement users, and random users remain failures.
 The values come only from `--env-file` or Checkly.
 
-**CI.** `.github/workflows/gate.yml` is a small adapter for successful
-deployment statuses. It calls `.github/workflows/protected-gate.yml` at an
-immutable reviewed commit. That reusable workflow runs the secret-free
-preflight and the approved cloud job. It also loads the pinned verifier and
-policy outside the candidate checkout, and downloads the bundle from the pinned
-artifact. Repository rules must require the reusable gate check names and owner
-review for workflow changes. A protected GitHub environment must approve cloud
-credentials. A fork needs that approval plus an explicit fork flag. JSON and
-Markdown reports are uploaded.
+**CI.** `.github/workflows/ci.yml` runs the repository's own typecheck, test,
+and build on pushes to `main` and on pull requests. The deploy gate is not a
+repository workflow: customers call `scripts/ci-gate.sh` from their own CI
+after capturing a bundle, which keeps the verifier independent of any host
+adapter. The gate fails closed unless the bundle fingerprint, check identity,
+exact revision, and deployment metadata all match.
 
-**Customer contract.** The reusable gate is project-neutral: the project path,
-captured check identity, bundle artifact/run/fingerprint, and policy pins are
-repository variables; Checkly credentials and test identities are secrets. The
-exact list is in `docs/BUNDLE-STORAGE-PLAN.md`. Missing configuration fails
+**Customer contract.** `scripts/ci-gate.sh` is project-neutral: the project
+path, captured check identity, bundle artifact/run/fingerprint, and policy pins
+are repository variables; Checkly credentials and test identities are secrets.
+The exact list is in `docs/BUNDLE-STORAGE-PLAN.md`. Missing configuration fails
 closed, and the gate never falls back to a committed bundle path.
 
-**Bring your own CI.** The GitHub/Vercel workflows are one adapter. Any CI can
-run `scripts/ci-gate.sh` with the bundle, an exact 40-hex candidate SHA checked
-out with a clean tree, deployment metadata (`provider`, `deploymentId`,
-`revision`, `url`), and Checkly credentials. `--candidate-revision` makes a
-non-PR candidate immutable and gate-eligible, so GitLab, Bitbucket, Jenkins,
-local scripts, and any deploy host use the same verifier without host APIs.
-
-The *staged* Phase 7 production preflight (in `protected-gate.yml`) checks
-current `main` before protected approval, then rechecks exact deployment,
-status IDs and both URL roles after approval and after Checkly's deployment
-preview. The trusted verifier runs against the generated immutable URL; only
-the verified stable alias reaches `checkly deploy --preview` and `--force`.
-`gate.yml` remains pinned to the earlier reviewed snapshot, so the staged
-workflow is **not currently active**. The verifier itself never deploys or
-provisions anything.
+**Bring your own CI.** `scripts/ci-gate.sh` runs in any CI with the bundle, an
+exact 40-hex candidate SHA checked out with a clean tree, deployment metadata
+(`provider`, `deploymentId`, `revision`, `url`), and Checkly credentials.
+`--candidate-revision` makes a non-PR candidate immutable and gate-eligible, so
+GitLab, Bitbucket, Jenkins, local scripts, and any deploy host use the same
+verifier without host APIs.
 
 **Cost.** Each report contains candidate identity, verdict, Checkly test
 sessions, cloud check runs, local runs, browser processes, mutation runs, total
@@ -1442,7 +1430,7 @@ fallback.
 | --- | --- | --- |
 | Real evidence | v3 schema and admission exercised with mock authenticated-result paths and bounded synthetic ZIPs. | Actual passing and failing Multistep result assets, source line and parser/token semantics must be inspected; sanitized bundle must be produced with packed `verify-fix bundle` after explicit account approval. No new RCA is triggered here. |
 | URL roles | Secret-free GitHub preflight requires current `main`, same deployment ID/SHA/environment, distinct safe HTTPS origins, latest authenticated Vercel Bot success and a human status marked exactly `verify-fix:stable-alias-verified` (create it with `auto_inactive: false`). Missing/ambiguous/revoked status waits or fails before approval; after approval and after deployment preview recheck both IDs and URLs. | Human verification of the stable alias for the *same deployment*, generated URL HTTP-200 health readiness, approved bypass secret and account-backed Checkly parity. No Vercel API token or host guess. |
-| Protected job | Reusable workflow checks out the verifier and incident at immutable `verifier_ref` V and the helper snapshot at a distinct later immutable `workflow_ref` W. Candidate dependencies stay separate; the job uses 0600 temporary files, verifies the generated URL before any deploy, then uses only the stable origin for Checkly deployment. The configured check identity, pinned bundle artifact/fingerprint, and bypass must exist or it fails closed. | Current `gate.yml` caller pin still points to the **older** reusable workflow; this staged one cannot run until a separately reviewed pin advance. A real protected PASS, actual `checkly deploy` and repaired scheduled green in both locations have not occurred. |
+| Protected job | `scripts/ci-gate.sh` runs the pinned verifier from any CI with a captured bundle, an exact candidate revision, deployment metadata, and Checkly credentials. Missing bundle fingerprint or check identity fails closed. | A real protected PASS with `checkly deploy` and a repaired scheduled green in both locations has not occurred. |
 
 When real parity is authorized, use `checkly test --record --grep
 '^slots booking multistep transaction$' --retries 0` and **one** environment

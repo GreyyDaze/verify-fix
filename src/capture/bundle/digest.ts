@@ -5,9 +5,7 @@
 // every regular file, ordered by its POSIX relative path, with the path and a
 // separating NUL hashed before each file's bytes.
 //
-// This is deliberately the SAME algorithm as .github/helpers/bundle-digest.mjs
-// (used by the trusted gate to check the pin without executing the tool). A
-// parity test keeps the two in step.
+// The gate checks the same pin before grading. A candidate never supplies it.
 
 import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync } from "node:fs";

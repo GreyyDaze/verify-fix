@@ -88,80 +88,54 @@ CI gate:    download artifact → check fingerprint → verify → allow/block
 
 # Customer gate contract
 
-The reusable gate (`protected-gate.yml`) is project-neutral. A repository using
-it supplies everything through the caller and its own configuration; no example
-project path, check identity, bundle path, or provider is baked into the
-workflow. Missing configuration fails closed.
+The gate lives in `scripts/ci-gate.sh`, a provider-neutral adapter. A
+repository supplies everything through environment variables and its own
+configuration; no example project path, check identity, bundle path, or
+provider is baked into it. Missing configuration fails closed.
 
-## Caller (`gate.yml`, in the customer repo)
+Run it from any CI, or from a shell, after the bundle has been captured and
+stored outside the repository. Pin the script (and the CLI it calls) to a
+reviewed commit, and make its job a **required check** in the repository
+ruleset.
 
-Triggers on `deployment_status` and calls the gate at an immutable commit. It
-passes only deployment metadata; it never checks out or runs candidate code.
-
-```yaml
-on:
-  deployment_status:
-
-jobs:
-  protected-gate:
-    if: >-
-      github.event.deployment_status.state == 'success' &&
-      github.event.deployment_status.environment_url != ''
-    uses: <owner>/verify-fix/.github/workflows/protected-gate.yml@<pinned-commit>
-    with:
-      verifier_ref: <pinned-commit>
-      workflow_ref: <pinned-commit>
-      deployment_id: ${{ format('{0}', github.event.deployment.id) }}
-      deployment_sha: ${{ github.event.deployment.sha }}
-      environment: ${{ github.event.deployment.environment }}
-      environment_url: ${{ github.event.deployment_status.environment_url }}
-    secrets: inherit
-```
-
-Pin `uses:` and `verifier_ref` to the same reviewed commit, and make the gate a
-**required check** in the repository ruleset.
-
-## Repository variables (`vars`)
+## Inputs
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `CANDIDATE_PROJECT_PATH` | yes | Checkly project directory inside the repo (e.g. `web`). |
-| `VERIFY_FIX_EXPECTED_CHECK_TYPE` | yes | Captured check type: `API`, `PLAYWRIGHT`, or `MULTI_STEP`. |
-| `VERIFY_FIX_EXPECTED_CHECK_FILE` | yes | Check file path inside the project. |
-| `VERIFY_FIX_EXPECTED_LOGICAL_ID` | yes | Stable logical check id. |
-| `VERIFY_FIX_EXPECTED_MULTISTEP_RECORDING` | no | Failing recording path to assert for Multistep. |
-| `VERIFY_FIX_BUNDLE_ARTIFACT` | yes | Artifact name from the capture run. |
-| `VERIFY_FIX_BUNDLE_ARTIFACT_RUN` | yes | Capture run id. |
-| `VERIFY_FIX_BUNDLE_DIGEST` | yes | Whole-bundle SHA-256 (64 lowercase hex). |
-| `VERIFY_FIX_REQUIREMENTS_DIGEST` | no | Policy pin; empty reports `PROTECTED_POLICY_PIN_MISSING`. |
-| `VERIFY_FIX_REQUIREMENTS_MODE` | no | `shadow` (default) or `enforce`. |
+| `VF_CANDIDATE_PROJECT` | yes | Checkly project directory inside the candidate checkout. |
+| `VF_BUNDLE_DIR` | yes | Local bundle directory, stored outside the repository. |
+| `VF_BUNDLE_DIGEST` | yes | Whole-bundle SHA-256 (64 lowercase hex). |
+| `VF_CANDIDATE_REVISION` | yes | Exact 40-hex candidate SHA, checked out with a clean tree. |
+| `VF_BASE` | yes | Base Git ref used to describe changes. |
+| `VF_TARGET` | yes | Deployment origin (bare http(s) origin). |
+| `VF_TARGET_REVISION` | yes | Deployed revision; must equal `VF_CANDIDATE_REVISION`. |
+| `VF_TARGET_METADATA` | yes | Deployment metadata file (see below). |
 | `CHECKLY_ACCOUNT_ID` | yes | Checkly account id. |
+| `VF_REQUIREMENTS_DIGEST` | no | Policy pin; empty reports `PROTECTED_POLICY_PIN_MISSING`. |
+| `VF_REQUIREMENTS_MODE` | no | `shadow` (default) or `enforce`. |
+| `VF_ENV_FILE`, `VF_ENV_NAME` | no | Checkly environment inputs. |
+| `VF_PROJECT` | no | Checkly project name override. |
 
-## Repository secrets
+## Secrets
 
 | Secret | Meaning |
 |---|---|
 | `CHECKLY_API_KEY` | Checkly API key used by the cloud executor. |
-| `TEST_USER`, `TEST_USER_US_EAST_1`, `TEST_USER_EU_WEST_1` | Browser identities. |
+| `TEST_USER`, `TEST_USER_US_EAST_1`, `TEST_USER_EU_CENTRAL_1` | Browser identities. |
 | `API_TOKEN` | API check token. |
-| `MULTISTEP_USER_US_EAST_1`, `MULTISTEP_USER_EU_WEST_1` | Multistep identities. |
+| `MULTISTEP_USER_US_EAST_1`, `MULTISTEP_USER_EU_CENTRAL_1` | Multistep identities. |
 | `VERCEL_AUTOMATION_BYPASS_SECRET` | Protected-target bypass (adapter-specific). |
-
-## Job permissions
-
-`contents: read`, `actions: read` (artifact download), `deployments: read`,
-`pull-requests: read`.
 
 ## What the gate does
 
-1. Resolves the pull request from the deployment; the candidate is the PR head.
-2. Downloads the pinned artifact and recomputes the whole-bundle fingerprint.
-3. Checks the manifest matches `VERIFY_FIX_EXPECTED_CHECK_*`.
-4. Runs `verify-fix verify` against the live target.
-5. Deploys the checks only on `PASS`.
+1. Requires an exact candidate revision and matching deployment metadata.
+2. Recomputes the whole-bundle fingerprint and rejects a mismatch.
+3. Runs `verify-fix verify` against the live target.
+4. Exits non-zero unless the verdict is `PASS` and the candidate is
+   gate-eligible.
 
-A missing artifact, run id, fingerprint, or check identity — or any mismatch —
-stops the gate. It never falls back to a committed bundle path.
+A missing bundle, fingerprint, revision, or deployment identity — or any
+mismatch — stops the gate. It never falls back to a committed bundle path.
 
 ## Deployment metadata (any provider)
 
@@ -184,9 +158,8 @@ verifier:
 
 ## Non-GitHub and non-Vercel CI
 
-`gate.yml` + `protected-gate.yml` are the GitHub Actions / Vercel reference
-adapter, not the architecture. Any CI can call `scripts/ci-gate.sh`, which
-takes the bundle, the exact candidate SHA, deployment metadata, and Checkly
+`scripts/ci-gate.sh` is the reference adapter, not the architecture. It takes
+the bundle, the exact candidate SHA, deployment metadata, and Checkly
 credentials, then runs:
 
 ```
@@ -217,7 +190,7 @@ gate:
 
 # Local
 VF_BUNDLE_DIR="$HOME/.verify-fix/bundles/booking" \
-VF_BUNDLE_DIGEST="$(node .github/helpers/bundle-digest.mjs "$VF_BUNDLE_DIR")" \
+VF_BUNDLE_DIGEST="<fingerprint printed by the capture command>" \
 VF_CANDIDATE_PROJECT="$PWD/web" \
 VF_BASE=origin/main \
 VF_CANDIDATE_REVISION="$(git -C "$PWD" rev-parse HEAD)" \

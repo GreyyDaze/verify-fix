@@ -7,18 +7,23 @@
 //   replay:<file>.har      answer from the recording, no target needed
 //   inject:<M> <path> -> <status>
 //                          generic recorded-response injection (non-Multistep)
-//   detect:POST /api/book -> 200:booking.confirmed=false
-//                          trusted Multistep-only, fixed nested-field mutation;
-//                          never a caller-supplied path, response or status
+//   detect:<M> <path> -> <status>:<dotted.path>=<scalar>
+//                          trusted Multistep-only scalar mutation, generated
+//                          from the bundle scenario; never a caller-supplied
+//                          path, response or status
 //
 // Deterministic string parsing only; unknown modes are an error at load time,
 // never a silent "live".
 
-export const MULTISTEP_DETECTION_MODE = "detect:POST /api/book -> 200:booking.confirmed=false" as const;
+import type { MultistepScenario } from "../../types.ts";
+
+export function multistepDetectionMode(scenario: MultistepScenario): string {
+  return `detect:${scenario.mutation.method} ${scenario.mutation.path} -> 200:${scenario.mutation.jsonPath.join(".")}=${String(scenario.mutation.replace)}`;
+}
 
 export type ParsedMode =
   | { kind: "live"; concurrency: 1 }
-  | { kind: "multistep-detection" }
+  | { kind: "multistep-detection"; rule: DetectionRule }
   | { kind: "live-concurrent"; concurrency: number }
   | { kind: "replay"; har: string }
   | { kind: "inject"; rule: InjectRule }
@@ -34,10 +39,45 @@ export interface InjectRule {
   raw: string;
 }
 
+export interface DetectionRule extends InjectRule {
+  /** property names from the response root to the scalar */
+  jsonPath: string[];
+  expected: string | number | boolean;
+  replace: string | number | boolean;
+}
+
+function scalar(text: string): string | number | boolean | null {
+  if (text === "true") return true;
+  if (text === "false") return false;
+  if (/^-?\d+(?:\.\d+)?$/.test(text)) {
+    const value = Number(text);
+    return Number.isFinite(value) ? value : null;
+  }
+  return text.length > 0 && text.length <= 1024 ? text : null;
+}
+
+function parseDetectionRule(text: string): DetectionRule | null {
+  const m = /^\s*([A-Z]+)\s+(\/\S*)\s*->\s*(\d{3}):([A-Za-z_$][A-Za-z0-9_$-]*(?:\.[A-Za-z_$][A-Za-z0-9_$-]*){0,7})=(.+)$/.exec(text);
+  if (!m) return null;
+  const expectedPlaceholder = scalar(m[5]!);
+  if (expectedPlaceholder === null) return null;
+  // The mode records the replacement value; the expected value is supplied by
+  // the bundle scenario and is never inferred from this string.
+  return {
+    method: m[1]!, path: m[2]!.split("?")[0]!, status: Number(m[3]),
+    jsonPath: m[4]!.split("."), expected: expectedPlaceholder, replace: expectedPlaceholder,
+    raw: text.trim(),
+  };
+}
+
 export function parseMode(mode: string | undefined | null): ParsedMode {
   const raw = (mode ?? "").trim();
   if (raw === "live") return { kind: "live", concurrency: 1 };
-  if (raw === MULTISTEP_DETECTION_MODE) return { kind: "multistep-detection" };
+  if (raw.startsWith("detect:")) {
+    const rule = parseDetectionRule(raw.slice("detect:".length));
+    return rule ? { kind: "multistep-detection", rule }
+      : { kind: "unknown", raw, reason: `detect rule must be "<METHOD> <path> -> <status>:<dotted.path>=<scalar>", got "${raw.slice(7)}"` };
+  }
   const conc = /^live-concurrent:(\d+)$/.exec(raw);
   if (conc) {
     const n = Number(conc[1]);

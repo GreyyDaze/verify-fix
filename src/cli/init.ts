@@ -27,6 +27,8 @@ export interface DetectedProject {
   hasPackageJson: boolean;
   hasIncidentsDir: boolean;
   hasVerifyFixInstalled: boolean;
+  /** Root .gitignore already ignores captured incident bundles. */
+  hasBundleIgnore: boolean;
   /** Present but never parsed for values — only its existence is reported. */
   hasEnvFile: boolean;
 }
@@ -50,6 +52,29 @@ function isDirectory(path: string): boolean {
   try { return statSync(path).isDirectory(); } catch { return false; }
 }
 
+/** The gitignore rules that keep captured evidence (proof, not code) out of
+ * the user's repo. The bundle glob covers the legacy in-repo default output
+ * name; the incidents directory covers the conventional local capture folder.
+ * A bundle is still saved outside the project by default — these are the
+ * belt-and-braces rule requested by docs/BUNDLE-STORAGE-PLAN.md Part A. */
+export const BUNDLE_IGNORE_RULES = ["bundle-*/", "incidents/"] as const;
+
+/** True when every bundle rule already appears as its own line. */
+export function hasBundleIgnoreRules(gitignoreText: string): boolean {
+  const lines = new Set(gitignoreText.split(/\r?\n/).map((line) => line.trim()));
+  return BUNDLE_IGNORE_RULES.every((rule) => lines.has(rule));
+}
+
+/** Append any missing bundle rule to a .gitignore text, preserving the rest. */
+export function gitignoreWithBundleRules(gitignoreText: string): string {
+  if (hasBundleIgnoreRules(gitignoreText)) return gitignoreText;
+  const missing = BUNDLE_IGNORE_RULES.filter((rule) =>
+    !gitignoreText.split(/\r?\n/).some((line) => line.trim() === rule));
+  const head = gitignoreText.length === 0 || gitignoreText.endsWith("\n") ? gitignoreText : `${gitignoreText}\n`;
+  const gap = head.length === 0 ? "" : "\n";
+  return `${head}${gap}# verify-fix captured evidence (proof, not code)\n${missing.join("\n")}\n`;
+}
+
 export function detectProject(cwd: string): DetectedProject {
   const root = resolve(cwd);
   const configFile = PROJECT_MARKERS.map((name) => join(root, name)).find(isFile) ?? null;
@@ -59,6 +84,9 @@ export function detectProject(cwd: string): DetectedProject {
     // Read only the dependency name, never any value.
     hasVerifyFixInstalled = /"verify-fix"\s*:\s*"(?:\^|~|>=?\s*\d|latest)/.test(readFileSync(packageJson, "utf8"));
   }
+  const gitignore = join(root, ".gitignore");
+  const hasBundleIgnore = isFile(gitignore) && statSync(gitignore).size <= MAX_PACKAGE_JSON_BYTES
+    && hasBundleIgnoreRules(readFileSync(gitignore, "utf8"));
   return {
     root,
     configFile,
@@ -67,14 +95,17 @@ export function detectProject(cwd: string): DetectedProject {
     hasPackageJson: isFile(packageJson),
     hasIncidentsDir: isDirectory(join(root, "incidents")),
     hasVerifyFixInstalled,
+    hasBundleIgnore,
     hasEnvFile: [".env", ".env.local", ".env.production"].some((name) => isFile(join(root, name))),
   };
 }
 
 const PACKAGE_SCRIPTS = {
-  "verify:bundle": "verify-fix bundle --check <check-id> --out ./incidents/<incident>",
-  "verify:measure": "verify-fix measure --bundle ./incidents/<incident> --target <url> --project .",
-  "verify:check": "verify-fix verify --candidate-project . --base <git-ref> --bundle ./incidents/<incident> --target <url>",
+  // Bundles are proof, not code: capture with the safe default (outside the
+  // repo) and point later steps at the resulting path via $BUNDLE_DIR.
+  "verify:bundle": "verify-fix bundle --check <check-id>",
+  "verify:measure": "verify-fix measure --bundle \"$BUNDLE_DIR\" --target <url> --project .",
+  "verify:check": "verify-fix verify --candidate-project . --base <git-ref> --bundle \"$BUNDLE_DIR\" --target <url>",
 } as const;
 
 /**
@@ -96,7 +127,7 @@ export function planInit(cwd: string): InitPlan {
       notes: [
         "No checkly.config.ts|js found in this directory.",
         "verify-fix init configures an EXISTING Checkly project; it never creates or copies the example project.",
-        "Run it from your Checkly project root, or use `npm create verify-fix@latest <dir> -- --template slots-booking-live` to copy the worked example.",
+        "Run it from your Checkly project root. The worked example in this repository is test data, not a copy command.",
       ],
     };
   }
@@ -105,9 +136,6 @@ export function planInit(cwd: string): InitPlan {
   if (!project.hasPackageJson) notes.push("No package.json found; the verify-fix scripts will be skipped.");
   if (project.hasEnvFile) {
     notes.push("An env file is present. Its contents are NEVER read, parsed, copied, or stored.");
-  }
-  if (project.hasIncidentsDir) {
-    notes.push("An incidents/ directory already exists; existing bundles are left untouched.");
   }
 
   if (!project.hasVerifyFixInstalled && project.hasPackageJson) {
@@ -119,8 +147,8 @@ export function planInit(cwd: string): InitPlan {
     notes.push("verify-fix is already a dependency; the dependency entry is left untouched.");
   }
 
-  if (!project.hasIncidentsDir) {
-    actions.push({ path: "incidents/", description: "create an empty directory for captured incident bundles" });
+  if (!project.hasBundleIgnore) {
+    actions.push({ path: ".gitignore", description: `ignore captured bundles (${BUNDLE_IGNORE_RULES.join(", ")}) so evidence never lands in the repo` });
   }
 
   return { project, actions, notes };

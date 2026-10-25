@@ -57,6 +57,8 @@ export interface VerifyOptions {
   protectedRequirementsMode?: "shadow" | "migration" | "enforce";
   /** Digest pinned by the trusted caller, outside the candidate checkout. */
   protectedRequirementsDigest?: string | null;
+  /** Whole-bundle fingerprint (proof, not code) and whether it matched the pin. */
+  bundleEvidence?: { digest: string; pinnedDigest: string | null; verified: boolean } | null;
   verbose?: boolean;
 }
 
@@ -496,7 +498,8 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   const isMultiStep = bundle.check.checkType === "MULTI_STEP" ||
     [...originalFiles.values()].some((source) => source.includes("new MultiStepCheck("));
   const multistepPolicy = isMultiStep
-    ? evaluateMultiStepPolicy(parseMultiStepProject(originalFiles, bundle.check.file), parseMultiStepProject(candidateFileMap, candidateCheckFile))
+    ? evaluateMultiStepPolicy(parseMultiStepProject(originalFiles, bundle.check.file, bundle.scenario),
+      parseMultiStepProject(candidateFileMap, candidateCheckFile, bundle.scenario), bundle.scenario)
     : null;
   const declared = [...new Set([
     ...(bundle.config?.environmentVariables ?? []),
@@ -744,6 +747,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     candidateRevision: opts.candidateRevision ?? patch.revision ?? null,
     candidateCheck: patch.checkLogicalId ? { logicalId: patch.checkLogicalId, name: patch.checkName ?? null, file: patch.checkFile ?? null } : null,
     targetBinding: opts.targetBinding ?? null,
+    bundleEvidence: opts.bundleEvidence ?? null,
     multistep: bundle.multistep
       ? { kind: bundle.multistep.kind, steps: bundle.multistep.steps, problems: bundle.multistep.problems }
       : null,

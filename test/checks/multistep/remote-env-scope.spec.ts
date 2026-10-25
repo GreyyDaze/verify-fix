@@ -103,7 +103,7 @@ process.exitCode = isolated ? 0 : 1
     const replayed = run(regionalEnv);
     const replayObservation = await replayed.runScene(captured, repaired, scene, ctx);
     assert.equal(replayObservation.observed, "uncertain", "two regional children cannot borrow one session ID");
-    assert.equal(replayObservation.repetitions, 1);
+    assert.equal(replayObservation.repetitions, 1, replayObservation.reason ?? "no reason");
     assert.equal(replayed.costReport().checklyCloudRuns, 2, "both already launched children are still counted");
     for (const invalid of [
       { ...regionalEnv, MULTISTEP_USER_EU_CENTRAL_1: regionalEnv.MULTISTEP_USER_US_EAST_1 },

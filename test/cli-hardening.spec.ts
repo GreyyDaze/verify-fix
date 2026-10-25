@@ -34,6 +34,8 @@ test("CLI rejects ambiguous and secret-bearing inputs without echo or running a 
       ["verify", "--patch", patch, "--bundle", bundle, "--executor=hybrid", "--target=https://example.test",
         "--target-revision=" + "a".repeat(39), "--target-metadata=private-canary-value"],
       ["verify", "--patch", patch, "--bundle", bundle, "--cloud-approved"],
+      ["verify", "--candidate-project", root, "--candidate-revision", "A".repeat(40), "--base", "HEAD", "--bundle", bundle],
+      ["verify", "--patch", patch, "--bundle", bundle, "--candidate-revision", "a".repeat(40)],
     ]) run(args);
     run(["bundle", "--check", "some-check"], { ...env, CHECKLY_API_KEY: "private-canary-value",
       CHECKLY_ACCOUNT_ID: "invalid/account" });

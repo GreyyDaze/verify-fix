@@ -381,3 +381,24 @@ test("MULTI_STEP --keep-raw recovers raw artifacts beside the bundle, never insi
     rmSync(rawSibling, { recursive: true, force: true });
   }
 });
+
+test("bundle: no --out saves OUTSIDE the repo, named by incident id", async () => {
+  const home = mkdtempSync(join(tmpdir(), "vf-home-"));
+  const project = makeProjectDir();
+  const previousHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const { client } = fakeClient();
+    const outcome = await buildBundle(
+      { checkId: CHECK.id, projectDir: project },
+      { client, accountId: "acct-1", now: () => new Date("2026-09-21T12:00:00Z") },
+    );
+    assert.ok(outcome.outDir.startsWith(join(home, ".verify-fix", "bundles") + "/"), outcome.outDir);
+    assert.equal(outcome.outDir.endsWith(outcome.manifest.incidentId), true, "named by incident id, not check id");
+    assert.ok(existsSync(join(outcome.outDir, "manifest.json")));
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(project, { recursive: true, force: true });
+  }
+});

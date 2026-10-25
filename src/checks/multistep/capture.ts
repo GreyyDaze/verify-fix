@@ -223,13 +223,13 @@ export interface MultiStepCaptureInput {
 }
 
 export interface MultiStepFailureAssertion {
-  step: "book 09:30";
+  step: string;
   line: number;
   id: string;
-  subject: "body.confirmed";
-  repairedSubject: "body.booking.confirmed";
-  matcher: "toBe";
-  target: "true";
+  subject: string;
+  repairedSubject: string;
+  matcher: string;
+  target: string;
   negated: false;
 }
 

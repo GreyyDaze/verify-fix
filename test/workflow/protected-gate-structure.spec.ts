@@ -468,10 +468,14 @@ test("protected job uses pinned verifier, private target metadata and complete b
   assert.ok(verify < preview && preview < final && final < comparison && comparison < force,
     "PASS then preview then latest identity/status recheck then deploy");
   assert.doesNotMatch(job, /\bnode bin\/verify-fix verify\b/, "never run an untrusted verifier from candidate source");
-  assert.match(job, /--bundle "trusted\/\$VERIFY_FIX_BUNDLE"/);
-  assert.match(job, /APPROVED_BUNDLE: \$\{\{ vars\.VERIFY_FIX_BUNDLE \}\}/);
-  assert.match(job, /Require a reviewed Phase 7 Multistep incident bundle/);
-  assert.match(job, /\.check\.checkType == "MULTI_STEP"/);
+  assert.match(job, /--bundle bundle/);
+  assert.match(job, /--bundle-digest "\$VERIFY_FIX_BUNDLE_DIGEST"/);
+  assert.match(job, /name: Download the captured bundle artifact/);
+  assert.match(job, /name: Require the pinned bundle fingerprint/);
+  assert.match(job, /name: Require the captured bundle to match the configured check/);
+  assert.match(job, /VERIFY_FIX_EXPECTED_CHECK_TYPE/);
+  assert.match(job, /VERIFY_FIX_EXPECTED_CHECK_FILE/);
+  assert.match(job, /VERIFY_FIX_EXPECTED_LOGICAL_ID/);
   assert.match(job, /--candidate-project candidate-runtime/);
   assert.match(job, /--project "candidate-runtime\/\$CANDIDATE_PROJECT_PATH"/);
   assert.match(job, /--target-metadata "\$VERIFY_FIX_TARGET_METADATA"/);
@@ -557,4 +561,24 @@ test("V verifier and later W helpers have separate checked-out refs; action pins
     assert.equal(match[2], official[match[1] as keyof typeof official], `${match[1]} must be pinned`);
     assert.match(match[2]!, /^[0-9a-f]{40}$/);
   }
+});
+
+test("the reusable gate contains no example-project literals and is configured by the customer", () => {
+  assert.doesNotMatch(protectedGate, /slots-booking|slots-availability/i);
+  assert.doesNotMatch(protectedGate, /examples\/slots-booking/);
+  assert.doesNotMatch(protectedGate, /checks\/multistep-booking\.spec\.ts/);
+  assert.doesNotMatch(protectedGate, /incidents\//);
+  assert.doesNotMatch(protectedGate, /VERIFY_FIX_BUNDLE\b/);
+  assert.match(
+    protectedGate,
+    /CANDIDATE_PROJECT_PATH: \$\{\{ vars\.CANDIDATE_PROJECT_PATH \}\}/,
+    "the project path must come from a repository variable",
+  );
+  assert.match(
+    protectedGate,
+    /VERIFY_FIX_EXPECTED_CHECK_TYPE: \$\{\{ vars\.VERIFY_FIX_EXPECTED_CHECK_TYPE \}\}/,
+    "the expected check identity must come from repository variables",
+  );
+  assert.match(protectedGate, /name: Require the customer gate configuration/);
+  assert.match(protectedGate, /is not configured; failing closed/);
 });

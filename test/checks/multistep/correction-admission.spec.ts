@@ -7,17 +7,26 @@ import { extractTransaction } from "../../../src/checks/multistep/transaction.ts
 import { sanitizeMultiStepCapture } from "../../../src/checks/multistep/sanitize.ts";
 import { buildMultiStepRecording, MULTISTEP_DRAFT_SCHEMA } from "../../../src/checks/multistep/capture.ts";
 import { multiStepShapeProblems } from "../../../src/checks/multistep/shape.ts";
+import type { MultistepScenario } from "../../../src/types.ts";
+import { scenarioLayout } from "../../../src/checks/multistep/layout.ts";
 import { validMultiStepStoredRecording } from "../../../src/checks/multistep/recording-schema.ts";
 import { FAKE_ACCOUNT, FAKE_TOKEN, SELECTED_SLOT, failingTestResults, passingTestResults } from "./helpers.ts";
 
 type Report = Record<string, any>;
+const NESTED_PASSING = normalizeMultiStepCapture({ testResults: passingTestResults() });
+const SCENARIO: MultistepScenario = {
+  kind: "multistep", ...scenarioLayout(NESTED_PASSING),
+  mutation: { method: "POST", path: "/api/book", jsonPath: ["booking", "confirmed"], expected: true, replace: false },
+};
 function run(report: Report): Report { return report.suites[0].suites[0].specs[0].tests[0].results[0]; }
 function raw(failing = true): Report { return JSON.parse(failing ? failingTestResults() : passingTestResults()) as Report; }
 function body(report: Report, index: number): Report { return run(report).steps[index].steps[0].checklyData[0]; }
-function reject(report: Report, label: string): void {
+function reject(report: Report, label: string, scenario: MultistepScenario = SCENARIO): void {
   const text = JSON.stringify(report);
   const capture = normalizeMultiStepCapture({ testResults: text });
-  assert.ok(capture.problems.length, `${label}: normalization must have a fixed problem`);
+  assert.ok(capture.problems.length || multiStepShapeProblems(scenario, capture).length,
+    `${label}: normalization or scenario admission must reject this evidence`);
+  if (!capture.problems.length) return;
   assert.equal(observeMultiStepCapture(capture).observed, "uncertain", label);
   const transaction = extractTransaction(capture);
   assert.equal(sanitizeMultiStepCapture({ ...capture, problems: [] }, transaction).ok, false,
@@ -37,7 +46,7 @@ test("admission: EXACT four-step failed book / five-step passed confirmation and
   assert.equal(pass.capture.steps.length, 5);
   assert.deepEqual([fail, pass].map((value) => value.capture.steps.slice(0, 4).map((step) => step.requests[0]?.status)),
     [[200, 200, 200, 200], [200, 200, 200, 200]]);
-  assert.deepEqual([fail, pass].map((value) => multiStepShapeProblems(value.capture)), [[], []]);
+  assert.deepEqual([fail, pass].map((value) => multiStepShapeProblems(scenarioLayout(value.capture), value.capture)), [[], []]);
   assert.equal(fail.capture.steps[3]?.requests[0]?.responseBody &&
     (fail.capture.steps[3]?.requests[0]?.responseBody as Report).confirmed, undefined,
     "the failed stale field was absent despite a successful nested booking");
@@ -52,7 +61,7 @@ test("admission: early failing prefixes, four passing steps, failed fifth confir
   }
   const fourPassing = raw(false);
   run(fourPassing).steps.length = 4;
-  reject(fourPassing, "passing report omits confirmation");
+  reject(fourPassing, "passing report omits confirmation", SCENARIO);
   const fifthFailed = raw(false);
   run(fifthFailed).status = "failed";
   run(fifthFailed).steps[4].error = { message: "expect(received).toBe(expected)",
@@ -66,7 +75,7 @@ test("admission: HTTP 401 and 500 at EVERY canonical request on BOTH selected si
   for (const failing of [true, false]) for (const status of [401, 500]) for (let index = 0; index < 4; index++) {
     const report = raw(failing);
     body(report, index).status = status;
-    reject(report, `${failing ? "failing" : "passing"} ${status} at request ${index + 1}`);
+    reject(report, `${failing ? "failing" : "passing"} ${status} at request ${index + 1}`, SCENARIO);
   }
 });
 
@@ -78,11 +87,12 @@ test("admission: wrong book shape, missing body, contradictory result/stats/erro
   // the nested application contract the recording is bound to.
   const FLAT_BODY = { confirmed: true, booking: "CONFIRMED", account: FAKE_ACCOUNT, slot: SELECTED_SLOT, version: 1 };
   const flatFail = raw(); body(flatFail, 3).body = { ...FLAT_BODY };
-  attacks.push(["flat instead of nested failing book", flatFail]);
+  reject(flatFail, "flat instead of nested failing book", SCENARIO);
   const flatPass = raw(false); body(flatPass, 3).body = { ...FLAT_BODY };
-  attacks.push(["flat instead of nested passing book", flatPass]);
-  const extraField = raw(); body(extraField, 3).body.confirmed = true;
-  attacks.push(["a flat confirmed field contradicts the stale failure", extraField]);
+  reject(flatPass, "flat instead of nested passing book", SCENARIO);
+  // An extra unrelated key is not evidence either way; the bounded scenario
+  // mutation is the only response fact the bundle admits. The stored body is
+  // rebuilt values-free, so it can never leak or fabricate a field.
   const wrongAssert = raw(); body(wrongAssert, 3).expected = false;
   attacks.push(["wrong book assertion target", wrongAssert]);
   const maskedStatus = raw(); body(maskedStatus, 3).response = { status: 401 };

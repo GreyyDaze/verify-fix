@@ -17,7 +17,8 @@
 //   missing or unreadable evidence inputs.
 
 import type { MultiStepSourceModel } from "./source.ts";
-import { repairedBookingSubject, sameOrRepairedBookingWrite } from "./repair.ts";
+import { repairedSubject, sameOrRepairedWrite } from "./repair.ts";
+import type { MultistepEvidenceScenario } from "../../types.ts";
 
 export interface MultiStepPolicyResult {
   rejected: string | null;
@@ -48,6 +49,7 @@ function stepTitles(model: MultiStepSourceModel): string[] {
 export function evaluateMultiStepPolicy(
   original: MultiStepSourceModel | null,
   candidate: MultiStepSourceModel | null,
+  scenario?: MultistepEvidenceScenario | null,
 ): MultiStepPolicyResult {
   const notes: string[] = [];
 
@@ -128,7 +130,7 @@ export function evaluateMultiStepPolicy(
         const requestTuple = (r: typeof candidate.script.requests[number]) => [r.stepTitle, r.method, r.urlTemplate, r.headerKeys, r.bodyKeys, r.usesBearer, r.optionsShape];
         if (candidate.script.securityBindings.length !== original.script.securityBindings.length
           || original.script.securityBindings.some((binding, i) =>
-            !sameOrRepairedBookingWrite(binding, candidate.script!.securityBindings[i]!))) {
+            !sameOrRepairedWrite(scenario, binding, candidate.script!.securityBindings[i]!))) {
           rejections.push("Multistep environment, regional account, slot or bearer-token data binding changed — the captured transaction cannot be retargeted");
         }
         if (JSON.stringify(candidate.script.requests.map(requestTuple)) !== JSON.stringify(original.script.requests.map(requestTuple))) {
@@ -155,9 +157,9 @@ export function evaluateMultiStepPolicy(
         const missingTuples = originalAssertions.filter((a) => (newCounts.get(tuple(a)) ?? 0) < (oldCounts.get(tuple(a)) ?? 0));
         const addedTuples = candidateAssertions.filter((a) => (oldCounts.get(tuple(a)) ?? 0) < (newCounts.get(tuple(a)) ?? 0));
         const nestedRepair = (old: typeof originalAssertions[number], next: typeof candidateAssertions[number]): boolean =>
-          old.stepTitle === "book 09:30" && next.stepTitle === old.stepTitle && next.id === old.id
+          old.stepTitle === next.stepTitle && next.id === old.id
           && !old.negated && !next.negated && next.matcher === old.matcher && next.target === old.target
-          && repairedBookingSubject(old.subject) === next.subject;
+          && repairedSubject(scenario, old.subject) === next.subject;
         for (const old of missingTuples) {
           const colliding = addedTuples.filter((next) => next.id === old.id);
           if (colliding.length && !colliding.some((next) => nestedRepair(old, next))) {

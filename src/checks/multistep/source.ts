@@ -21,7 +21,8 @@ import { assertionId, normalizeSubject } from "../../evidence/assertion/id.ts";
 import { isKnownMatcher } from "../../evidence/assertion/classify.ts";
 import { stripComments } from "../../evidence/assertion/inventory.ts";
 import { multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_BYTES } from "./files.ts";
-import { knownRoute, MULTISTEP_ROUTES, MULTISTEP_STEP_TITLES, type MultiStepRoute } from "./routes.ts";
+import { canonicalPath, knownRoute, type MultiStepRoute } from "./routes.ts";
+import type { MultistepEvidenceScenario } from "../../types.ts";
 
 export interface MultiStepConstructModel {
   /** A direct top-level new MultiStepCheck expression, not a dead helper. */
@@ -843,7 +844,8 @@ const BANNED_PATTERNS: Array<{ label: string; re: RegExp }> = [
 
 const HOST_LITERAL = /["'`]https?:\/\/[^"'`]*["'`]/g;
 
-export function parseMultiStepScript(file: string, source: string, projectFiles?: Map<string, string>): MultiStepScriptModel {
+export function parseMultiStepScript(file: string, source: string, projectFiles?: Map<string, string>,
+  scenario?: MultistepEvidenceScenario | null): MultiStepScriptModel {
   const errors: string[] = [];
   const banned: string[] = [];
   if (!multiStepSourcePath(file) || Buffer.byteLength(source, "utf8") > 1024 * 1024) errors.push("MULTISTEP_SOURCE_PATH_UNSAFE");
@@ -1075,8 +1077,9 @@ export function parseMultiStepScript(file: string, source: string, projectFiles?
             if (!derived) errors.push(`request URL at ${file}:${line} does not statically derive from process.env.ENVIRONMENT_URL — origin provenance without a fallback is UNCERTAIN`);
             const span = urlExpr && ts.isTemplateExpression(urlExpr) && urlExpr.head.text === "" && urlExpr.templateSpans.length === 1
               ? urlExpr.templateSpans[0]! : null;
-            const route = span && exprDerivesEnv(span.expression, localBindings, errors)
-              ? knownRoute(span.literal.text) : null;
+            const routeText = span && exprDerivesEnv(span.expression, localBindings, errors)
+              ? span.literal.text : null;
+            const route = routeText === null ? null : scenario ? knownRoute(scenario, routeText) : canonicalPath(routeText);
             if (!route) errors.push("request URL is not exactly an approved environment origin followed by one fixed route — UNCERTAIN before execution");
             const step = enclosingStep(node);
             if (!step?.executed || !step.awaited) errors.push("request occurs outside a directly awaited executed test.step callback — UNCERTAIN before execution");
@@ -1290,10 +1293,25 @@ export function parseMultiStepScript(file: string, source: string, projectFiles?
 
 /** Canonical structural gate, independent of a patch comparison. Direct
  * adapter callers cannot declare their own unknown transaction a baseline. */
-export function canonicalMultiStepScriptProblem(script: MultiStepScriptModel): string | null {
+export function canonicalMultiStepScriptProblem(script: MultiStepScriptModel,
+  scenario?: MultistepEvidenceScenario | null): string | null {
   const direct = script.steps.filter((step) => step.executed && step.awaited && !step.conditional).map((step) => step.title);
-  if (JSON.stringify(direct) !== JSON.stringify(MULTISTEP_STEP_TITLES)) return "MULTISTEP_STEP_SEQUENCE_INVALID";
-  const expected = Object.entries(MULTISTEP_ROUTES).map(([route, method], index) => [MULTISTEP_STEP_TITLES[index], method, route]);
+  const stepTitles = scenario ? scenario.stepTitles : direct;
+  const routes = scenario ? scenario.routes : script.requests.map((request) => ({
+    method: request.method, path: request.route, step: request.stepTitle,
+  }));
+  if (scenario) {
+    // A failing recording stops at the mutation assertion, so the scenario may
+    // prove only a prefix of the declared steps. Additional trailing steps are
+    // admissible only when they issue no request: the route sequence below is
+    // still exactly the scenario's.
+    const routed = new Set(script.requests.map((request) => request.stepTitle));
+    if (direct.length < stepTitles.length || stepTitles.some((title, i) => direct[i] !== title)
+      || direct.slice(stepTitles.length).some((title) => routed.has(title))) {
+      return "MULTISTEP_STEP_SEQUENCE_INVALID";
+    }
+  } else if (JSON.stringify(direct) !== JSON.stringify(stepTitles)) return "MULTISTEP_STEP_SEQUENCE_INVALID";
+  const expected = routes.map((route) => [route.step, route.method, route.path]);
   const observed = script.requests.map((request) => [request.stepTitle, request.method, request.route]);
   if (JSON.stringify(observed) !== JSON.stringify(expected)) return "MULTISTEP_REQUEST_SEQUENCE_INVALID";
   if (!script.securityBindings.includes("declare:bypass:const:process.env.VERCEL_AUTOMATION_BYPASS_SECRET")
@@ -1301,14 +1319,15 @@ export function canonicalMultiStepScriptProblem(script: MultiStepScriptModel): s
     || script.requests.some((request) => request.headerKeys.filter((key) => key.toLowerCase() === "x-vercel-protection-bypass").length !== 1)) {
     return "MULTISTEP_BYPASS_BINDING_INVALID";
   }
-  if (script.assertions.length === 0 || MULTISTEP_STEP_TITLES.some((title) => !script.assertions.some((item) => item.stepTitle === title))) {
+  if (script.assertions.length === 0 || stepTitles.some((title) => !script.assertions.some((item) => item.stepTitle === title))) {
     return "MULTISTEP_ASSERTIONS_UNPROVEN";
   }
   return null;
 }
 
 /** Parse a complete Multistep project: construct identity + transaction script. */
-export function parseMultiStepProject(files: Map<string, string>, preferredFile?: string | null): MultiStepSourceModel | null {
+export function parseMultiStepProject(files: Map<string, string>, preferredFile?: string | null,
+  scenario?: MultistepEvidenceScenario | null): MultiStepSourceModel | null {
   const boundary = multiStepSourceClosureProblem(files);
   if (boundary || (preferredFile && !multiStepSourcePath(preferredFile))) {
     return { construct: null, script: null, errors: [boundary ?? "MULTISTEP_SOURCE_PATH_UNSAFE"] };
@@ -1338,10 +1357,10 @@ export function parseMultiStepProject(files: Map<string, string>, preferredFile?
   if (scriptSource === undefined) {
     errors.push(`Multistep script ${scriptFile ?? "<unresolved>"} has no source in the project files`);
   } else {
-    script = parseMultiStepScript(scriptFile!, scriptSource, normalized);
+    script = parseMultiStepScript(scriptFile!, scriptSource, normalized, scenario);
     errors.push(...script.errors);
     if (construct) {
-      const shape = canonicalMultiStepScriptProblem(script);
+      const shape = canonicalMultiStepScriptProblem(script, scenario);
       if (shape) errors.push(shape);
     }
   }

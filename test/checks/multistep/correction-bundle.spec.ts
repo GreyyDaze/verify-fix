@@ -7,6 +7,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, linkSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildBundle } from "../../../src/capture/bundle/build.ts";
+import { multistepWitness } from "../../../src/capture/bundle/manifest.ts";
 import { loadBundle } from "../../../src/capture/bundle/load.ts";
 import { buildContract } from "../../../src/evidence/contract/contract.ts";
 import { assessAdequacy } from "../../../src/evidence/adequacy/adequacy.ts";
@@ -18,7 +19,8 @@ import { buildMultiStepRecording, readMultiStepAssets } from "../../../src/check
 import { validMultiStepStoredRecording } from "../../../src/checks/multistep/recording-schema.ts";
 import { trustedMultiStepDetection } from "../../../src/checks/multistep/detection.ts";
 import { readBoundedBundleFile } from "../../../src/checks/multistep/files.ts";
-import { MULTISTEP_DETECTION_MODE, parseMode } from "../../../src/execution/scene/modes.ts";
+import { multistepDetectionMode, parseMode } from "../../../src/execution/scene/modes.ts";
+import { scenarioLayout } from "../../../src/checks/multistep/layout.ts";
 import { SceneProxy } from "../../../src/execution/scene/proxy.ts";
 import { SceneExecutor } from "../../../src/execution/executor/scene.ts";
 import { runMultiStepSandbox, bridgeReporterMismatch } from "../../../src/checks/multistep/executor.ts";
@@ -145,10 +147,35 @@ async function captureRemote(opts: FakeOpts = {}, fixtureDir: string | null = nu
   const remote = (id: string) => ({ assets: ["test-results.json", "logs.txt", "check-run-data.json"].map((name) => ({
     ...entry(name, id, `https://signed.invalid/${id}.zip?sig=${CANARY}`),
   })) });
-  return capture({ ...opts, remote: opts.remote ?? remote, download: opts.download ?? (async (url) => {
+  const out = await capture({ ...opts, remote: opts.remote ?? remote, download: opts.download ?? (async (url) => {
     const id = /\/(synthetic-(?:fail|pass))\.zip/.exec(url)?.[1];
     return zips.get(id ?? "") ?? Buffer.alloc(0);
   }) }, null, dir);
+  // This fixture is the recorded nested-response incident. Renamed fields
+  // (version → sessionVersion, booking → booking.status) are contract data,
+  // declared by the fixture rather than guessed by production code.
+  if (out.manifest.scenario) {
+    Object.assign(out.manifest.scenario, {
+      stepTitles: ["login", "session", "slots", "book 09:30", "confirm transaction"],
+      repair: [
+        { from: "body.confirmed", to: "body.booking.confirmed" },
+        { from: "body.booking", to: "body.booking.status" },
+        { from: "typeof body.account", to: "typeof body.booking.account" },
+        { from: "body.account", to: "body.booking.account" },
+        { from: "body.slot", to: "body.booking.slot" },
+        { from: "body.version", to: "body.booking.sessionVersion" },
+      ],
+      writes: [
+        { from: "write:bookingAccount:=:body.account as string", to: "write:bookingAccount:=:body.booking.account as string" },
+        { from: "write:bookingSlot:=:body.slot as string", to: "write:bookingSlot:=:body.booking.slot as string" },
+        { from: "write:bookingVersion:=:body.version as number", to: "write:bookingVersion:=:body.booking.sessionVersion as number" },
+        { from: "write:bookingConfirmed:=:body.confirmed === true", to: "write:bookingConfirmed:=:body.booking.confirmed === true" },
+        { from: "write:bookingResult:=:body.booking as string", to: "write:bookingResult:=:body.booking.status as string" },
+      ],
+    });
+    writeFileSync(join(out.outDir, "manifest.json"), JSON.stringify(out.manifest, null, 2) + "\n");
+  }
+  return out;
 }
 
 function allFiles(dir: string): string[] {
@@ -744,7 +771,7 @@ test("remote-bound HTTP-200 nested confirmation mutation is one field and the re
   const bundle = loadBundle(out.outDir).bundle;
   const detection = bundle.scenes.find((scene) => scene.type === "DETECTION")!;
   assert.deepEqual(bundle.multistep?.problems, []);
-  assert.equal(detection.mode, MULTISTEP_DETECTION_MODE);
+  assert.equal(detection.mode, multistepDetectionMode(bundle.scenario!));
   assert.deepEqual(detection.verdict.provenance, {
     kind: "recorded", runId: "synthetic-fail", artifactId: "recordings/failing.multistep.json",
   });
@@ -912,21 +939,27 @@ test("JSON request audit admits ONLY the trusted local false confirmation; remot
   resultSteps(raw)[3]!.steps[0].checklyData[0].body.booking.confirmed = false;
   const capture = normalizeMultiStepCapture({ testResults: JSON.stringify(raw), reporterOnly: true });
   assert.deepEqual(capture.problems, []);
-  assert.ok(multiStepShapeProblems(capture).length > 0, "remote admission never accepts the local false outcome");
-  assert.deepEqual(multiStepDetectionShapeProblems(capture), [], "only the fixed nested boolean differs");
+  const original = JSON.parse(JSON.stringify(capture)) as typeof capture;
+  (original.steps[3]!.requests[0]!.responseBody as { booking: { confirmed: boolean } }).booking.confirmed = true;
+  const layout = scenarioLayout(capture);
+  const scenario = { kind: "multistep" as const, ...layout,
+    mutation: { method: "POST", path: "/api/book", jsonPath: ["booking", "confirmed"], expected: true, replace: false },
+    witness: multistepWitness(layout.routes, original.steps)! };
+  assert.ok(multiStepShapeProblems(scenario, capture).length > 0, "remote admission never accepts the local false outcome");
+  assert.deepEqual(multiStepDetectionShapeProblems(scenario, capture), [], "only the scenario mutation differs");
   const routes = [["POST", "/api/login", "login"], ["GET", "/api/session", "session"],
     ["GET", "/api/slots", "slots"], ["POST", "/api/book", "book 09:30"]] as const;
   const bridge = routes.map(([method, path], i) => ({ index: i + 1, method, path, status: 200,
     queryKeys: [], requestHeaderNames: i === 1 || i === 3 ? ["authorization", "x-vercel-protection-bypass"] : ["x-vercel-protection-bypass"],
     authorization: i === 1 || i === 3 }));
   const audit = routes.map(([method, path, step]) => ({ method, path, step, originMatches: true, hasQuery: false }));
-  assert.equal(bridgeReporterMismatch(bridge, capture, audit, FAKE_ORIGIN, true), null);
-  assert.match(bridgeReporterMismatch(bridge, capture, audit, FAKE_ORIGIN) ?? "", /JSON response evidence/);
-  assert.match(bridgeReporterMismatch(bridge, capture, null, FAKE_ORIGIN, true) ?? "", /dedicated request audit/);
+  assert.equal(bridgeReporterMismatch(bridge, capture, audit, FAKE_ORIGIN, true, scenario), null);
+  assert.match(bridgeReporterMismatch(bridge, capture, audit, FAKE_ORIGIN, false, scenario) ?? "", /JSON response evidence/);
+  assert.match(bridgeReporterMismatch(bridge, capture, null, FAKE_ORIGIN, true, scenario) ?? "", /dedicated request audit/);
   const badBridge = bridge.map((row, i) => i === 3 ? { ...row, status: 500 } : row);
-  assert.match(bridgeReporterMismatch(badBridge, capture, audit, FAKE_ORIGIN, true) ?? "", /status mismatch|HTTP status/);
+  assert.match(bridgeReporterMismatch(badBridge, capture, audit, FAKE_ORIGIN, true, scenario) ?? "", /status mismatch|HTTP status/);
   const badAudit = audit.map((row, i) => i === 3 ? { ...row, path: "/api/slots" } : row);
-  assert.match(bridgeReporterMismatch(bridge, capture, badAudit, FAKE_ORIGIN, true) ?? "", /disagree|transaction sequence/);
+  assert.match(bridgeReporterMismatch(bridge, capture, badAudit, FAKE_ORIGIN, true, scenario) ?? "", /disagree|transaction sequence/);
   for (const change of [
     (draft: typeof capture) => { draft.steps[3]!.requests[0]!.responseBody = { booking: { confirmed: false } }; },
     (draft: typeof capture) => { (draft.steps[3]!.requests[0]!.responseBody as Record<string, unknown>).extra = CANARY; },
@@ -937,7 +970,7 @@ test("JSON request audit admits ONLY the trusted local false confirmation; remot
   ]) {
     const draft = JSON.parse(JSON.stringify(capture)) as typeof capture;
     change(draft);
-    assert.ok(bridgeReporterMismatch(bridge, draft, audit, FAKE_ORIGIN, true), "changed JSON cannot override four trusted HTTP-200 hits");
+    assert.ok(bridgeReporterMismatch(bridge, draft, audit, FAKE_ORIGIN, true, scenario), "changed JSON cannot override four trusted HTTP-200 hits");
   }
 });
 
@@ -953,8 +986,8 @@ test("fixed proxy mutation changes exactly booking.confirmed on a completed HTTP
   const app = await startDetectionApp({ bookHeaders: { "set-cookie": `session=${CANARY}`, "x-private": CANARY } });
   const proxy = new SceneProxy();
   try {
-    const [origin] = await proxy.arm({ mode: parseMode(MULTISTEP_DETECTION_MODE), target: app.origin,
-      runs: 1, trustedMultiStepDetection: capability! });
+    const [origin] = await proxy.arm({ mode: parseMode(multistepDetectionMode(diskBundle.scenario!)), target: app.origin,
+      runs: 1, trustedMultiStepDetection: capability!, scenario: diskBundle.scenario! });
     const account = DETECTION_EAST;
     const login = await fetch(`${origin}/api/login`, { method: "POST",
       headers: { "content-type": "application/json" }, body: JSON.stringify({ account }) });
@@ -995,10 +1028,10 @@ test("proxy refuses forged capability, query-bearing routes and excess calls wit
   const app = await startDetectionApp();
   const proxy = new SceneProxy();
   try {
-    await assert.rejects(proxy.arm({ mode: parseMode(MULTISTEP_DETECTION_MODE), target: app.origin,
-      runs: 1, trustedMultiStepDetection: { ...capability! } }), /SCENE_PROXY_DETECTION_AUTHORITY_MISSING/);
-    const [origin] = await proxy.arm({ mode: parseMode(MULTISTEP_DETECTION_MODE), target: app.origin,
-      runs: 1, trustedMultiStepDetection: capability! });
+    await assert.rejects(proxy.arm({ mode: parseMode(multistepDetectionMode(bundle.scenario!)), target: app.origin,
+      runs: 1, trustedMultiStepDetection: { ...capability! }, scenario: bundle.scenario! }), /SCENE_PROXY_DETECTION_AUTHORITY_MISSING/);
+    const [origin] = await proxy.arm({ mode: parseMode(multistepDetectionMode(bundle.scenario!)), target: app.origin,
+      runs: 1, trustedMultiStepDetection: capability!, scenario: bundle.scenario! });
     const login = await fetch(`${origin}/api/login`, { method: "POST",
       headers: { "content-type": "application/json" }, body: JSON.stringify({ account: DETECTION_EAST }) });
     const { token } = await login.json() as { token: string };
@@ -1121,6 +1154,7 @@ test("scene executor isolates mixed protected env-file inputs; direct Multistep 
     assert.ok(!JSON.stringify(observation).includes(mixed.TEST_USER));
     const direct = await runMultiStepSandbox({ projectDir: DETECTION_WEB, baseUrl: app.origin,
       files: { ...bundle.files, [FILE]: repairedNestedSpec() }, originalFiles: bundle.files, checkFile: FILE,
+      ...(bundle.scenario ? { scenario: bundle.scenario } : {}),
       env: { REGION: "us-east-1", ...mixed } });
     assert.equal(direct.inconclusive, true);
     assert.equal(direct.environmentOrigin, null);

@@ -11,6 +11,78 @@ export type VerdictProvenance =
   | ({ kind: "recorded"; runId: string; artifactId: string })
   | ({ kind: "code"; assertionId: string });
 
+/**
+ * Bundle-supplied Multistep scenario (manifest v3 `scenario`).
+ *
+ * This is the only source of check-specific route, step and mutation metadata.
+ * It is part of the trusted bundle and covered by the bundle digest; candidate
+ * source files can never supply or override it. The grammar is deliberately
+ * narrow: fixed method/path pairs, non-empty step titles, and one scalar
+ * mutation at a dotted JSON path.
+ */
+export interface MultistepScenarioRoute {
+  method: string;
+  /** exact pathname; no query, fragment, origin or template */
+  path: string;
+  step: string;
+  /** the recorded request carried an Authorization header */
+  auth?: boolean;
+}
+
+export interface MultistepScenarioMutation {
+  method: string;
+  path: string;
+  /** property names from the response root to the scalar, e.g. ["booking", "confirmed"] */
+  jsonPath: string[];
+  expected: string | number | boolean;
+  replace: string | number | boolean;
+}
+
+/**
+ * Route/step layout that is meaningful even for a healthy capture, before a
+ * detection mutation exists. Capture-time normalization uses this shape; the
+ * full scenario in a bundle additionally carries `mutation`.
+ */
+export interface MultistepEvidenceScenario {
+  routes: MultistepScenarioRoute[];
+  /** every step title, including any non-request confirmation step */
+  stepTitles: string[];
+  /** the recorded selected slot, when the transaction has one */
+  slot?: string;
+  /** exact assertion-subject moves justified by this scenario */
+  repair?: Array<{ from: string; to: string }>;
+  /** exact cross-step write moves justified by this scenario */
+  writes?: Array<{ from: string; to: string }>;
+}
+
+export type MultistepWitnessShape =
+  | { kind: "null" | "string" | "number" | "boolean" }
+  | { kind: "array"; item: MultistepWitnessShape | null }
+  | { kind: "object"; fields: Record<string, MultistepWitnessShape> };
+
+export interface MultistepWitnessRef {
+  /** index into scenario.routes */
+  route: number;
+  /** which side of the recorded request carried the value */
+  where: "request" | "response";
+  /** property names from the body root to a primitive */
+  path: string[];
+}
+
+/** Values-free proof of the recorded response structure and of the scalar
+ * equalities that bind the transaction together. No secret or response value
+ * is stored: only key names, JSON types and which recorded paths agreed. */
+export interface MultistepWitness {
+  responses: MultistepWitnessShape[];
+  equalities: Array<{ left: MultistepWitnessRef; right: MultistepWitnessRef }>;
+}
+
+export interface MultistepScenario extends MultistepEvidenceScenario {
+  kind: "multistep";
+  mutation: MultistepScenarioMutation;
+  witness?: MultistepWitness;
+}
+
 export type ExitCode = 0 | 1 | 2;
 
 export type VerdictValue = "PASS" | "FAILED" | "UNCERTAIN";
@@ -163,6 +235,8 @@ export interface Bundle {
      * recording may identify the stale response field being repaired. */
     failureAssertion?: { file: string; line: number; id: string; step: string } | null;
   } | null;
+  /** Validated, bundle-supplied Multistep scenario; null when absent or invalid. */
+  scenario?: MultistepScenario | null;
   scenes: Scene[];
   envAssumptions: EnvAssumption[];
   determinism: DeterminismEvidence;

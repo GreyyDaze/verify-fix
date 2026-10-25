@@ -32,6 +32,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
   deployments: read
   pull-requests: read
 
@@ -41,8 +42,26 @@ concurrency:
 
 env:
   NODE_VERSION: "24.21.0"
-  CANDIDATE_PROJECT_PATH: examples/slots-booking/web
-  VERIFY_FIX_BUNDLE: ${{ vars.VERIFY_FIX_BUNDLE || 'incidents/slots-availability-api' }}
+  # Customer configuration. Every value is supplied by the repository using the
+  # gate; nothing about one example project is baked in. The steps that use
+  # them fail closed when a required value is missing.
+  CANDIDATE_PROJECT_PATH: ${{ vars.CANDIDATE_PROJECT_PATH }}
+  VERIFY_FIX_EXPECTED_CHECK_TYPE: ${{ vars.VERIFY_FIX_EXPECTED_CHECK_TYPE }}
+  VERIFY_FIX_EXPECTED_CHECK_FILE: ${{ vars.VERIFY_FIX_EXPECTED_CHECK_FILE }}
+  VERIFY_FIX_EXPECTED_LOGICAL_ID: ${{ vars.VERIFY_FIX_EXPECTED_LOGICAL_ID }}
+  # Optional: assert the Multistep failing recording path inside the bundle.
+  VERIFY_FIX_EXPECTED_MULTISTEP_RECORDING: ${{ vars.VERIFY_FIX_EXPECTED_MULTISTEP_RECORDING }}
+  # The bundle is proof, not code: it is NEVER committed. The gate downloads
+  # the artifact produced by .github/workflows/capture-bundle.yml (its run id
+  # and artifact name are pinned as repository variables) and recomputes the
+  # whole-bundle fingerprint. A missing artifact, missing run id, or fingerprint
+  # mismatch STOPs the gate — it never grades a fix against unverified evidence.
+  VERIFY_FIX_BUNDLE_ARTIFACT: ${{ vars.VERIFY_FIX_BUNDLE_ARTIFACT || '' }}
+  VERIFY_FIX_BUNDLE_ARTIFACT_RUN: ${{ vars.VERIFY_FIX_BUNDLE_ARTIFACT_RUN || '' }}
+  # Part C of docs/BUNDLE-STORAGE-PLAN.md: the caller pins the whole-bundle
+  # SHA-256 fingerprint recorded when the bundle was captured outside the
+  # candidate's repo.
+  VERIFY_FIX_BUNDLE_DIGEST: ${{ vars.VERIFY_FIX_BUNDLE_DIGEST || '' }}
   # Phase 9 Stage 2 — the expected digest of the trusted bundle's sealed
   # protected-requirements policy. Pinned by the caller from the reviewed
   # bundle commit. Empty means "no pin", which the verifier reports as
@@ -67,6 +86,12 @@ jobs:
       head_repository: ${{ steps.pull-request.outputs.head_repository }}
       fork: ${{ steps.pull-request.outputs.fork }}
     steps:
+      - name: Require the customer gate configuration
+        shell: bash
+        run: |
+          for name in CANDIDATE_PROJECT_PATH VERIFY_FIX_EXPECTED_CHECK_TYPE VERIFY_FIX_EXPECTED_CHECK_FILE VERIFY_FIX_EXPECTED_LOGICAL_ID; do
+            [[ -n "${!name:-}" ]] || { echo "::error::$name is not configured; failing closed"; exit 1; }
+          done
       - name: Validate deployment metadata and resolve its pull request
         id: pull-request
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
@@ -174,6 +199,31 @@ jobs:
         working-directory: candidate-runtime
         run: test "$(git rev-parse HEAD)" = "$DEPLOYMENT_SHA"
 
+      - name: Download the captured bundle artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT: ${{ env.VERIFY_FIX_BUNDLE_ARTIFACT }}
+          RUN_ID: ${{ env.VERIFY_FIX_BUNDLE_ARTIFACT_RUN }}
+        shell: bash
+        run: |
+          [[ -n "$ARTIFACT" ]] || { echo '::error::VERIFY_FIX_BUNDLE_ARTIFACT (artifact name) is not configured; failing closed'; exit 1; }
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo '::error::VERIFY_FIX_BUNDLE_ARTIFACT_RUN (run id) is not configured; failing closed'; exit 1; }
+          artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" --jq ".artifacts[] | select(.name==\"$ARTIFACT\" and .expired==false) | .id" | head -n1)"
+          [[ -n "$artifact_id" ]] || { echo '::error::the captured bundle artifact was not found for the pinned run; failing closed'; exit 1; }
+          rm -rf bundle && mkdir -p bundle
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$RUNNER_TEMP/bundle.zip"
+          unzip -q "$RUNNER_TEMP/bundle.zip" -d bundle
+          test -f bundle/manifest.json || { echo '::error::the downloaded artifact is not a bundle (no manifest.json); failing closed'; exit 1; }
+
+      - name: Require the pinned bundle fingerprint
+        env:
+          PIN: ${{ env.VERIFY_FIX_BUNDLE_DIGEST }}
+        shell: bash
+        run: |
+          [[ "$PIN" =~ ^[a-f0-9]{64}$ ]] || { echo '::error::VERIFY_FIX_BUNDLE_DIGEST must be a 64-hex sha256 pin; failing closed'; exit 1; }
+          actual="$(node trusted/.github/helpers/bundle-digest.mjs bundle)"
+          test "$actual" = "$PIN" || { echo '::error::bundle fingerprint does not match the pinned sha256'; exit 1; }
+
       - name: Inspect the immutable candidate without secrets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -183,7 +233,8 @@ jobs:
           mkdir -p artifacts
           set +e
           node trusted/bin/verify-fix verify \
-            --bundle "trusted/$VERIFY_FIX_BUNDLE" \
+            --bundle bundle \
+            --bundle-digest "$VERIFY_FIX_BUNDLE_DIGEST" \
             --pr "$PULL_URL" \
             --project-path "$CANDIDATE_PROJECT_PATH" \
             --project "candidate-runtime/$CANDIDATE_PROJECT_PATH" \
@@ -199,6 +250,7 @@ jobs:
           test "$code" = 2
           test "$(jq -r .candidateRevision.headSha artifacts/verify-fix-preflight.json)" = "${{ inputs.deployment_sha }}"
           test "$(jq -r .candidateRevision.immutable artifacts/verify-fix-preflight.json)" = true
+          test "$(jq -r .bundleEvidence.verified artifacts/verify-fix-preflight.json)" = true
 
       - name: Upload secret-free preflight evidence
         if: always()
@@ -215,6 +267,12 @@ jobs:
     environment: verify-fix-preview
     timeout-minutes: 45
     steps:
+      - name: Require the customer gate configuration
+        shell: bash
+        run: |
+          for name in CANDIDATE_PROJECT_PATH VERIFY_FIX_EXPECTED_CHECK_TYPE VERIFY_FIX_EXPECTED_CHECK_FILE VERIFY_FIX_EXPECTED_LOGICAL_ID; do
+            [[ -n "${!name:-}" ]] || { echo "::error::$name is not configured; failing closed"; exit 1; }
+          done
       - name: Check out protected verifier and incident inputs
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -305,6 +363,22 @@ jobs:
           [[ -n "$CHECKLY_ACCOUNT_ID" ]] || { echo '::error::CHECKLY_ACCOUNT_ID is missing from verify-fix-preview'; exit 1; }
           [[ -n "$TEST_USER" ]] || { echo '::error::TEST_USER is missing from verify-fix-preview'; exit 1; }
 
+      - name: Download the captured bundle artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT: ${{ env.VERIFY_FIX_BUNDLE_ARTIFACT }}
+          RUN_ID: ${{ env.VERIFY_FIX_BUNDLE_ARTIFACT_RUN }}
+        shell: bash
+        run: |
+          [[ -n "$ARTIFACT" ]] || { echo '::error::VERIFY_FIX_BUNDLE_ARTIFACT (artifact name) is not configured; failing closed'; exit 1; }
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo '::error::VERIFY_FIX_BUNDLE_ARTIFACT_RUN (run id) is not configured; failing closed'; exit 1; }
+          artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" --jq ".artifacts[] | select(.name==\"$ARTIFACT\" and .expired==false) | .id" | head -n1)"
+          [[ -n "$artifact_id" ]] || { echo '::error::the captured bundle artifact was not found for the pinned run; failing closed'; exit 1; }
+          rm -rf bundle && mkdir -p bundle
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$RUNNER_TEMP/bundle.zip"
+          unzip -q "$RUNNER_TEMP/bundle.zip" -d bundle
+          test -f bundle/manifest.json || { echo '::error::the downloaded artifact is not a bundle (no manifest.json); failing closed'; exit 1; }
+
       - name: Build protected runtime and deployment metadata
         env:
           TEST_USER: ${{ secrets.TEST_USER }}
@@ -331,8 +405,8 @@ jobs:
           # Legacy API/Playwright preview jobs never expose Multistep account
           # values to their candidate checks. Only a reviewed Multistep bundle
           # receives these extra secret names inside its approved job.
-          [[ "$VERIFY_FIX_BUNDLE" =~ ^incidents/[A-Za-z0-9_-]+$ ]]
-          bundle_type="$(jq -r '.check.checkType // empty' "trusted/$VERIFY_FIX_BUNDLE/manifest.json")"
+          test -f bundle/manifest.json
+          bundle_type="$(jq -r '.check.checkType // empty' bundle/manifest.json)"
           [[ "$bundle_type" == "API" || "$bundle_type" == "PLAYWRIGHT" || "$bundle_type" == "MULTI_STEP" ]]
           input_names=(TEST_USER TEST_USER_US_EAST_1 TEST_USER_EU_WEST_1 API_TOKEN BYPASS)
           if [[ "$bundle_type" == MULTI_STEP ]]; then
@@ -362,6 +436,15 @@ jobs:
           echo "VERIFY_FIX_ENV_FILE=$env_file" >> "$GITHUB_ENV"
           echo "VERIFY_FIX_TARGET_METADATA=$metadata_file" >> "$GITHUB_ENV"
 
+      - name: Require the pinned bundle fingerprint
+        env:
+          PIN: ${{ env.VERIFY_FIX_BUNDLE_DIGEST }}
+        shell: bash
+        run: |
+          [[ "$PIN" =~ ^[a-f0-9]{64}$ ]] || { echo '::error::VERIFY_FIX_BUNDLE_DIGEST must be a 64-hex sha256 pin; failing closed'; exit 1; }
+          actual="$(node trusted/.github/helpers/bundle-digest.mjs bundle)"
+          test "$actual" = "$PIN" || { echo '::error::bundle fingerprint does not match the pinned sha256'; exit 1; }
+
       - name: Verify the candidate through the protected gate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -377,7 +460,8 @@ jobs:
           fork_args=()
           if [[ "$FORK" == "true" ]]; then fork_args=(--allow-fork-cloud); fi
           node trusted/bin/verify-fix verify \
-            --bundle "trusted/$VERIFY_FIX_BUNDLE" \
+            --bundle bundle \
+            --bundle-digest "$VERIFY_FIX_BUNDLE_DIGEST" \
             --pr "$PULL_URL" \
             --project-path "$CANDIDATE_PROJECT_PATH" \
             --project "candidate-runtime/$CANDIDATE_PROJECT_PATH" \
@@ -489,6 +573,12 @@ jobs:
     environment: verify-fix-production
     timeout-minutes: 45
     steps:
+      - name: Require the customer gate configuration
+        shell: bash
+        run: |
+          for name in CANDIDATE_PROJECT_PATH VERIFY_FIX_EXPECTED_CHECK_TYPE VERIFY_FIX_EXPECTED_CHECK_FILE VERIFY_FIX_EXPECTED_LOGICAL_ID; do
+            [[ -n "${!name:-}" ]] || { echo "::error::$name is not configured; failing closed"; exit 1; }
+          done
       - name: Check out exact production source (not the verifier)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -579,19 +669,36 @@ jobs:
         working-directory: candidate-runtime
         run: test "$(git rev-parse HEAD)" = "$DEPLOYMENT_SHA"
 
-      # Phase 7 has no reviewed real Multistep incident bundle yet. The
-      # legacy API example is never an eligible production fallback. This
-      # guard fails closed until a reviewed bundle is pinned with the trusted
-      # verifier and its explicit path is configured in VERIFY_FIX_BUNDLE.
-      - name: Require a reviewed Phase 7 Multistep incident bundle
+      - name: Download the captured bundle artifact
         env:
-          APPROVED_BUNDLE: ${{ vars.VERIFY_FIX_BUNDLE }}
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT: ${{ env.VERIFY_FIX_BUNDLE_ARTIFACT }}
+          RUN_ID: ${{ env.VERIFY_FIX_BUNDLE_ARTIFACT_RUN }}
         shell: bash
         run: |
-          [[ "$APPROVED_BUNDLE" =~ ^incidents/[A-Za-z0-9_-]+$ ]] || { echo '::error::reviewed Phase 7 bundle is not configured'; exit 1; }
-          test "$APPROVED_BUNDLE" = "$VERIFY_FIX_BUNDLE"
-          test -f "trusted/$APPROVED_BUNDLE/manifest.json"
-          jq -e '.schemaVersion == "v3" and .check.checkType == "MULTI_STEP" and .check.file == "checks/multistep-booking.spec.ts" and .check.logicalId == "slots-booking-multistep" and .recordings.multistepFailing == "recordings/failing.multistep.json"' "trusted/$APPROVED_BUNDLE/manifest.json" > /dev/null
+          [[ -n "$ARTIFACT" ]] || { echo '::error::VERIFY_FIX_BUNDLE_ARTIFACT (artifact name) is not configured; failing closed'; exit 1; }
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo '::error::VERIFY_FIX_BUNDLE_ARTIFACT_RUN (run id) is not configured; failing closed'; exit 1; }
+          artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" --jq ".artifacts[] | select(.name==\"$ARTIFACT\" and .expired==false) | .id" | head -n1)"
+          [[ -n "$artifact_id" ]] || { echo '::error::the captured bundle artifact was not found for the pinned run; failing closed'; exit 1; }
+          rm -rf bundle && mkdir -p bundle
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$RUNNER_TEMP/bundle.zip"
+          unzip -q "$RUNNER_TEMP/bundle.zip" -d bundle
+          test -f bundle/manifest.json || { echo '::error::the downloaded artifact is not a bundle (no manifest.json); failing closed'; exit 1; }
+
+      # The bundle comes from the pinned artifact, never a committed path. This
+      # guard checks the downloaded manifest is the check the customer
+      # configured, so a mislabelled or stale artifact fails closed even before
+      # the verifier grades it.
+      - name: Require the captured bundle to match the configured check
+        shell: bash
+        run: |
+          test -f "bundle/manifest.json" || { echo '::error::the downloaded artifact is not a bundle (no manifest.json); failing closed'; exit 1; }
+          jq -e --arg type "$VERIFY_FIX_EXPECTED_CHECK_TYPE" --arg file "$VERIFY_FIX_EXPECTED_CHECK_FILE" --arg logical "$VERIFY_FIX_EXPECTED_LOGICAL_ID" \
+            '.schemaVersion == "v3" and .check.checkType == $type and .check.file == $file and .check.logicalId == $logical' \
+            "bundle/manifest.json" > /dev/null
+          if [[ -n "${VERIFY_FIX_EXPECTED_MULTISTEP_RECORDING:-}" ]]; then
+            jq -e --arg rec "$VERIFY_FIX_EXPECTED_MULTISTEP_RECORDING" '.recordings.multistepFailing == $rec' "bundle/manifest.json" > /dev/null
+          fi
 
       # Verification target = the generated deployment URL resolved by the
       # secret-free preflight (never a guessed host). Readiness is HTTP 200 +
@@ -667,6 +774,15 @@ jobs:
           echo "VERIFY_FIX_ENV_FILE=$env_file" >> "$GITHUB_ENV"
           echo "VERIFY_FIX_TARGET_METADATA=$metadata_file" >> "$GITHUB_ENV"
 
+      - name: Require the pinned bundle fingerprint
+        env:
+          PIN: ${{ env.VERIFY_FIX_BUNDLE_DIGEST }}
+        shell: bash
+        run: |
+          [[ "$PIN" =~ ^[a-f0-9]{64}$ ]] || { echo '::error::VERIFY_FIX_BUNDLE_DIGEST must be a 64-hex sha256 pin; failing closed'; exit 1; }
+          actual="$(node trusted/.github/helpers/bundle-digest.mjs bundle)"
+          test "$actual" = "$PIN" || { echo '::error::bundle fingerprint does not match the pinned sha256'; exit 1; }
+
       - name: Verify production with the pinned verifier before any Checkly deploy
         env:
           CHECKLY_API_KEY: ${{ secrets.CHECKLY_API_KEY }}
@@ -678,13 +794,16 @@ jobs:
         run: |
           mkdir -p artifacts
           node trusted/bin/verify-fix verify \
-            --bundle "trusted/$VERIFY_FIX_BUNDLE" \
+            --bundle bundle \
+            --bundle-digest "$VERIFY_FIX_BUNDLE_DIGEST" \
             --candidate-project candidate-runtime \
+            --candidate-revision "$TARGET_REVISION" \
             --base "$TARGET_REVISION" \
             --project "candidate-runtime/$CANDIDATE_PROJECT_PATH" \
             --target "$TARGET_URL" \
             --target-revision "$TARGET_REVISION" \
             --target-metadata "$VERIFY_FIX_TARGET_METADATA" \
+            --cloud-approved \
             --env-name production \
             --env-file "$VERIFY_FIX_ENV_FILE" \
             --requirements-mode "$VERIFY_FIX_REQUIREMENTS_MODE" \
@@ -693,12 +812,14 @@ jobs:
             --report-json artifacts/verify-fix-production.json \
             --report-markdown artifacts/verify-fix-production.md
           test "$(jq -r .verdict artifacts/verify-fix-production.json)" = PASS
+          test "$(jq -r .bundleEvidence.verified artifacts/verify-fix-production.json)" = true
           test "$(jq -r .target artifacts/verify-fix-production.json)" = "$TARGET_URL"
           test "$(jq -r .targetRevision artifacts/verify-fix-production.json)" = "$TARGET_REVISION"
-          test "$(jq -r .candidateRevision.source artifacts/verify-fix-production.json)" = local
+          test "$(jq -r .candidateRevision.source artifacts/verify-fix-production.json)" = git-revision
           test "$(jq -r .candidateRevision.headSha artifacts/verify-fix-production.json)" = "$TARGET_REVISION"
           test "$(jq -r .candidateRevision.dirty artifacts/verify-fix-production.json)" = false
-          test "$(jq -r .targetBinding.scope artifacts/verify-fix-production.json)" = local
+          test "$(jq -r .targetBinding.scope artifacts/verify-fix-production.json)" = revision
+          test "$(jq -r .targetBinding.gateEligible artifacts/verify-fix-production.json)" = true
           test "$(jq -r .targetBinding.sourceRevision artifacts/verify-fix-production.json)" = "$TARGET_REVISION"
           test "$(jq -r .targetBinding.targetRevision artifacts/verify-fix-production.json)" = "$TARGET_REVISION"
           test "$(jq -r .targetBinding.deployment.deploymentId artifacts/verify-fix-production.json)" = "$APPROVED_DEPLOYMENT_ID"

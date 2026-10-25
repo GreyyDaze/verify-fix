@@ -26,7 +26,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-export type CandidateSourceKind = "local" | "github-pr";
+export type CandidateSourceKind = "local" | "git-revision" | "github-pr";
 export type CandidateChangeStatus = "added" | "modified" | "deleted" | "renamed" | "copied" | "type-changed" | "unmerged";
 
 export interface CandidateChange {
@@ -87,7 +87,7 @@ export interface DeploymentMetadata {
 }
 
 export interface CandidateTargetBinding {
-  scope: "local" | "pull-request";
+  scope: "local" | "revision" | "pull-request";
   sourceRevision: string;
   targetRevision: string | null;
   targetUrl: string | null;
@@ -393,25 +393,33 @@ function buildSnapshot(input: {
   }
 }
 
-export function snapshotLocalCandidate(projectDir: string, baseRef: string): CandidateRevision {
+export function snapshotLocalCandidate(projectDir: string, baseRef: string, expectedRevision?: string | null): CandidateRevision {
   const requestedProject = resolve(projectDir);
   if (!existsSync(requestedProject) || !statSync(requestedProject).isDirectory()) throw new Error(`candidate project is not a directory: ${requestedProject}`);
   const repositoryRoot = realpathSync(git(requestedProject, ["rev-parse", "--show-toplevel"]));
   const projectRoot = realpathSync(requestedProject);
   const projectPath = pathInside(repositoryRoot, projectRoot, "--candidate-project");
   const baseSha = git(repositoryRoot, ["rev-parse", "--verify", `${baseRef}^{commit}`]);
-  const headSha = git(repositoryRoot, ["rev-parse", "--verify", "HEAD^{commit}"]);
+  const headSha = git(repositoryRoot, ["rev-parse", "--verify", "HEAD^{commit}"]).toLowerCase();
+  // A pinned revision makes the candidate immutable from any Git host: the
+  // exact commit is checked out and the tree must be clean, so the snapshot is
+  // the commit and nothing else. Without a pin this stays a working-tree
+  // snapshot and is never gate-eligible.
+  const pinned = expectedRevision ? expectedRevision.toLowerCase() : null;
+  if (pinned && !/^[0-9a-f]{40}$/.test(pinned)) throw new Error("--candidate-revision must be a 40-hex commit SHA");
+  if (pinned && headSha !== pinned) throw new Error(`candidate HEAD ${headSha} does not equal --candidate-revision ${pinned}`);
   const dirty = git(repositoryRoot, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]).length > 0;
+  if (pinned && dirty) throw new Error(`candidate revision ${pinned} has uncommitted changes; commit or stash them before gating`);
   const changes = discoverChanges(repositoryRoot, baseSha);
   return buildSnapshot({
     sourceRoot: repositoryRoot,
     projectPath,
-    source: "local",
+    source: pinned ? "git-revision" : "local",
     sourceReference: projectRoot,
     repositoryRoot,
     baseSha,
     headSha,
-    dirty,
+    dirty: pinned ? false : dirty,
     changes,
     runtimeProjectRoot: projectRoot,
   });
@@ -543,33 +551,43 @@ export function bindCandidateTarget(input: {
   cloudApproved: boolean;
   allowForkCloud: boolean;
 }): CandidateTargetBinding {
+  const source = input.revision.metadata.source;
+  const pinnedSource = source === "git-revision" || source === "github-pr";
   const sourceRevision = input.revision.metadata.headSha;
   const targetUrl = input.target?.replace(/\/+$/, "") ?? null;
   const targetRevision = input.targetRevision?.toLowerCase() ?? null;
-  if (input.revision.metadata.source === "github-pr" && input.executor === "hybrid") {
-    if (!input.cloudApproved) throw new Error("pull-request cloud verification requires --cloud-approved after protected-environment approval");
-    if (input.revision.metadata.pullRequest?.fork && !input.allowForkCloud) throw new Error("fork pull requests cannot receive cloud credentials without both protected approval and --allow-fork-cloud");
-    if (!targetRevision || targetRevision !== sourceRevision) throw new Error(`--target-revision must equal the pinned PR head ${sourceRevision}`);
+  if (pinnedSource && input.executor === "hybrid") {
+    if (!input.cloudApproved) throw new Error(source === "github-pr"
+      ? "pull-request cloud verification requires --cloud-approved after protected-environment approval"
+      : "pinned revision cloud verification requires --cloud-approved after protected-environment approval");
+    if (source === "github-pr" && input.revision.metadata.pullRequest?.fork && !input.allowForkCloud) throw new Error("fork pull requests cannot receive cloud credentials without both protected approval and --allow-fork-cloud");
+    if (!targetRevision || targetRevision !== sourceRevision) throw new Error(source === "github-pr"
+      ? `--target-revision must equal the pinned PR head ${sourceRevision}`
+      : `--target-revision must equal the pinned candidate revision ${sourceRevision}`);
   }
   if (input.deployment) {
     if (!targetUrl || input.deployment.url !== targetUrl) throw new Error("deployment metadata URL does not equal --target");
     if (!targetRevision || input.deployment.revision.toLowerCase() !== targetRevision) throw new Error("deployment metadata revision does not equal --target-revision");
-    if (input.revision.metadata.source === "github-pr" && input.deployment.revision.toLowerCase() !== sourceRevision) throw new Error("deployment metadata revision does not equal the pinned PR head");
+    if (pinnedSource && input.deployment.revision.toLowerCase() !== sourceRevision) throw new Error(source === "github-pr"
+      ? "deployment metadata revision does not equal the pinned PR head"
+      : "deployment metadata revision does not equal the pinned candidate revision");
   }
-  const exactRevision = input.revision.metadata.source === "github-pr" && targetRevision === sourceRevision && input.deployment?.revision.toLowerCase() === sourceRevision;
+  const clean = !input.revision.metadata.dirty;
+  const exactRevision = pinnedSource && clean && targetRevision === sourceRevision && input.deployment?.revision.toLowerCase() === sourceRevision;
   const forkApproved = !input.revision.metadata.pullRequest?.fork || input.allowForkCloud;
-  const gateEligible = input.revision.metadata.source === "github-pr" && input.executor === "hybrid" && exactRevision && input.cloudApproved && forkApproved;
-  const reason = input.revision.metadata.source === "local"
-    ? "local snapshot evidence cannot satisfy the protected pull-request gate"
+  const gateEligible = pinnedSource && clean && input.executor === "hybrid" && exactRevision && input.cloudApproved && forkApproved;
+  const scope = source === "github-pr" ? "pull-request" : source === "git-revision" ? "revision" : "local";
+  const reason = !pinnedSource
+    ? "local snapshot evidence cannot satisfy the protected gate"
     : gateEligible
-      ? "immutable PR head and deployment metadata identify the same revision"
+      ? "immutable candidate revision and deployment metadata identify the same revision"
       : !input.deployment
         ? "deployment metadata was not supplied; this run is not authoritative"
         : input.executor !== "hybrid"
           ? "scene-only verification is not an authoritative cloud gate"
           : "the protected gate requirements were not met";
   return {
-    scope: input.revision.metadata.source === "local" ? "local" : "pull-request",
+    scope,
     sourceRevision,
     targetRevision,
     targetUrl,
@@ -580,4 +598,14 @@ export function bindCandidateTarget(input: {
     gateEligible,
     reason,
   };
+}
+
+/** Re-check a pinned non-PR revision after verification. A moving checkout is
+ * a new candidate, exactly like a moving PR head. */
+export function assertGitRevisionStillCurrent(revision: CandidateRevision): void {
+  if (revision.metadata.source !== "git-revision") return;
+  const head = git(revision.metadata.repositoryRoot, ["rev-parse", "--verify", "HEAD^{commit}"]).toLowerCase();
+  if (head !== revision.metadata.headSha) {
+    throw new Error(`candidate revision moved during verification: pinned ${revision.metadata.headSha}, now ${head}; start a new run`);
+  }
 }

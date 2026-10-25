@@ -3,11 +3,11 @@
 // Phase 3 migrates the verifier onto this format.
 
 import type { SceneType } from "../../types.ts";
-import type { AssertionInventory } from "../../types.ts";
+import type { AssertionInventory, MultistepScenario } from "../../types.ts";
 import type { ReproductionMode } from "./rca-mode.ts";
 import type { ProtectedPolicyEnvelope } from "../../policy/requirements.ts";
 
-export type SceneMode = "live" | "live-concurrent:2" | "replay:failing.har" | "replay:passing.har" | "replay:failing.api.json" | "replay:passing.api.json" | `inject:${string}` | "detect:POST /api/book -> 200:booking.confirmed=false";
+export type SceneMode = "live" | "live-concurrent:2" | "replay:failing.har" | "replay:passing.har" | "replay:failing.api.json" | "replay:passing.api.json" | `inject:${string}` | `detect:${string}`;
 
 export interface SceneV3 {
   sceneId: string;
@@ -200,6 +200,13 @@ export interface ManifestV3 {
   recordings: { failing: string | null; passing: string | null; bodies: string; apiFailing?: string | null; apiPassing?: string | null; multistepFailing?: string | null; multistepPassing?: string | null };
   /** Multistep capture problems per side — surfaced to `verify` as UNCERTAIN evidence. */
   multistep?: { failing: { problems: string[] } | null; passing: { problems: string[] } | null } | null;
+  /**
+   * Multistep-only, bundle-supplied scenario. Required once an incident exists
+   * (a failing result is recorded); a healthy baseline may omit it. Unknown
+   * fields are rejected at load so a mistyped or smuggled rule cannot be
+   * silently ignored.
+   */
+  scenario?: MultistepScenario | null;
   scenes: SceneV3[];
   assertions: AssertionInventory | null;
   envAssumptions: Array<{ id: string; text: string; verified: boolean; verifiedBy: string }>;

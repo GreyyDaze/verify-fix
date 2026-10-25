@@ -13,6 +13,7 @@
 
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
+import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { closeSync, constants, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -22,7 +23,7 @@ import { ASSET_ZIP_BOUNDS, isZip, openZipBounded } from "../archive/zip.ts";
 import { mergeHars, traceZipToHar, type BodyPolicy, type TraceExtract } from "../trace/trace-to-har.ts";
 import { parseInventory } from "../../evidence/assertion/inventory.ts";
 import { sanitizeHar } from "./sanitize.ts";
-import { buildManifest, detectTargetResolution, expectedReceived, findOverlappingRuns, groupErrorMatches, rcaFit, rcaMentionsReceived, resultErrors, runOutcome, type FetchedResult, type ManifestInputs } from "./manifest.ts";
+import { buildManifest, deriveMultiStepScenario, multistepWitness, detectTargetResolution, expectedReceived, findOverlappingRuns, groupErrorMatches, rcaFit, rcaMentionsReceived, resultErrors, runOutcome, type FetchedResult, type ManifestInputs } from "./manifest.ts";
 import { measureDeterminism, type MeasureResult, type Runner } from "./measure.ts";
 import type { ManifestV3 } from "./types.ts";
 import { apiRecordingFromResult, setupProvenance } from "../../checks/api/recording.ts";
@@ -38,13 +39,17 @@ import { parseCheckConfig } from "../../execution/scene/config-diff.ts";
 import { deployedProblem } from "../../checks/multistep/identity.ts";
 import { multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_BYTES, MULTISTEP_MAX_SOURCE_FILE_BYTES, MULTISTEP_MAX_SOURCE_FILES } from "../../checks/multistep/files.ts";
 import { buildProtectedRequirements, policyKnown, policyUnknown, protectedSourceIdentity, type ProtectedPolicyEnvelope, type ResolvedPolicyValue } from "../../policy/requirements.ts";
+import { bundleDigest } from "./digest.ts";
 import { deriveRegionalAccountMapping } from "../../checks/multistep/region-account-mapping.ts";
+import { scenarioLayout } from "../../checks/multistep/layout.ts";
 
 export interface BuildOptions {
   checkId: string;
   resultId?: string | null;
   passingResultId?: string | null;
-  outDir: string;
+  /** Output directory. When omitted, the bundle is saved by incident id OUTSIDE
+   * the project, under ~/.verify-fix/bundles (proof, not code). */
+  outDir?: string;
   projectDir?: string | null;
   /** Directory of assets already downloaded with `checkly assets download` (MULTI_STEP only). */
   assetsDir?: string | null;
@@ -71,6 +76,8 @@ export interface BuildOutcome {
   outDir: string;
   files: string[];
   warnings: string[];
+  /** SHA-256 over every written file; pin this to prove the bundle later. */
+  digest: string;
 }
 
 const RESULT_FIELDS = ["id", "checkId", "name", "hasFailures", "hasErrors", "isDegraded", "runLocation", "startedAt", "stoppedAt", "responseTime", "attempts", "resultType", "sequenceId", "errorGroupIds"];
@@ -1188,7 +1195,11 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   const now = (deps.now ?? (() => new Date()))().toISOString();
   const bodies: BodyPolicy = opts.bodies ?? "api";
   const warnings: string[] = [];
-  const outDir = resolve(opts.outDir);
+  // Provisional output location. If the caller passed no --out, the bundle is
+  // named by its incident id and kept OUTSIDE the project; the incident id is
+  // only known once the manifest is built, so this provisional path is used
+  // solely for pre-manifest --keep-raw material and re-resolved below.
+  let outDir = resolve(opts.outDir ?? join(homedir(), ".verify-fix", "bundles", opts.checkId));
 
   // 1. check
   const check = await client.getCheck(opts.checkId);
@@ -1344,7 +1355,9 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
       continue;
     }
     const capture = buildMultiStepRecording({ texts: fetched.multistepTexts, attempts: fetched.summary.attempts ?? null });
-    if (capture.ok && capture.recording.kind === side) {
+    const scenarioProblem = capture.ok && capture.recording.kind === side && side === "failing"
+      && !deriveMultiStepScenario(capture.capture) ? ["MULTISTEP_SCENARIO_INVALID"] : null;
+    if (capture.ok && capture.recording.kind === side && !scenarioProblem) {
       multistepDrafts[side] = { recording: capture.recording, capture: capture.capture };
       // No draft can become a manifest failure point or recording pointer.
       fetched.multistep = null;
@@ -1353,11 +1366,27 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
       multistepSecrets.push(...capture.secrets);
       log(`[bundle] ${side}: multistep capture normalized (${capture.capture.kind}, ${capture.capture.steps.length} step entries)`);
     } else {
-      const problems = capture.ok ? ["MULTISTEP_CAPTURE_SIDE_MISMATCH"] : capture.problems;
+      const problems = scenarioProblem ?? (capture.ok ? ["MULTISTEP_CAPTURE_SIDE_MISMATCH"] : capture.problems);
       fetched.multistep = null;
       fetched.multistepProblems = problems;
       multistepProblems[side] = problems;
       warnings.push(`${side}: multistep evidence unresolved (${problems[0]}) — UNCERTAIN, never PASS/FAIL`);
+    }
+  }
+
+  // A detectable incident changes ONE recorded scalar; it never adds, removes
+  // or renames response fields. Compare the two independent captures so a
+  // side that invented or dropped structure cannot become the detection side.
+  if (multistepDrafts.failing && multistepDrafts.passing) {
+    const routes = scenarioLayout(multistepDrafts.failing.capture).routes;
+    const failingWitness = multistepWitness(routes, multistepDrafts.failing.capture.steps);
+    const passingWitness = multistepWitness(routes, multistepDrafts.passing.capture.steps);
+    if (!failingWitness || !passingWitness
+      || JSON.stringify(failingWitness.responses) !== JSON.stringify(passingWitness.responses)) {
+      delete multistepDrafts.failing;
+      multistepProblems.failing = [...new Set([...(multistepProblems.failing ?? []), "MULTISTEP_SCENARIO_INVALID"])];
+      if (failing) { failing.multistep = null; failing.multistepProblems = multistepProblems.failing; }
+      warnings.push("failing: response structure contradicts the passing side — UNCERTAIN");
     }
   }
 
@@ -1534,6 +1563,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
     multistep: isMultiStep
       ? { failing: multistepProblems.failing ? { problems: multistepProblems.failing } : null, passing: multistepProblems.passing ? { problems: multistepProblems.passing } : null }
       : null,
+    scenario: isMultiStep ? deriveMultiStepScenario(multistepDrafts.failing?.capture ?? null) : null,
     assets,
     apiCalls: client.calls.map((c) => ({ ...c })),
     accountId: deps.accountId,
@@ -1545,6 +1575,10 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
   if (isMultiStep) manifest = constrainMultiStepManifest(manifest, boundRecordings,
     new Map(proj.sources.map((item) => [item.path, item.content])));
   else manifest.notes.push(...warnings.map((w) => `warning: ${w}`));
+
+  // Proof, not code: name the default bundle by its incident id, outside the
+  // project's repo. An explicit --out is always honored verbatim.
+  if (!opts.outDir) outDir = resolve(join(homedir(), ".verify-fix", "bundles", manifest.incidentId));
 
   const files: Array<{ file: string; text: string }> = [];
   files.push({ file: "manifest.json", text: JSON.stringify(manifest, null, 2) + "\n" });
@@ -1611,8 +1645,10 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
       })();
   // And again over every file ACTUALLY written, straight from disk.
   assertNoSecretLeak(written, allSecrets);
+  const digest = bundleDigest(outDir);
   log(`[bundle] wrote ${files.length} files to ${outDir} (post-write leak check over ${allSecrets.length} original sensitive value(s): clean)`);
-  return { manifest, outDir, files: files.map((f) => f.file), warnings };
+  log(`[bundle] fingerprint sha256:${digest}`);
+  return { manifest, outDir, files: files.map((f) => f.file), warnings, digest };
 }
 
 export function bundleReadme(m: ManifestV3): string {
@@ -1634,7 +1670,7 @@ export function bundleReadme(m: ManifestV3): string {
     m.failurePoint?.request
       ? `- Failure point: ${m.failurePoint.request.method} ${m.failurePoint.request.path} → ${m.failurePoint.request.status}${m.failurePoint.request.passingStatus !== null ? ` (passing run: ${m.failurePoint.request.passingStatus})` : ""}`
       : m.failurePoint?.dependency
-        ? `- Step dependency: ${m.failurePoint.dependency.method} ${m.failurePoint.dependency.path} (observed in the failing run${m.failurePoint.dependency.passingStatus === null ? "" : `; passing-run status ${m.failurePoint.dependency.passingStatus}`}; ${m.check.checkType === "MULTI_STEP" ? "trusted local detection flips only nested booking.confirmed to false at HTTP 200" : "detection injects 500"})`
+        ? `- Step dependency: ${m.failurePoint.dependency.method} ${m.failurePoint.dependency.path} (observed in the failing run${m.failurePoint.dependency.passingStatus === null ? "" : `; passing-run status ${m.failurePoint.dependency.passingStatus}`}; ${m.check.checkType === "MULTI_STEP" ? "trusted local detection flips only the scenario mutation scalar at HTTP 200" : "detection injects 500"})`
         : "- Failure point: not identified",
     m.failurePoint?.action ? `- Failing step: \`${m.failurePoint.action.title}\` — ${m.failurePoint.action.error.split("\n")[0]}` : "",
     m.failurePoint?.assertion

@@ -888,6 +888,20 @@ verify-fix bundle --check <checkId> --out ./bundle --project examples/slots-book
    (locations, `runParallel`, shared `TEST_USER`), determinism from history and
    from `--measure`, and provenance (hashed account id, result ids, asset
    sha256, every API call made).
+
+   A `MULTI_STEP` manifest also carries a closed `scenario` block:
+   `routes[{method,path,step}]`, `stepTitles[]`, and one
+   `mutation{method,path,jsonPath[],expected,replace}` derived from the
+   sanitized failing recording. Routes and titles come from the recording, not
+   from constants. The scenario also carries an optional values-free
+   `witness{responses[],equalities[]}`: response key names and JSON types, plus
+   the recorded scalar relationships (never values or secrets). Detection
+   compares every live response shape and equality before flipping the one
+   declared scalar, so changed upstream facts stay UNCERTAIN instead of
+   becoming invented evidence. The loader validates the block with
+   `src/capture/bundle/scenario.ts`; an incident bundle without a valid
+   scenario records `MULTISTEP_SCENARIO_INVALID` and becomes UNCERTAIN. The
+   candidate source tree can never supply or override the scenario.
 9. `src/capture/bundle/build.ts` writes the directory after a last guard: if any file
    would contain an env var value longer than seven characters, the build
    refuses to write.
@@ -1104,12 +1118,25 @@ The values come only from `--env-file` or Checkly.
 **CI.** `.github/workflows/gate.yml` is a small adapter for successful
 deployment statuses. It calls `.github/workflows/protected-gate.yml` at an
 immutable reviewed commit. That reusable workflow runs the secret-free
-preflight and the approved cloud job. It also loads the pinned verifier,
-incident bundle, and policy outside the candidate checkout. Repository rules
-must require the reusable gate check names and owner review for workflow
-changes. A protected GitHub environment must approve cloud credentials. A fork
-needs that approval plus an explicit fork flag. JSON and Markdown reports are
-uploaded.
+preflight and the approved cloud job. It also loads the pinned verifier and
+policy outside the candidate checkout, and downloads the bundle from the pinned
+artifact. Repository rules must require the reusable gate check names and owner
+review for workflow changes. A protected GitHub environment must approve cloud
+credentials. A fork needs that approval plus an explicit fork flag. JSON and
+Markdown reports are uploaded.
+
+**Customer contract.** The reusable gate is project-neutral: the project path,
+captured check identity, bundle artifact/run/fingerprint, and policy pins are
+repository variables; Checkly credentials and test identities are secrets. The
+exact list is in `docs/BUNDLE-STORAGE-PLAN.md`. Missing configuration fails
+closed, and the gate never falls back to a committed bundle path.
+
+**Bring your own CI.** The GitHub/Vercel workflows are one adapter. Any CI can
+run `scripts/ci-gate.sh` with the bundle, an exact 40-hex candidate SHA checked
+out with a clean tree, deployment metadata (`provider`, `deploymentId`,
+`revision`, `url`), and Checkly credentials. `--candidate-revision` makes a
+non-PR candidate immutable and gate-eligible, so GitLab, Bitbucket, Jenkins,
+local scripts, and any deploy host use the same verifier without host APIs.
 
 The *staged* Phase 7 production preflight (in `protected-gate.yml`) checks
 current `main` before protected approval, then rechecks exact deployment,
@@ -1189,12 +1216,39 @@ verify-fix verify \
 runs `npm install`, package lifecycle scripts, browser installation, or cloud
 provisioning. `--patch` remains only for fixtures and small manual experiments.
 
+Any other Git host, or a CI that already knows the deployed SHA, pins the
+candidate instead of using `--pr`:
+
+```bash
+verify-fix verify \
+  --candidate-project ./candidate-runtime \
+  --candidate-revision <exact-40-hex-sha> \
+  --base <exact-40-hex-sha> \
+  --project ./candidate-runtime/examples/slots-booking/web \
+  --bundle /protected/incidents/booking-drift \
+  --target https://preview.example.com \
+  --target-revision <exact-40-hex-sha> \
+  --target-metadata "$RUNNER_TEMP/deployment.json" \
+  --cloud-approved \
+  --executor hybrid
+```
+
+The checkout must be at that exact SHA with a clean tree. verify-fix re-reads
+`HEAD` after the run and fails if the checkout moved, so a pinned non-PR
+candidate is as immutable as a PR head. `--pr` stays a GitHub convenience that
+produces the same identity.
+
 ### Input to snapshot
 
 `src/candidate/revision.ts` asks Git for the repository root. Local mode resolves
 `--base` and the current `HEAD`. It lists all tracked files plus non-ignored
 untracked files. That includes staged and unstaged content and preserves
 renames and deletions. It copies the final files into one temporary repository.
+
+Pinned mode requires `--candidate-revision` to be the exact lowercase 40-hex
+`HEAD` and the working tree to be clean. It records `source: "git-revision"`
+and `dirty: false`, binds to `scope: "revision"`, and is gate-eligible only
+with a hybrid run, a matching deployment revision, and `--cloud-approved`.
 
 PR mode accepts only a canonical `https://github.com/.../pull/<number>` URL. It
 uses the authenticated `gh` client from the user's environment to read the base
@@ -1392,7 +1446,7 @@ fallback.
 | --- | --- | --- |
 | Real evidence | v3 schema and admission exercised with mock authenticated-result paths and bounded synthetic ZIPs. | Actual passing and failing Multistep result assets, source line and parser/token semantics must be inspected; sanitized bundle must be produced with packed `verify-fix bundle` after explicit account approval. No new RCA is triggered here. |
 | URL roles | Secret-free GitHub preflight requires current `main`, same deployment ID/SHA/environment, distinct safe HTTPS origins, latest authenticated Vercel Bot success and a human status marked exactly `verify-fix:stable-alias-verified` (create it with `auto_inactive: false`). Missing/ambiguous/revoked status waits or fails before approval; after approval and after deployment preview recheck both IDs and URLs. | Human verification of the stable alias for the *same deployment*, generated URL HTTP-200 health readiness, approved bypass secret and account-backed Checkly parity. No Vercel API token or host guess. |
-| Protected job | Reusable workflow checks out the verifier and incident at immutable `verifier_ref` V and the helper snapshot at a distinct later immutable `workflow_ref` W. Candidate dependencies stay separate; the job uses 0600 temporary files, verifies the generated URL before any deploy, then uses only the stable origin for Checkly deployment. An explicit reviewed Phase 7 bundle and bypass must exist or it fails closed. | Current `gate.yml` caller pin still points to the **older** reusable workflow; this staged one cannot run until a separately reviewed pin advance. A real protected PASS, actual `checkly deploy` and repaired scheduled green in both locations have not occurred. |
+| Protected job | Reusable workflow checks out the verifier and incident at immutable `verifier_ref` V and the helper snapshot at a distinct later immutable `workflow_ref` W. Candidate dependencies stay separate; the job uses 0600 temporary files, verifies the generated URL before any deploy, then uses only the stable origin for Checkly deployment. The configured check identity, pinned bundle artifact/fingerprint, and bypass must exist or it fails closed. | Current `gate.yml` caller pin still points to the **older** reusable workflow; this staged one cannot run until a separately reviewed pin advance. A real protected PASS, actual `checkly deploy` and repaired scheduled green in both locations have not occurred. |
 
 When real parity is authorized, use `checkly test --record --grep
 '^slots booking multistep transaction$' --retries 0` and **one** environment

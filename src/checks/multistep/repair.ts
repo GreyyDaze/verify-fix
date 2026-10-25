@@ -1,30 +1,21 @@
-// The only source-side moves the validated nested-booking response can
-// justify. These are not general response rewriting or loose same-ID matches:
-// matcher, target, negation, step, source binding and occurrence counts are
-// independently enforced by policy + contract + the local runner.
-const SUBJECTS: Readonly<Record<string, string>> = Object.freeze({
-  "body.confirmed": "body.booking.confirmed",
-  "body.booking": "body.booking.status",
-  "typeof body.account": "typeof body.booking.account",
-  "body.account": "body.booking.account",
-  "body.slot": "body.booking.slot",
-  "body.version": "body.booking.sessionVersion",
-});
+// The only source-side moves the bundle scenario justifies. These are not
+// general response rewriting or loose same-ID matches: matcher, target,
+// negation, step, source binding and occurrence counts are independently
+// enforced by policy + contract + the local runner.
+import type { MultistepEvidenceScenario } from "../../types.ts";
 
-export function repairedBookingSubject(subject: string): string | null {
-  return Object.hasOwn(SUBJECTS, subject) ? SUBJECTS[subject]! : null;
+export function repairedSubject(scenario: MultistepEvidenceScenario | null | undefined, subject: string): string | null {
+  return scenario?.repair?.find((move) => move.from === subject)?.to ?? null;
 }
 
 // A field move must still source each cross-step variable from the actual
-// response. All declarations and all non-book writes stay byte-identical.
-const WRITES: Readonly<Record<string, string>> = Object.freeze({
-  "write:bookingAccount:=:body.account as string": "write:bookingAccount:=:body.booking.account as string",
-  "write:bookingSlot:=:body.slot as string": "write:bookingSlot:=:body.booking.slot as string",
-  "write:bookingVersion:=:body.version as number": "write:bookingVersion:=:body.booking.sessionVersion as number",
-  "write:bookingConfirmed:=:body.confirmed === true": "write:bookingConfirmed:=:body.booking.confirmed === true",
-  "write:bookingResult:=:body.booking as string": "write:bookingResult:=:body.booking.status as string",
-});
-
-export function sameOrRepairedBookingWrite(original: string, candidate: string): boolean {
-  return candidate === original || Object.hasOwn(WRITES, original) && candidate === WRITES[original];
+// response. All declarations and all non-repaired writes stay byte-identical.
+export function sameOrRepairedWrite(scenario: MultistepEvidenceScenario | null | undefined,
+  original: string, candidate: string): boolean {
+  if (candidate === original) return true;
+  if (scenario?.writes?.some((move) => move.from === original && move.to === candidate)) return true;
+  // A repaired binding is the same expression with one scenario-proven field
+  // move substituted; no other byte of the binding may change.
+  return (scenario?.repair ?? []).some((move) =>
+    original.includes(move.from) && original.split(move.from).join(move.to) === candidate);
 }

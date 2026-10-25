@@ -17,6 +17,10 @@ hedera
 # sandbox temp dirs
 /tmp/verify-fix-sandbox-*/
 
+# captured evidence bundles (proof, not code); see docs/BUNDLE-STORAGE-PLAN.md
+bundle-*/
+.verify-fix/
+
 # OS / editor
 .DS_Store
 *.swp

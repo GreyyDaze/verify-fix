@@ -10,10 +10,10 @@
 //                     Two runs therefore execute "login, login, book, book" —
 //                     the recorded 401 overlap — instead of scheduler timing.
 //   inject            generic recorded/error response (non-Multistep)
-//   multistep-detection  forward the four fixed API calls; only when the
-//                     validated nested book response agrees with the live
-//                     account/token/version/slot chain, flip its existing
-//                     booking.confirmed boolean from true to false (HTTP 200)
+//   multistep-detection  forward the scenario's ordered API calls; only when
+//                     every live response shape and recorded scalar relation
+//                     in the values-free witness still agrees, flip the one
+//                     declared boolean at its recorded path (HTTP 200)
 //   replay            answered from a HAR; the target is never contacted
 //
 // Every request is counted per run. The executor's evidence gate reads these
@@ -30,6 +30,7 @@ import type { Har, HarEntry } from "../../capture/trace/har-types.ts";
 import type { InjectRule, ParsedMode } from "./modes.ts";
 import { isTrustedMultiStepDetection, type TrustedMultiStepDetection } from "../../checks/multistep/detection.ts";
 import { knownRoute } from "../../checks/multistep/routes.ts";
+import type { MultistepScenario, MultistepWitness, MultistepWitnessShape } from "../../types.ts";
 
 export interface ProxyHit {
   runIndex: number;
@@ -59,17 +60,55 @@ export interface ArmOptions {
   barrierTimeoutMs?: number;
   /** Granted only after re-loading and validating a remote failing v3 bundle. */
   trustedMultiStepDetection?: TrustedMultiStepDetection;
+  /** The validated bundle scenario that supplies routes and the mutation. */
+  scenario?: MultistepScenario;
 }
 
 const HOP_BY_HOP = new Set(["host", "connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "proxy-connection", "content-length", "accept-encoding", "expect"]);
 const DROP_RESPONSE = new Set(["content-encoding", "transfer-encoding", "content-length", "connection", "keep-alive"]);
 
-interface DetectionState {
-  account: string;
-  token: string;
-  version: number;
-  session: boolean;
-  slots: boolean;
+interface WitnessRun {
+  requests: unknown[];
+  responses: unknown[];
+}
+
+function witnessShapeHolds(shape: MultistepWitnessShape | null, value: unknown): boolean {
+  if (!shape) return Array.isArray(value) && value.length === 0;
+  if (shape.kind === "null") return value === null;
+  if (shape.kind === "string") return typeof value === "string";
+  if (shape.kind === "number") return typeof value === "number";
+  if (shape.kind === "boolean") return typeof value === "boolean";
+  if (Array.isArray(value)) {
+    return shape.kind === "array" && value.every((item) => witnessShapeHolds(shape.item, item));
+  }
+  if (!value || typeof value !== "object" || shape.kind !== "object") return false;
+  const raw = value as Record<string, unknown>;
+  const keys = Object.keys(raw);
+  const expected = Object.keys(shape.fields);
+  return keys.length === expected.length && expected.every((key) => key in raw
+    && witnessShapeHolds(shape.fields[key]!, raw[key]));
+}
+
+function witnessValue(run: WitnessRun, ref: { where: "request" | "response"; route: number; path: string[] }): { ok: boolean; value?: unknown } {
+  let current: unknown = (ref.where === "request" ? run.requests : run.responses)[ref.route];
+  for (const key of ref.path) {
+    if (!current || typeof current !== "object" || Array.isArray(current) || !(key in current)) return { ok: false };
+    current = (current as Record<string, unknown>)[key];
+  }
+  return { ok: true, value: current };
+}
+
+function witnessHolds(witness: MultistepWitness, run: WitnessRun): boolean {
+  if (witness.responses.length !== run.responses.length) return false;
+  for (let i = 0; i < witness.responses.length; i++) {
+    if (!witnessShapeHolds(witness.responses[i]!, run.responses[i])) return false;
+  }
+  for (const pair of witness.equalities) {
+    const left = witnessValue(run, pair.left);
+    const right = witnessValue(run, pair.right);
+    if (!left.ok || !right.ok || left.value !== right.value) return false;
+  }
+  return true;
 }
 
 /** Parser bound to the fixed transaction; never retain or log raw bodies. */
@@ -79,9 +118,6 @@ function boundedJsonObject(bytes: Buffer): Record<string, unknown> | null {
     const value: unknown = JSON.parse(bytes.toString("utf8"));
     return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
   } catch { return null; }
-}
-function version(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000_000;
 }
 
 interface Pending {
@@ -152,8 +188,8 @@ export class SceneProxy {
   private actionOrdinals: number[] = [];
   private barrier: Barrier | null = null;
   private replayUsed = new Map<string, number>();
-  /** Raw identities live only in memory during this one scene repetition. */
-  private detectionStates: Array<DetectionState | null> = [];
+  /** Live transaction bodies live only in memory during one scene repetition. */
+  private witnessRuns: WitnessRun[] = [];
 
   /** Arm the proxy for one scene repetition. Returns one ENVIRONMENT_URL per run. */
   async arm(opts: ArmOptions): Promise<string[]> {
@@ -163,12 +199,13 @@ export class SceneProxy {
     this.ordinals = Array.from({ length: opts.runs }, () => 0);
     this.actionOrdinals = Array.from({ length: opts.runs }, () => 0);
     this.replayUsed = new Map();
-    if (opts.mode.kind === "multistep-detection" && !isTrustedMultiStepDetection(opts.trustedMultiStepDetection)) {
+    if (opts.mode.kind === "multistep-detection"
+      && (!isTrustedMultiStepDetection(opts.trustedMultiStepDetection) || !opts.scenario)) {
       throw new Error("SCENE_PROXY_DETECTION_AUTHORITY_MISSING");
     }
     if (opts.mode.kind === "replay" && opts.replayHar && (!Array.isArray(opts.replayHar.log?.entries)
       || opts.replayHar.log.entries.length > 2000)) throw new Error("SCENE_PROXY_RECORDING_INVALID");
-    this.detectionStates = Array.from({ length: opts.runs }, () => null);
+    this.witnessRuns = Array.from({ length: opts.runs }, () => ({ requests: [], responses: [] }));
     this.barrier = opts.mode.kind === "live-concurrent" && opts.runs > 1 ? new Barrier(opts.runs, opts.barrierTimeoutMs ?? 2000) : null;
     this.urls = [];
     for (let i = 0; i < opts.runs; i++) {
@@ -201,7 +238,7 @@ export class SceneProxy {
 
   async close(): Promise<void> {
     await this.closeServers();
-    this.detectionStates = [];
+    this.witnessRuns = [];
   }
 
   private async closeServers(): Promise<void> {
@@ -224,15 +261,15 @@ export class SceneProxy {
     const detection = opts.mode.kind === "multistep-detection";
     const action = shouldInterleave(req);
     const hit: ProxyHit = { runIndex, ordinal, method,
-      path: detection ? knownRoute(url.pathname) ?? "<unknown-route>" : url.pathname,
+      path: detection ? opts.scenario && knownRoute(opts.scenario, url.pathname) || "<unknown-route>" : url.pathname,
       status: 0, action, source: "error" };
     // The fifth request is evidence of a noncanonical run; never let an
     // unbounded stream of later requests grow the in-memory evidence list.
-    if (!detection || ordinal <= 5) this.hitsList.push(hit);
-    const expected = [["POST", "/api/login"], ["GET", "/api/session"],
-      ["GET", "/api/slots"], ["POST", "/api/book"]] as const;
-    if (detection && (ordinal > 4 || !expected[ordinal - 1]
-      || method !== expected[ordinal - 1]![0] || req.url !== expected[ordinal - 1]![1]
+    const routes = detection ? opts.scenario?.routes ?? [] : [];
+    if (!detection || ordinal <= routes.length + 1) this.hitsList.push(hit);
+    const expected = routes[ordinal - 1];
+    if (detection && (ordinal > routes.length || !expected
+      || method !== expected.method || req.url !== expected.path
       || url.origin !== this.urls[runIndex])) {
       hit.status = 400;
       res.writeHead(400, { "content-type": "application/json" });
@@ -290,7 +327,8 @@ export class SceneProxy {
     if (mode.kind === "inject" && matchesRule(mode.rule, method, url)) return injected(mode.rule, opts.failingHar ?? null);
     if (mode.kind === "unknown" || mode.kind === "pending") throw new Error(mode.reason);
     if (!opts.target) throw new Error("no target for a live scene (pass --target <url>)");
-    if (mode.kind === "multistep-detection" && !isTrustedMultiStepDetection(opts.trustedMultiStepDetection)) {
+    if (mode.kind === "multistep-detection"
+      && (!isTrustedMultiStepDetection(opts.trustedMultiStepDetection) || !opts.scenario)) {
       throw new Error("Multistep detection has no remote failing-side provenance");
     }
     const forwarded = await this.forwardToTarget(opts.target, this.urls[runIndex], method, url, req, body,
@@ -306,63 +344,43 @@ export class SceneProxy {
    * UNCERTAIN. The original remote recording is never modified or re-admitted. */
   private mutateNestedBooking(runIndex: number, ordinal: number, method: string, url: URL,
     req: IncomingMessage, requestBody: Buffer, answer: Answer): Answer {
-    const sequence = [["POST", "/api/login"], ["GET", "/api/session"],
-      ["GET", "/api/slots"], ["POST", "/api/book"]] as const;
-    const expected = sequence[ordinal - 1];
-    if (!expected || method !== expected[0] || url.pathname !== expected[1]
+    const scenario = this.opts?.scenario;
+    const routes = scenario?.routes ?? [];
+    const run = this.witnessRuns[runIndex];
+    if (run && ordinal <= routes.length) {
+      run.requests[ordinal - 1] = requestBody.length ? boundedJsonObject(requestBody) : null;
+      run.responses[ordinal - 1] = boundedJsonObject(answer.body);
+    }
+    const expected = routes[ordinal - 1];
+    if (!scenario || !expected || method !== expected.method || url.pathname !== expected.path
       || url.search || url.hash || answer.status !== 200) return answer;
+    const previous = this.hitsList.filter((hit) => hit.runIndex === runIndex && hit.ordinal < ordinal);
+    if (previous.length !== ordinal - 1 || previous.some((hit, i) =>
+      hit.ordinal !== i + 1 || hit.method !== routes[i]!.method || hit.path !== routes[i]!.path
+      || hit.status !== 200 || hit.source !== "target")) return answer;
+    const needsAuthorization = expected.auth === true;
+    if (needsAuthorization !== (req.headers.authorization !== undefined)) return answer;
+    // Only the final scenario request carries the recorded mutation, and only
+    // when every values-free witness fact still holds for this run: response
+    // shapes are unchanged and the recorded scalar equalities all agree.
+    const mutation = scenario.mutation;
+    if (ordinal !== routes.length || method !== mutation.method || url.pathname !== mutation.path) return answer;
+    if (!scenario.witness || !run || !witnessHolds(scenario.witness, run)) return answer;
     const response = boundedJsonObject(answer.body);
     if (!response) return answer;
-    if (ordinal === 1) {
-      const input = boundedJsonObject(requestBody);
-      if (!input || Object.keys(input).length !== 1 || typeof input.account !== "string"
-        || !input.account || input.account.length > 512 || req.headers.authorization !== undefined
-        || response.ok !== true || response.account !== input.account
-        || typeof response.token !== "string" || !response.token || response.token.length > 512
-        || !version(response.version)) return answer;
-      this.detectionStates[runIndex] = {
-        account: input.account, token: response.token, version: response.version, session: false, slots: false,
-      };
-      return answer;
+    let parent: unknown = response;
+    for (const key of mutation.jsonPath.slice(0, -1)) {
+      if (parent === null || typeof parent !== "object" || Array.isArray(parent)) return answer;
+      parent = (parent as Record<string, unknown>)[key];
     }
-    const state = this.detectionStates[runIndex];
-    const previous = this.hitsList.filter((hit) => hit.runIndex === runIndex && hit.ordinal < ordinal);
-    if (!state || previous.length !== ordinal - 1 || previous.some((hit, i) =>
-      hit.ordinal !== i + 1 || hit.method !== sequence[i]![0] || hit.path !== sequence[i]![1]
-      || hit.status !== 200 || hit.source !== "target")) return answer;
-    if (ordinal === 2) {
-      if (requestBody.length !== 0 || req.headers.authorization !== `Bearer ${state.token}`
-        || response.valid !== true || response.account !== state.account
-        || response.tokenVersion !== state.version || response.currentVersion !== state.version) return answer;
-      state.session = true;
-      return answer;
-    }
-    if (ordinal === 3) {
-      if (!state.session || requestBody.length !== 0 || req.headers.authorization !== undefined
-        || !Array.isArray(response.slots) || response.slots.length > 64
-        || !response.slots.includes("09:30") || !version(response.delayMs)) return answer;
-      state.slots = true;
-      return answer;
-    }
-    const input = boundedJsonObject(requestBody);
-    const booking = response.booking;
-    if (!state.session || !state.slots || !input || Object.keys(input).length !== 1
-      || input.slot !== "09:30" || req.headers.authorization !== `Bearer ${state.token}`
-      || !/^application\/json(?:\s*;|$)/i.test(answer.headers["content-type"] ?? "")
-      || Object.keys(response).length !== 1 || !Object.hasOwn(response, "booking")
-      || !booking || typeof booking !== "object" || Array.isArray(booking)
-      || JSON.stringify(Object.keys(booking).sort()) !== JSON.stringify(["account", "confirmed", "sessionVersion", "slot", "status"])
-      || (booking as Record<string, unknown>).confirmed !== true
-      || (booking as Record<string, unknown>).status !== "CONFIRMED"
-      || (booking as Record<string, unknown>).account !== state.account
-      || (booking as Record<string, unknown>).slot !== "09:30"
-      || (booking as Record<string, unknown>).sessionVersion !== state.version) return answer;
-    this.detectionStates[runIndex] = null;
-    // All other booking properties are copied from the ACTUAL HTTP-200
-    // target response, after their presence and relationships were checked.
-    // Do not forward upstream headers (including cookies, validators, or
-    // secret-bearing extensions) on this newly encoded response.
-    const mutated = Buffer.from(JSON.stringify({ booking: { ...(booking as Record<string, unknown>), confirmed: false } }));
+    if (parent === null || parent === undefined || typeof parent !== "object" || Array.isArray(parent)) return answer;
+    const leaf = mutation.jsonPath.at(-1)!;
+    if ((parent as Record<string, unknown>)[leaf] !== mutation.expected) return answer;
+    const clone = JSON.parse(answer.body.toString("utf8")) as Record<string, unknown>;
+    let targetParent: unknown = clone;
+    for (const key of mutation.jsonPath.slice(0, -1)) targetParent = (targetParent as Record<string, unknown>)[key];
+    (targetParent as Record<string, unknown>)[leaf] = mutation.replace;
+    const mutated = Buffer.from(JSON.stringify(clone));
     return { status: 200, headers: { "content-type": "application/json", "content-length": String(mutated.byteLength) },
       body: mutated, source: "injected" };
   }

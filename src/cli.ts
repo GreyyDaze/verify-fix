@@ -10,11 +10,13 @@
 import { readFileSync, existsSync, lstatSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadBundle } from "./capture/bundle/load.ts";
+import { bundleDigest, isBundleDigest } from "./capture/bundle/digest.ts";
 import { verify } from "./verify.ts";
 import { SceneExecutor } from "./execution/executor/scene.ts";
 import { HybridExecutor } from "./execution/executor/hybrid.ts";
 import { loadCandidateRevision, loadPatch } from "./candidate/patch.ts";
 import {
+  assertGitRevisionStillCurrent,
   assertPullRequestStillCurrent,
   bindCandidateTarget,
   loadDeploymentMetadata,
@@ -25,9 +27,8 @@ import {
 import { parseEnvFile } from "./execution/sandbox/env.ts";
 import { measureLocalDeterminism } from "./cli/measure-local.ts";
 import { buildCostMatrix, costMatrixMarkdown } from "./report/cost.ts";
-import { initConfirmation, mergePackageScripts, planInit } from "./cli/init.ts";
-import { mkdirSync, statSync } from "node:fs";
-
+import { initConfirmation, mergePackageScripts, planInit, gitignoreWithBundleRules } from "./cli/init.ts";
+import { statSync } from "node:fs";
 const isFile = (path: string): boolean => { try { return statSync(path).isFile(); } catch { return false; } };
 import { resolveCredentials, CREDENTIALS_HELP } from "./capture/checkly/credentials.ts";
 import { ChecklyClient, ChecklyApiError } from "./capture/checkly/client.ts";
@@ -41,10 +42,12 @@ interface Args {
   command: string | null;
   patch: string | null;
   candidateProject: string | null;
+  candidateRevision: string | null;
   pr: string | null;
   base: string | null;
   projectPath: string;
   bundle: string | null;
+  bundleDigest: string | null;
   executor: "scene" | "hybrid";
   target: string | null;
   targetRevision: string | null;
@@ -86,12 +89,13 @@ interface Args {
  * silently ignored. In particular a token-looking argument is never echoed. */
 const FLAG_OPTIONS = new Set(["--help", "-h", "--dry-run", "--json", "--verbose", "--cloud-approved",
   "--allow-fork-cloud", "--trigger-rca", "--keep-raw", "--yes", "-y"]);
-const VALUE_OPTIONS = new Set(["--patch", "--candidate-project", "--pr", "--base", "--project-path", "--bundle",
+const VALUE_OPTIONS = new Set(["--patch", "--candidate-project", "--candidate-revision", "--pr", "--base", "--project-path", "--bundle",
   "--executor", "--target", "--target-revision", "--target-metadata", "--report-json", "--report-markdown",
   "--env-file", "--env-name", "--check", "--result", "--out", "--project", "--assets", "--measure",
   "--measure-overlap", "--target-url", "--bodies", "--history", "--runs", "--reports"]);
 VALUE_OPTIONS.add("--requirements-mode");
 VALUE_OPTIONS.add("--requirements-digest");
+VALUE_OPTIONS.add("--bundle-digest");
 
 /** A target identifies one origin, never a credentialed URL, app path,
  * query, fragment, or host chosen by command-line ambiguity. */
@@ -125,7 +129,7 @@ function readEnvInputs(file: string | null): Record<string, string> {
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
-    command: null, patch: null, candidateProject: null, pr: null, base: null, projectPath: ".", bundle: null, executor: "scene", target: null, targetRevision: null, targetMetadata: null, cloudApproved: false, allowForkCloud: false, reportJson: null, reportMarkdown: null, envFile: null, envName: null, requirementsMode: "enforce", requirementsDigest: null, dryRun: false, json: false, verbose: false,
+    command: null, patch: null, candidateProject: null, candidateRevision: null, pr: null, base: null, projectPath: ".", bundle: null, bundleDigest: null, executor: "scene", target: null, targetRevision: null, targetMetadata: null, cloudApproved: false, allowForkCloud: false, reportJson: null, reportMarkdown: null, envFile: null, envName: null, requirementsMode: "enforce", requirementsDigest: null, dryRun: false, json: false, verbose: false,
     check: null, result: null, out: null, project: null, assets: null, measure: 0, measureOverlap: 0, targetUrl: null,
     triggerRca: false, bodies: "api", keepRaw: false, history: 1000, runs: 20, reports: null, yes: false,
   };
@@ -151,6 +155,7 @@ function parseArgs(argv: string[]): Args {
     switch (key) {
       case "--patch": args.patch = value(i, a); if (takes) i++; break;
       case "--candidate-project": args.candidateProject = value(i, a); if (takes) i++; break;
+      case "--candidate-revision": args.candidateRevision = value(i, a); if (takes) i++; break;
       case "--pr": args.pr = value(i, a); if (takes) i++; break;
       case "--base": args.base = value(i, a); if (takes) i++; break;
       case "--project-path": args.projectPath = value(i, a); if (takes) i++; break;
@@ -172,6 +177,7 @@ function parseArgs(argv: string[]): Args {
       case "--env-name": args.envName = value(i, a); if (takes) i++; break;
       case "--requirements-mode": args.requirementsMode = value(i, a) as Args["requirementsMode"]; if (takes) i++; break;
       case "--requirements-digest": args.requirementsDigest = value(i, a); if (takes) i++; break;
+      case "--bundle-digest": args.bundleDigest = value(i, a); if (takes) i++; break;
       case "--dry-run": args.dryRun = true; break;
       case "--json": args.json = true; break;
       case "--verbose": args.verbose = true; break;
@@ -197,10 +203,10 @@ function parseArgs(argv: string[]): Args {
   const perCommand: Record<string, ReadonlySet<string>> = {
     bundle: new Set(["--check", "--result", "--out", "--project", "--assets", "--measure", "--measure-overlap",
       "--target-url", "--trigger-rca", "--bodies", "--keep-raw", "--history", "--json", "--verbose"]),
-    verify: new Set(["--patch", "--candidate-project", "--pr", "--base", "--project-path", "--bundle",
+    verify: new Set(["--patch", "--candidate-project", "--candidate-revision", "--pr", "--base", "--project-path", "--bundle",
       "--executor", "--target", "--target-revision", "--target-metadata", "--cloud-approved", "--allow-fork-cloud",
       "--report-json", "--report-markdown", "--env-file", "--env-name", "--dry-run", "--json", "--verbose", "--project",
-      "--requirements-mode", "--requirements-digest"]),
+      "--requirements-mode", "--requirements-digest", "--bundle-digest"]),
     measure: new Set(["--bundle", "--target", "--project", "--runs", "--env-file", "--env-name", "--json", "--verbose"]),
     "cost-report": new Set(["--reports", "--json"]),
     init: new Set(["--yes", "-y"]),
@@ -228,22 +234,28 @@ function usage(): string {
     "      invented, raw assets are never written, and missing/corrupt assets make the evidence UNCERTAIN, not PASS/FAIL.",
     "      --trigger-rca asks Rocky for a fresh analysis when the group has none, or when its RCA describes",
     "      an earlier, different failure of the same group (Rocky analyzes only a group's first failure).",
+    "      By default the bundle is saved OUTSIDE your project, at ~/.verify-fix/bundles/<incident-id> (it is proof,",
+    "      not code). Pass --out to override. The printed sha256 fingerprint pins it for a later `verify` run.",
     "",
     "  verify-fix verify --patch <file|dir> --bundle <dir> [--target <url>] [--project <dir>]",
-    "              or: --candidate-project <dir> --base <git-ref> --bundle <protected-dir> [--target <url>]",
+    "              or: --candidate-project <dir> --base <git-ref> [--candidate-revision <sha>] --bundle <protected-dir> [--target <url>]",
     "              or: --pr <github-pull-url> --bundle <protected-dir> --target <url> --target-revision <sha>",
     "                    [--project-path <repo-relative-dir>] [--project <dependency-dir>]",
     "                    [--target-metadata <file>] [--cloud-approved] [--allow-fork-cloud]",
     "                    [--env-file <file>] [--env-name <name>] [--executor scene|hybrid]",
     "                    [--requirements-mode shadow|migration|enforce] [--requirements-digest <sha256>]",
+    "                    [--bundle-digest <sha256>]",
     "                    [--report-json <file>] [--report-markdown <file>] [--json] [--verbose]",
     "      Grades a candidate fix against a protected incident bundle. --patch remains for fixtures and small experiments.",
     "      Local mode snapshots HEAD plus staged, unstaged, and non-ignored untracked files before any check runs.",
+    "      --candidate-revision pins an exact commit on any Git host: HEAD must equal it and the tree must be clean,",
+    "      which makes the candidate immutable and eligible for the protected gate (with --cloud-approved).",
     "      PR mode resolves and fetches one exact GitHub head SHA. The full repository digest and Git changes enter the report.",
     "      --project-path locates a Checkly project in a monorepo. --project supplies already-installed dependencies;",
     "      verify-fix never runs package lifecycle scripts. --target identifies the running app and stays separate from --pr.",
     "      Hybrid PR mode requires protected approval. Deployment metadata makes an exact PR/preview binding gate-eligible.",
     "      --env-file gives the check its own variables (KEY=VALUE lines, like `checkly test --env-file`).",
+    "      --bundle-digest pins the trusted bundle's SHA-256; a mismatch stops the run instead of grading against it.",
     "",
     "  verify-fix measure --bundle <dir> --target <url> --project <dir> [--runs 20] [--env-file <file>] [--verbose]",
     "      Runs the original Playwright or Multistep check against its reproduction mode, then writes measured",
@@ -253,7 +265,6 @@ function usage(): string {
   "      Prepares verify-fix inside an EXISTING Checkly project. Detects the project files, then writes",
   "      only the agreed CLI configuration and package scripts after confirmation. It never creates or",
   "      copies the example project, never provisions a service, and never reads or stores a credential.",
-  "      To copy the worked example instead, use: npm create verify-fix@latest <dir> -- --template slots-booking-live",
   "",
   "  verify-fix cost-report --reports <dir> [--json]",
     "      Aggregates saved verification JSON reports by candidate and verdict. It reports runs and wall time.",
@@ -286,7 +297,6 @@ async function runBundle(args: Args): Promise<ExitCode> {
     return 2;
   }
   const project = args.project ?? (["checkly.config.ts", "checkly.config.js", "checkly.config.mjs"].some((f) => existsSync(join(process.cwd(), f))) ? process.cwd() : null);
-  const out = args.out ?? `./bundle-${args.check.slice(0, 8)}`;
   const log = (line: string) => {
     if (args.verbose) process.stderr.write(line + "\n");
   };
@@ -297,7 +307,7 @@ async function runBundle(args: Args): Promise<ExitCode> {
       {
         checkId: args.check,
         resultId: args.result,
-        outDir: out,
+        outDir: args.out ?? undefined,
         projectDir: project,
         assetsDir: args.assets,
         measure: args.measure,
@@ -313,10 +323,11 @@ async function runBundle(args: Args): Promise<ExitCode> {
     );
     const m = outcome.manifest;
     if (args.json) {
-      process.stdout.write(JSON.stringify({ outDir: outcome.outDir, incidentId: m.incidentId, status: m.incident.status, scenes: m.scenes.map((s) => ({ id: s.sceneId, type: s.type, mode: s.mode })), reproduction: m.reproduction.mode, failurePoint: m.failurePoint, warnings: outcome.warnings }, null, 2) + "\n");
+      process.stdout.write(JSON.stringify({ outDir: outcome.outDir, digest: outcome.digest, incidentId: m.incidentId, status: m.incident.status, scenes: m.scenes.map((s) => ({ id: s.sceneId, type: s.type, mode: s.mode })), reproduction: m.reproduction.mode, failurePoint: m.failurePoint, warnings: outcome.warnings }, null, 2) + "\n");
     } else {
       const lines = [
         `bundle written to ${outcome.outDir}`,
+        `  fingerprint:   sha256:${outcome.digest}`,
         `  incident:      ${m.incidentId} (${m.incident.status})`,
         `  check:         ${m.check.name} [${m.check.checkType}] every ${m.config.frequencyMinutes ?? "?"} min from ${m.config.locations.join(", ")}${m.config.runParallel ? " (parallel)" : ""}`,
         `  failing run:   ${m.results.failing ? `${m.results.failing.id} @ ${m.results.failing.runLocation}` : "none yet"}`,
@@ -421,6 +432,14 @@ async function runVerify(args: Args): Promise<ExitCode> {
     process.stderr.write("--base is used only with --candidate-project\n");
     return 2;
   }
+  if (args.candidateRevision !== null && !/^[0-9a-f]{40}$/.test(args.candidateRevision)) {
+    process.stderr.write("--candidate-revision must be a 40-hex lowercase commit SHA\n");
+    return 2;
+  }
+  if (args.candidateRevision !== null && !args.candidateProject) {
+    process.stderr.write("--candidate-revision is used only with --candidate-project\n");
+    return 2;
+  }
   if (args.dryRun) {
     process.stderr.write("--dry-run belonged to the retired direct-API executor; use --executor scene or --executor hybrid\n");
     return 2;
@@ -434,6 +453,10 @@ async function runVerify(args: Args): Promise<ExitCode> {
     process.stderr.write("protected requirements mode or digest is invalid\n");
     return 2;
   }
+  if (args.bundleDigest !== null && !isBundleDigest(args.bundleDigest)) {
+    process.stderr.write("--bundle-digest must be a 64-hex sha256 fingerprint\n");
+    return 2;
+  }
   if (args.executor === "hybrid" && (!args.target || !args.targetRevision)) {
     process.stderr.write("--executor hybrid requires the exact deployment --target <url> and --target-revision <sha>\n");
     return 2;
@@ -441,7 +464,7 @@ async function runVerify(args: Args): Promise<ExitCode> {
   if (args.targetRevision && !/^[0-9a-f]{40}$/.test(args.targetRevision)
     || args.targetMetadata && args.executor !== "hybrid"
     || args.allowForkCloud && (!args.cloudApproved || !args.pr)
-    || args.cloudApproved && (!args.pr || args.executor !== "hybrid")
+    || args.cloudApproved && (args.executor !== "hybrid" || (!args.pr && !args.candidateRevision))
     || args.executor === "hybrid" && (!args.candidateProject && !args.pr || !args.targetMetadata)
     || args.executor === "hybrid" && (!process.env.CHECKLY_API_KEY || !process.env.CHECKLY_ACCOUNT_ID
       || !/^[A-Za-z0-9_-]{1,128}$/.test(process.env.CHECKLY_ACCOUNT_ID))) {
@@ -456,7 +479,16 @@ async function runVerify(args: Args): Promise<ExitCode> {
   let revision: CandidateRevision | null = null;
   try {
     const { bundle } = loadBundle(args.bundle);
-    if (args.candidateProject) revision = snapshotLocalCandidate(args.candidateProject, args.base!);
+    // The bundle is proof, not code: its fingerprint was captured outside the
+    // candidate's repo. A mismatch means the evidence was swapped or edited, so
+    // fail closed rather than grade the fix against it.
+    const actualDigest = bundleDigest(bundle.dir);
+    const bundleEvidence = { digest: actualDigest, pinnedDigest: args.bundleDigest, verified: args.bundleDigest === null || args.bundleDigest === actualDigest };
+    if (args.bundleDigest !== null && args.bundleDigest !== actualDigest) {
+      process.stderr.write(`bundle fingerprint mismatch: pinned sha256:${args.bundleDigest} but the bundle is sha256:${actualDigest}\n`);
+      return 2;
+    }
+    if (args.candidateProject) revision = snapshotLocalCandidate(args.candidateProject, args.base!, args.candidateRevision);
     if (args.pr) revision = snapshotPullRequestCandidate(args.pr, args.projectPath);
     const patch = revision ? loadCandidateRevision(revision, bundle) : loadPatch(args.patch!, bundle);
     const env = readEnvInputs(args.envFile);
@@ -499,6 +531,7 @@ async function runVerify(args: Args): Promise<ExitCode> {
       targetBinding: binding,
       protectedRequirementsMode: args.requirementsMode,
       protectedRequirementsDigest: args.requirementsDigest,
+      bundleEvidence,
       env,
       environmentName: args.envName ?? undefined,
       projectDir: project,
@@ -507,6 +540,7 @@ async function runVerify(args: Args): Promise<ExitCode> {
 
     revision?.assertUnchanged();
     if (revision?.metadata.source === "github-pr") assertPullRequestStillCurrent(revision);
+    if (revision) assertGitRevisionStillCurrent(revision);
 
     if (args.reportJson) writeFileSync(args.reportJson, JSON.stringify(result.report.json, null, 2) + "\n");
     if (args.reportMarkdown) writeFileSync(args.reportMarkdown, result.report.markdown);
@@ -568,7 +602,10 @@ function runInit(args: Args): ExitCode {
 
   try {
     for (const action of plan.actions) {
-      if (action.path === "incidents/") mkdirSync(action.path, { recursive: true });
+      if (action.path === ".gitignore") {
+        const existing = isFile(action.path) ? readFileSync(action.path, "utf8") : "";
+        writeFileSync(action.path, gitignoreWithBundleRules(existing), "utf8");
+      }
       else if (action.path === "package.json" && isFile(action.path)) {
         writeFileSync(action.path, mergePackageScripts(readFileSync(action.path, "utf8")), "utf8");
       }

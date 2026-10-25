@@ -73,10 +73,6 @@ function stringsOf(value: unknown, problems: string[]): string[] {
   return out;
 }
 
-function findStep(capture: MultiStepCapture, title: string): MultiStepStepEvidence | undefined {
-  return capture.steps.find((s) => s.title === title);
-}
-
 function firstJson(...values: unknown[]): unknown {
   for (const value of values) {
     if (value !== null && value !== undefined) return value;
@@ -95,7 +91,10 @@ export function extractTransaction(capture: MultiStepCapture): MultiStepTransact
   }));
 
   // ---- account: ONE unique value reused through the transaction ----
-  const login = findStep(capture, "login");
+  // The first request step establishes the session; the last one books.
+  const login = capture.steps.find((step) => step.requests.length > 0);
+  const loginTitle = login?.title ?? "";
+  const book = [...capture.steps].reverse().find((step) => step.requests.length > 0);
   const loginBody = login?.requests[0]?.responseBody ?? null;
   const accountFromLogin = stringsOf(loginBody, problems).length ? (isPlainObject(loginBody) ? (typeof loginBody.account === "string" ? loginBody.account : null) : null) : null;
   const accountSites: string[] = [];
@@ -136,7 +135,7 @@ export function extractTransaction(capture: MultiStepCapture): MultiStepTransact
     problems.push(`account relationship inconsistent: ${accountValues.size} distinct account values appear across the required account sites — exactly one unique account identity is required`);
   }
   if (accountFromLogin) {
-    accountSites.push("login.response.body.account");
+    accountSites.push(`${loginTitle}.response.body.account`);
     for (const step of capture.steps) {
       for (let i = 0; i < step.requests.length; i++) {
         const request = step.requests[i];
@@ -151,7 +150,7 @@ export function extractTransaction(capture: MultiStepCapture): MultiStepTransact
         } else if (stringsOf(reqBody, problems).includes(accountFromLogin)) {
           accountSites.push(`${step.title}[${i}].request.body.account`);
         }
-        if (stringsOf(request.responseBody, problems).includes(accountFromLogin) && !(step.title === "login" && i === 0)) {
+        if (stringsOf(request.responseBody, problems).includes(accountFromLogin) && step !== login) {
           accountSites.push(`${step.title}[${i}].response.body.account`);
         }
       }
@@ -195,7 +194,7 @@ export function extractTransaction(capture: MultiStepCapture): MultiStepTransact
       else if (isPlainObject(value)) for (const [key, item] of Object.entries(value)) walk(item, `${path}.${key}`, visit, depth + 1);
     };
     const allowed = (path: string, text: string): boolean => {
-      if (/^login\[\d+\]\.response\.body\.token$/.test(path) && text === tokenFromLogin) return true;
+      if (path === `${loginTitle}[0].response.body.token` && text === tokenFromLogin) return true;
       if (/\.request\.headers\.authorization$/.test(path) && text === `Bearer ${tokenFromLogin}`) return true;
       return false;
     };
@@ -233,7 +232,7 @@ export function extractTransaction(capture: MultiStepCapture): MultiStepTransact
     if (rawOccurrences !== null && rawOccurrences !== 3) {
       problems.push("MULTISTEP_TOKEN_RELATIONSHIP_INVALID");
     }
-    tokenSites.unshift("login.response.body.token");
+    tokenSites.unshift(`${loginTitle}.response.body.token`);
     if (bearerCount === 0) {
       problems.push("token relationship missing: the login token never appears in an Authorization header");
     } else if (inconsistent) {
@@ -250,7 +249,6 @@ export function extractTransaction(capture: MultiStepCapture): MultiStepTransact
   }
 
   // ---- slot: request body vs response body of the booking step ----
-  const book = findStep(capture, "book 09:30") ?? capture.steps.find((s) => s.requests.some((r) => /\/api\/book$/.test(r.path ?? "")));
   let slot: MultiStepTransaction["slot"] = null;
   if (book) {
     const request = book.requests[0];
@@ -279,9 +277,9 @@ export function extractTransaction(capture: MultiStepCapture): MultiStepTransact
   let version: MultiStepTransaction["version"] = null;
   if (isPlainObject(loginBody) && typeof loginBody.version === "number") {
     const value = loginBody.version as number;
-    const sites = ["login.response.body.version"];
+    const sites = [`${loginTitle}.response.body.version`];
     for (const step of capture.steps) {
-      if (step.title === "login") continue;
+      if (step === login) continue;
       for (const request of step.requests) {
         const body = request.responseBody;
         if (!isPlainObject(body)) continue;
@@ -299,7 +297,7 @@ export function extractTransaction(capture: MultiStepCapture): MultiStepTransact
   return { steps, account, token, slot, version, problems: [...new Set(problems)] };
 }
 
-/** The four canonical requests of the real transaction, from evidence. */
+/** The ordered request sequence of the captured transaction, from evidence. */
 export function requestSequence(capture: MultiStepCapture): Array<{ step: string; request: TransactionRequest }> {
   const out: Array<{ step: string; request: TransactionRequest }> = [];
   for (const step of capture.steps) {

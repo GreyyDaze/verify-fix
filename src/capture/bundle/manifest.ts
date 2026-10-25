@@ -4,7 +4,7 @@
 
 import { parseInventory, parseProjectInventory } from "../../evidence/assertion/inventory.ts";
 import { fnv1a } from "../../evidence/assertion/id.ts";
-import type { ApiRecording, AssertionInventory } from "../../types.ts";
+import type { ApiRecording, AssertionInventory, MultistepScenario, MultistepWitness, MultistepWitnessShape } from "../../types.ts";
 import type { ChecklyCheck, CheckResult, CheckResultSummary, ErrorGroup, PlaywrightResultError, RootCauseAnalysis } from "../checkly/types.ts";
 import { stripAnsi, type TraceExtract } from "../trace/trace-to-har.ts";
 import type { HarEntry } from "../trace/har-types.ts";
@@ -13,7 +13,7 @@ import { classifyRca } from "./rca-mode.ts";
 import { parseApiCheckProject } from "../../checks/api/model.ts";
 import type { MultiStepCapture } from "../../checks/multistep/normalize.ts";
 import { parseMultiStepScript } from "../../checks/multistep/source.ts";
-import { MULTISTEP_DETECTION_MODE } from "../../execution/scene/modes.ts";
+import { multistepDetectionMode } from "../../execution/scene/modes.ts";
 import type { MeasureResult } from "./measure.ts";
 import type { ProtectedPolicyEnvelope } from "../../policy/requirements.ts";
 import type { DeterminismV3, FailurePoint, ManifestV3, OverlappingRun, ResultRef, SceneV3 } from "./types.ts";
@@ -54,6 +54,8 @@ export interface ManifestInputs {
   recordings: { failing: string | null; passing: string | null; bodies: string; apiFailing?: string | null; apiPassing?: string | null; multistepFailing?: string | null; multistepPassing?: string | null };
   /** capture problems per side when Multistep evidence could not be sanitized (→ UNCERTAIN) */
   multistep?: { failing: { problems: string[] } | null; passing: { problems: string[] } | null } | null;
+  /** Derived from the sanitized failing capture by the caller; falls back to `failing.multistep`. */
+  scenario?: MultistepScenario | null;
   assets: ManifestV3["provenance"]["assets"];
   apiCalls: ManifestV3["provenance"]["apiCalls"];
   accountId: string;
@@ -485,6 +487,189 @@ export function detectMultiStepFailurePoint(
   return { action, request: null, assertion, dependency };
 }
 
+function responseObject(value: unknown): Record<string, unknown> | null {
+  if (typeof value === "string" && value.length <= 1024 * 1024) {
+    try { return responseObject(JSON.parse(value)); } catch { return null; }
+  }
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function booleanLeaves(value: unknown, path: string[] = []): Array<{ path: string[]; value: boolean }> {
+  if (typeof value === "boolean") return [{ path, value }];
+  const object = responseObject(value);
+  if (!object) return [];
+  const out: Array<{ path: string[]; value: boolean }> = [];
+  for (const [key, child] of Object.entries(object)) out.push(...booleanLeaves(child, [...path, key]));
+  return out;
+}
+
+/**
+ * Derive the bundle scenario from the captured Multistep evidence.
+ *
+ * Routes, methods and step titles come from the recording, never from a
+ * constant. The detection mutation is admitted only when the failed step made
+ * exactly one HTTP-200 request whose response has exactly one boolean leaf:
+ * that leaf is flipped (true → false or false → true). Anything else is
+ * underivable and yields null, which the loader treats as UNCERTAIN rather
+ * than inventing a route or field.
+ */
+export function deriveMultiStepScenario(capture: MultiStepCapture | null | undefined): MultistepScenario | null {
+  if (!capture || capture.steps.length < 2) return null;
+  const routes: MultistepScenario["routes"] = [];
+  for (const step of capture.steps) {
+    if (step.requests.length === 0) continue;
+    if (step.requests.length !== 1) return null;
+    const request = step.requests[0]!;
+    if (!request.method || !request.path || !request.method.match(/^[A-Z]{2,16}$/)
+      || !request.path.startsWith("/") || request.path.includes("?") || request.path.includes("#")
+      || request.queryKeys.length > 0) return null;
+    routes.push({
+      method: request.method, path: request.path, step: step.title,
+      ...(request.requestHeaders.authorization !== undefined ? { auth: true } : {}),
+    });
+  }
+  if (routes.length === 0) return null;
+  const stepTitles = capture.steps.map((step) => step.title);
+  if (new Set(stepTitles).size !== stepTitles.length) return null;
+
+  const failed = capture.steps.find((step) => step.status === "failed");
+  if (!failed || failed.requests.length !== 1) return null;
+  const request = failed.requests[0]!;
+  if (!request.method || !request.path || request.status !== 200) return null;
+  const leaves = booleanLeaves(request.responseBody);
+  // The detection mutation must turn the captured assertion's expected value
+  // into its negation. A recorded `false` cannot be the original stale-field
+  // incident: the repaired field would already be failing on its own.
+  if (leaves.length !== 1 || leaves[0]!.value !== true) return null;
+  const leaf = leaves[0]!;
+  const slot = findSlot(request.requestBody) ?? findSlot(request.responseBody) ?? undefined;
+  // The failure response proves where the transaction fields now live. When
+  // the mutated leaf sits under a nested object, a top-level field of the same
+  // name in that object is the same contract field moved, so the scenario can
+  // declare the move without knowing any application field name in advance.
+  const repair = derivedFieldMoves(request.responseBody, leaf.path);
+  const witness = multistepWitness(routes, capture.steps);
+  return {
+    kind: "multistep",
+    routes,
+    stepTitles,
+    mutation: {
+      method: request.method,
+      path: request.path,
+      jsonPath: leaf.path,
+      expected: leaf.value,
+      replace: !leaf.value,
+    },
+    ...(slot ? { slot } : {}),
+    ...(repair.length ? { repair } : {}),
+    ...(witness ? { witness } : {}),
+  };
+}
+
+type WitnessStep = {
+  title: string;
+  requests: Array<{ method: string | null; path: string | null; requestBody: unknown; responseBody: unknown }>;
+};
+
+function witnessShape(value: unknown, depth = 0): MultistepWitnessShape | null {
+  if (depth > 8) return null;
+  if (value === null) return { kind: "null" };
+  if (typeof value === "string") return { kind: "string" };
+  if (typeof value === "number") return { kind: "number" };
+  if (typeof value === "boolean") return { kind: "boolean" };
+  if (Array.isArray(value)) {
+    if (value.length > 512) return null;
+    const first = value.length ? witnessShape(value[0], depth + 1) : null;
+    if (value.some((item) => JSON.stringify(witnessShape(item, depth + 1)) !== JSON.stringify(first))) return null;
+    return { kind: "array", item: first };
+  }
+  if (typeof value !== "object") return null;
+  const fields: Record<string, MultistepWitnessShape> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (!/^[A-Za-z_$][A-Za-z0-9_$-]{0,63}$/.test(key)) return null;
+    const shape = witnessShape(child, depth + 1);
+    if (!shape) return null;
+    fields[key] = shape;
+  }
+  return { kind: "object", fields };
+}
+
+/** Values-free structure and scalar equalities of the recorded transaction. */
+export function multistepWitness(routes: MultistepScenario["routes"], steps: WitnessStep[]): MultistepWitness | null {
+  const responses: MultistepWitnessShape[] = [];
+  const leaves: Array<{ ref: { route: number; where: "request" | "response"; path: string[] }; key: string }> = [];
+  const collect = (value: unknown, route: number, where: "request" | "response", path: string[]): void => {
+    if (path.length > 8) return;
+    if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      if (value === null || value === "" || value === undefined) return;
+      leaves.push({ ref: { route, where, path }, key: `${typeof value}:${JSON.stringify(value)}` });
+      return;
+    }
+    if (Array.isArray(value) || typeof value !== "object") return;
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if (/^[A-Za-z_$][A-Za-z0-9_$-]{0,63}$/.test(key)) collect(child, route, where, [...path, key]);
+    }
+  };
+  for (let i = 0; i < routes.length; i++) {
+    const step = steps.find((item) => item.title === routes[i]!.step);
+    const request = step?.requests[0];
+    if (!request) return null;
+    const shape = witnessShape(request.responseBody);
+    if (!shape || shape.kind !== "object") return null;
+    responses.push(shape);
+    collect(request.responseBody, i, "response", []);
+    if (request.requestBody !== null && request.requestBody !== undefined) collect(request.requestBody, i, "request", []);
+  }
+  const groups = new Map<string, Array<{ route: number; where: "request" | "response"; path: string[] }>>();
+  for (const leaf of leaves) {
+    const group = groups.get(leaf.key) ?? [];
+    group.push(leaf.ref);
+    groups.set(leaf.key, group);
+  }
+  const equalities: MultistepWitness["equalities"] = [];
+  for (const group of groups.values()) {
+    for (let i = 1; i < group.length && equalities.length < 64; i++) {
+      equalities.push({ left: group[0]!, right: group[i]! });
+    }
+  }
+  return { responses, equalities };
+}
+
+/** Field moves proven by the recorded response shape: for each top-level
+ * `body.X`, if the mutation's parent object also carries `X`, the contract
+ * field moved from `body.X` to `body.<parent>.X`. */
+function derivedFieldMoves(body: unknown, jsonPath: string[]): Array<{ from: string; to: string }> {
+  const parentPath = jsonPath.slice(0, -1);
+  if (parentPath.length === 0) return [];
+  const root = responseObject(body);
+  if (!root) return [];
+  const parent = parentPath.reduce<Record<string, unknown> | null>((value, key) => {
+    const child = value?.[key];
+    return child !== null && typeof child === "object" && !Array.isArray(child)
+      ? child as Record<string, unknown> : null;
+  }, root);
+  if (!parent) return [];
+  const prefix = parentPath.join(".");
+  const moves: Array<{ from: string; to: string }> = [];
+  for (const key of Object.keys(parent)) {
+    if (key === parentPath[0]) continue;
+    moves.push({ from: `body.${key}`, to: `body.${prefix}.${key}` });
+    moves.push({ from: `typeof body.${key}`, to: `typeof body.${prefix}.${key}` });
+  }
+  return moves;
+}
+
+function findSlot(value: unknown): string | null {
+  if (typeof value === "string") return /^\d{2}:\d{2}$/.test(value) ? value : null;
+  const object = responseObject(value);
+  if (!object) return null;
+  for (const child of Object.values(object)) {
+    const found = findSlot(child);
+    if (found) return found;
+  }
+  return null;
+}
+
 export function detectTargetResolution(check: ChecklyCheck, sources: Array<{ path: string; content: string }>): ManifestV3["target"]["resolution"] {
   const url = check.request?.url ?? "";
   if (/\{\{\s*ENVIRONMENT_URL\s*\}\}/.test(url)) return "handlebars";
@@ -730,6 +915,12 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   const failureAssertions = assertionsForFailure(inventory, failurePoint);
   const apiCheck = check.checkType === "API" && Boolean(failing?.apiRecording ?? passing?.apiRecording);
   const multistepCheck = check.checkType === "MULTI_STEP";
+  // Only the failing recording can justify a detection mutation. Without it
+  // (healthy baseline or unreadable evidence) the scenario is omitted and the
+  // loader records MULTISTEP_SCENARIO_INVALID instead of guessing.
+  const scenario = multistepCheck
+    ? input.scenario ?? deriveMultiStepScenario(failing?.multistep ?? null)
+    : null;
   // Multistep provenance artifacts: the sanitized structured recording when
   // captured, otherwise the recorded Checkly result itself — never a HAR that
   // does not exist.
@@ -798,7 +989,9 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
     // and no dependency rule supplied by a manifest can drive its body.
     // Other check types retain their generic injection semantics.
     const injectRule = multistepCheck
-      ? MULTISTEP_DETECTION_MODE // remote v3 projection must independently admit the nested outcome
+      ? scenario
+        ? multistepDetectionMode(scenario) // remote v3 projection must independently admit the mutation
+        : "inject:<multistep scenario unavailable>"
       : apiCheck
         ? passing?.apiRecording
           ? "replay:passing.api.json"
@@ -812,8 +1005,8 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
       sceneId: "detection",
       type: "DETECTION",
       mode: injectRule as SceneV3["mode"],
-      state: multistepCheck
-        ? "the remotely bound nested booking response is locally mutated from confirmed true to false (HTTP 200); the repaired hard assertion must fail inside book 09:30"
+      state: multistepCheck && scenario
+        ? `the remotely bound response is locally mutated at ${scenario.mutation.jsonPath.join(".")} (HTTP 200); the repaired hard assertion must fail inside ${scenario.routes.at(-1)?.step ?? "the failing step"}`
         : apiCheck
           ? "the last known-good API response is replayed; a repair for the renamed field MUST fail and must not accept both contracts"
           : req
@@ -972,6 +1165,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
     failurePoint,
     recordings: input.recordings,
     multistep: input.multistep ?? null,
+    ...(scenario ? { scenario } : {}),
     scenes,
     assertions: inventory,
     envAssumptions,

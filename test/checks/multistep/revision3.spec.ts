@@ -683,8 +683,11 @@ test("rev3/source: every request URL must provably derive from process.env.ENVIR
     "  await test.step('login', async () => { await request.get(`${origin}/api/x`) })",
     "})",
   ].join("\n"));
-  assert.deepEqual(derived.errors, ["request URL is not exactly an approved environment origin followed by one fixed route — UNCERTAIN before execution"]);
+  // Route approval is bundle-scenario evidence, not a hardcoded path list:
+  // the source gate proves one fixed canonical path derived from the origin.
+  assert.deepEqual(derived.errors, []);
   assert.equal(derived.requests.length, 1);
+  assert.equal(derived.requests[0]!.route, "/api/x");
   assert.equal(derived.requests[0]!.urlTemplate, "`${origin}/api/x`");
 
   // validation-wrapper flow (the canonical shape): origin = wrap(env)

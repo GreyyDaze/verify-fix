@@ -7,10 +7,12 @@ import type { CheckResultSummary } from "../../capture/checkly/types.ts";
 import type { MultiStepRecording } from "./capture.ts";
 import { failurePointFromRecording, matchesRemoteMultiStepBinding } from "./binding.ts";
 import { parseMultiStepProject } from "./source.ts";
-import { knownRoute, knownStepTitle, MULTISTEP_ROUTES } from "./routes.ts";
+import { knownRoute } from "./routes.ts";
 import { multiStepSourcePath } from "./files.ts";
 import { recordedNestedBookingConfirmed } from "./shape.ts";
-import { MULTISTEP_DETECTION_MODE } from "../../execution/scene/modes.ts";
+import { multistepDetectionMode } from "../../execution/scene/modes.ts";
+import { validateMultistepScenario } from "../../capture/bundle/scenario.ts";
+import type { MultistepScenario } from "../../types.ts";
 import { MULTISTEP_CHECK_NAME, storedMultiStepIdentityProblem } from "./identity.ts";
 import { isSyntacticallyValidRegion, trustedMultistepScope } from "./trusted-scope.ts";
 
@@ -65,7 +67,7 @@ function ref(input: ResultRef | null): ResultRef | null {
 
 function sceneProjection(scene: SceneV3, manifest: ManifestV3,
   available: { failing: boolean; passing: boolean }, point: FailurePoint | null,
-  failingRecording: MultiStepRecording | null): SceneV3 | null {
+  failingRecording: MultiStepRecording | null, scenario: MultistepScenario | null): SceneV3 | null {
   if (!["HEALTHY", "REPRODUCTION", "DETECTION"].includes(scene.type)
     || scene.sceneId !== (scene.type === "HEALTHY" ? "healthy-live"
       : scene.type === "REPRODUCTION" ? "reproduction" : "detection")) return null;
@@ -85,12 +87,14 @@ function sceneProjection(scene: SceneV3, manifest: ManifestV3,
     if (scene.mode !== "live" && scene.mode !== "live-concurrent:2") return null;
     mode = scene.mode;
   } else {
-    const req = point?.request ?? point?.dependency;
-    const route = knownRoute(req?.path);
-    if (!route || route !== "/api/book" || !req || req.method !== "POST" || proof.kind !== "recorded"
-      || point?.request !== null || !point.assertion || scene.mode !== MULTISTEP_DETECTION_MODE
-      || !failingRecording || !recordedNestedBookingConfirmed(failingRecording.steps)) return null;
-    mode = MULTISTEP_DETECTION_MODE;
+    if (!scenario || !failingRecording || proof.kind !== "recorded"
+      || point?.request !== null || !point?.assertion) return null;
+    const req = point?.dependency;
+    if (!req || req.method !== scenario.mutation.method
+      || knownRoute(scenario, req.path) !== scenario.mutation.path) return null;
+    const expectedMode = multistepDetectionMode(scenario);
+    if (scene.mode !== expectedMode || !recordedNestedBookingConfirmed(scenario, failingRecording.steps)) return null;
+    mode = expectedMode;
   }
   const isDetection = scene.type === "DETECTION";
   return {
@@ -122,6 +126,7 @@ export function constrainMultiStepManifest(m: ManifestV3,
   const sourceText = primary ? sources.get(primary) : null;
   const sourceModel = primary && sourceText ? parseMultiStepProject(sources, primary) : null;
   const invalidIdentity = storedMultiStepIdentityProblem(m, sourceModel);
+  const scenario = validateMultistepScenario(m.scenario).scenario;
   const invalidAsset = m.provenance.assets.some((asset) => !ASSET_NAMES.has(asset.name)
     || (asset.type !== "local-asset" && asset.type !== "remote-asset"
       || asset.type === "remote-asset" && (asset.assetType !== "report" && asset.assetType !== "file"
@@ -146,7 +151,7 @@ export function constrainMultiStepManifest(m: ManifestV3,
   // into an incident scene. Nothing in the generic manifest can create one.
   const scenes = failing && !available.failing ? []
     : m.scenes.flatMap((scene) => sceneProjection(scene, m, available, point,
-      available.failing ? recordings.failing ?? null : null) ?? []);
+      available.failing ? recordings.failing ?? null : null, scenario) ?? []);
   const problems = (side: "failing" | "passing"): { problems: string[] } | null => {
     const selected = m.multistep?.[side]?.problems.filter((item) => /^MULTISTEP_[A-Z_]+$/.test(item)).slice(0, 16) ?? [];
     if (invalidAsset) selected.push("MULTISTEP_ASSET_TYPE_INVALID");
@@ -249,5 +254,8 @@ export function constrainMultiStepManifest(m: ManifestV3,
   // the same reason: without it the verifier cannot tell which other monitors
   // this check shares a project with, and would have to answer UNCERTAIN.
   projected.siblingMonitors = m.siblingMonitors;
+  // The bundle scenario is re-validated through the closed grammar before it is
+  // written; an invalid derivation is omitted and the loader fails closed.
+  if (scenario) projected.scenario = scenario;
   return projected;
 }

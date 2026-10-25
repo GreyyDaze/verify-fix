@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectProject, initConfirmation, initPackageScripts, isSafeRelativeTarget, mergePackageScripts, planInit } from "../../src/cli/init.ts";
+import { detectProject, gitignoreWithBundleRules, hasBundleIgnoreRules, initConfirmation, initPackageScripts, isSafeRelativeTarget, mergePackageScripts, planInit } from "../../src/cli/init.ts";
 
 function tempProject(files: Record<string, string> = {}): string {
   const dir = mkdtempSync(join(tmpdir(), "verify-fix-init-"));
@@ -48,15 +48,32 @@ test("init never reads an env file; it only reports that one exists", () => {
   assert.match(rendered, /NEVER read, parsed, copied, or stored/);
 });
 
-test("init plans a package.json script merge and an empty incidents/ directory", () => {
+test("init plans a package.json script merge and never creates an in-repo incidents dir", () => {
   const dir = tempProject({ "checkly.config.ts": CONFIG, "package.json": '{"name":"x","scripts":{"build":"next build"}}' });
   const plan = planInit(dir);
   const paths = plan.actions.map((action) => action.path);
   assert.ok(paths.includes("package.json"));
-  assert.ok(paths.includes("incidents/"));
-  // An existing incidents/ directory is left alone.
-  const withIncidents = tempProject({ "checkly.config.ts": CONFIG, "package.json": '{"name":"x"}', "incidents/.gitkeep": "" });
-  assert.equal(planInit(withIncidents).actions.some((action) => action.path === "incidents/"), false);
+  assert.ok(paths.includes(".gitignore"), "the bundle-ignore rules are planned");
+  assert.equal(paths.includes("incidents/"), false, "proof is never placed inside the project");
+});
+
+test("init adds bundle-ignore rules without losing existing .gitignore lines", () => {
+  const merged = gitignoreWithBundleRules("node_modules/\n*.log\n");
+  assert.match(merged, /node_modules\//);
+  assert.match(merged, /^\*\.log$/m);
+  assert.match(merged, /^bundle-\*\/$/m);
+  assert.match(merged, /^incidents\/$/m);
+  assert.equal(gitignoreWithBundleRules(merged), merged, "idempotent");
+  assert.equal(hasBundleIgnoreRules(merged), true);
+  assert.equal(hasBundleIgnoreRules(""), false);
+});
+
+test("init skips the .gitignore action when the rules are already present", () => {
+  const dir = tempProject({ "checkly.config.ts": CONFIG, "package.json": '{"name":"x"}',
+    "incidents/.gitkeep": "", ".gitignore": "bundle-*/\nincidents/\n" });
+  const plan = planInit(dir);
+  assert.equal(plan.project.hasBundleIgnore, true);
+  assert.equal(plan.actions.some((action) => action.path === ".gitignore"), false);
 });
 
 test("init does not touch the Checkly config or any check source", () => {
@@ -76,6 +93,8 @@ test("merging package scripts preserves existing scripts", () => {
   for (const key of Object.keys(initPackageScripts())) {
     assert.ok(parsed.scripts[key], `${key} is added`);
   }
+  // Proof not code: the capture script must not force a repo-local --out.
+  assert.doesNotMatch(parsed.scripts["verify:bundle"], /--out\s+\.\/incidents/);
 });
 
 test("merging package scripts twice is idempotent", () => {
@@ -85,7 +104,8 @@ test("merging package scripts twice is idempotent", () => {
 
 test("init is a no-op when verify-fix is already a dependency", () => {
   const dir = tempProject({ "checkly.config.ts": CONFIG,
-    "package.json": '{"name":"x","devDependencies":{"verify-fix":"^0.1.0"}}', "incidents/.gitkeep": "" });
+    "package.json": '{"name":"x","devDependencies":{"verify-fix":"^0.1.0"}}', "incidents/.gitkeep": "",
+    ".gitignore": "bundle-*/\nincidents/\n" });
   const plan = planInit(dir);
   assert.equal(plan.project.hasVerifyFixInstalled, true);
   assert.deepEqual(plan.actions, []);

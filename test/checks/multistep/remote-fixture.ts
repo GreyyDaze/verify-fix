@@ -88,6 +88,27 @@ export async function syntheticRemoteBundle() {
   const manifestPath = join(outDir, "manifest.json");
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
   manifest.protectedRequirements = policy.envelope;
+  // This fixture is deliberately the recorded nested-response incident: the
+  // source's flat field names moved into `booking.*`, including the renamed
+  // session version. That aliasing is contract data, so it is declared here
+  // rather than inferred by product code.
+  const scenario = manifest.scenario as Record<string, unknown>;
+  scenario.stepTitles = ["login", "session", "slots", "book 09:30", "confirm transaction"];
+  scenario.repair = [
+    { from: "body.confirmed", to: "body.booking.confirmed" },
+    { from: "body.booking", to: "body.booking.status" },
+    { from: "typeof body.account", to: "typeof body.booking.account" },
+    { from: "body.account", to: "body.booking.account" },
+    { from: "body.slot", to: "body.booking.slot" },
+    { from: "body.version", to: "body.booking.sessionVersion" },
+  ];
+  scenario.writes = [
+    { from: "write:bookingAccount:=:body.account as string", to: "write:bookingAccount:=:body.booking.account as string" },
+    { from: "write:bookingSlot:=:body.slot as string", to: "write:bookingSlot:=:body.booking.slot as string" },
+    { from: "write:bookingVersion:=:body.version as number", to: "write:bookingVersion:=:body.booking.sessionVersion as number" },
+    { from: "write:bookingConfirmed:=:body.confirmed === true", to: "write:bookingConfirmed:=:body.booking.confirmed === true" },
+    { from: "write:bookingResult:=:body.booking as string", to: "write:bookingResult:=:body.booking.status as string" },
+  ];
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
   const bundle = loadBundle(outDir).bundle;
   if (!bundle.protectedRequirements) throw new Error("synthetic fixture policy did not reload");

@@ -155,6 +155,99 @@
     "failing": null,
     "passing": null
   },
+  "scenario": {
+    "kind": "multistep",
+    "routes": [
+      {
+        "method": "POST",
+        "path": "/api/login",
+        "step": "login"
+      },
+      {
+        "method": "GET",
+        "path": "/api/session",
+        "step": "session",
+        "auth": true
+      },
+      {
+        "method": "GET",
+        "path": "/api/slots",
+        "step": "slots"
+      },
+      {
+        "method": "POST",
+        "path": "/api/book",
+        "step": "book 09:30",
+        "auth": true
+      }
+    ],
+    "stepTitles": [
+      "login",
+      "session",
+      "slots",
+      "book 09:30",
+      "confirm transaction"
+    ],
+    "mutation": {
+      "method": "POST",
+      "path": "/api/book",
+      "jsonPath": [
+        "booking",
+        "confirmed"
+      ],
+      "expected": true,
+      "replace": false
+    },
+    "slot": "09:30",
+    "repair": [
+      {
+        "from": "body.confirmed",
+        "to": "body.booking.confirmed"
+      },
+      {
+        "from": "body.booking",
+        "to": "body.booking.status"
+      },
+      {
+        "from": "typeof body.account",
+        "to": "typeof body.booking.account"
+      },
+      {
+        "from": "body.account",
+        "to": "body.booking.account"
+      },
+      {
+        "from": "body.slot",
+        "to": "body.booking.slot"
+      },
+      {
+        "from": "body.version",
+        "to": "body.booking.sessionVersion"
+      }
+    ],
+    "writes": [
+      {
+        "from": "write:bookingAccount:=:body.account as string",
+        "to": "write:bookingAccount:=:body.booking.account as string"
+      },
+      {
+        "from": "write:bookingSlot:=:body.slot as string",
+        "to": "write:bookingSlot:=:body.booking.slot as string"
+      },
+      {
+        "from": "write:bookingVersion:=:body.version as number",
+        "to": "write:bookingVersion:=:body.booking.sessionVersion as number"
+      },
+      {
+        "from": "write:bookingConfirmed:=:body.confirmed === true",
+        "to": "write:bookingConfirmed:=:body.booking.confirmed === true"
+      },
+      {
+        "from": "write:bookingResult:=:body.booking as string",
+        "to": "write:bookingResult:=:body.booking.status as string"
+      }
+    ]
+  },
   "scenes": [
     {
       "sceneId": "healthy-live",

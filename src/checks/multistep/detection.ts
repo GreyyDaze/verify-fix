@@ -5,7 +5,7 @@
 import { loadBundle } from "../../capture/bundle/load.ts";
 import { sameBoundedData } from "./rebind.ts";
 import type { Bundle, Scene } from "../../types.ts";
-import { MULTISTEP_DETECTION_MODE } from "../../execution/scene/modes.ts";
+import { multistepDetectionMode } from "../../execution/scene/modes.ts";
 import type { MultiStepFailureAssertion } from "./capture.ts";
 import { validMultiStepStoredRecording } from "./recording-schema.ts";
 import { readBoundedBundleFile } from "./files.ts";
@@ -29,7 +29,8 @@ export function isTrustedMultiStepDetection(value: unknown): value is TrustedMul
 export function trustedMultiStepDetection(bundle: Bundle, scene: Scene): TrustedMultiStepDetection | null {
   if (bundle.schemaVersion !== "v3" || bundle.check.checkType !== "MULTI_STEP"
     || scene.type !== "DETECTION" || scene.sceneId !== "detection"
-    || scene.mode !== MULTISTEP_DETECTION_MODE || scene.verdict.mustFail !== true) return null;
+    || !bundle.scenario || scene.mode !== multistepDetectionMode(bundle.scenario)
+    || scene.verdict.mustFail !== true) return null;
   try {
     const recordPath = "recordings/failing.multistep.json";
     const bytes = readBoundedBundleFile(bundle.dir, recordPath, 2 * 1024 * 1024);
@@ -55,12 +56,11 @@ export function trustedMultiStepDetection(bundle: Bundle, scene: Scene): Trusted
     const recording: unknown = JSON.parse(bytes);
     if (!validMultiStepStoredRecording(recording, "failing")
       || !recording.binding.failureAssertion
-      || !recordedNestedBookingConfirmed(recording.steps)
+      || !recordedNestedBookingConfirmed(bundle.scenario, recording.steps)
       || recording.binding.resultId !== scene.verdict.provenance.runId
       || recording.binding.failureAssertion?.id !== failure.id
       || recording.binding.failureAssertion?.line !== failure.line
-      || recording.binding.failureAssertion?.subject !== "body.confirmed"
-      || recording.binding.failureAssertion?.repairedSubject !== "body.booking.confirmed") return null;
+      || recording.binding.failureAssertion?.step !== failure.step) return null;
     const proof = Object.freeze({ failureAssertion: Object.freeze({ ...recording.binding.failureAssertion }) });
     minted.add(proof);
     return proof;

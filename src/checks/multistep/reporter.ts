@@ -17,8 +17,7 @@ export const MAX_REPORTER_AUDIT_BYTES = 256 * 1024;
 export const TRUSTED_REQUEST_REPORTER = `
 'use strict'
 const fs = require('node:fs')
-const ROUTES = new Set(['/api/login', '/api/session', '/api/slots', '/api/book'])
-const STEPS = new Set(['login', 'session', 'slots', 'book 09:30', 'confirm transaction'])
+const PATH_RE = /^\\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/
 module.exports = class VerifyFixRequestReporter {
   constructor() { this.requests = []; this.overflow = false }
   onStepBegin(_test, _result, step) {
@@ -27,13 +26,14 @@ module.exports = class VerifyFixRequestReporter {
     let route = '<unknown-route>', originMatches = false, hasQuery = true
     try {
       const url = new URL(step.params.url)
-      route = ROUTES.has(url.pathname) ? url.pathname : route
+      route = PATH_RE.test(url.pathname) && !url.pathname.startsWith('//') ? url.pathname : route
       originMatches = url.origin === process.env.ENVIRONMENT_URL
       hasQuery = url.search !== '' || url.hash !== ''
     } catch { /* invalid URL is unjudgeable, not serialized */ }
     let parent = step.parent
     while (parent && parent.category !== 'test.step') parent = parent.parent
-    const title = parent && STEPS.has(parent.title) ? parent.title : '<unknown-step>'
+    const title = parent && typeof parent.title === 'string' && parent.title.length > 0 && parent.title.length <= 256
+      ? parent.title : '<unknown-step>'
     this.requests.push({
       method: step.params.method === 'GET' || step.params.method === 'POST' ? step.params.method : 'OTHER',
       path: route, step: title, originMatches, hasQuery,
@@ -46,7 +46,8 @@ module.exports = class VerifyFixRequestReporter {
 `;
 
 /** The pipe is untrusted input until every field matches the strict schema. */
-export function parseReporterAudit(text: string): ReporterRequestEvidence[] | null {
+export function parseReporterAudit(text: string,
+  scenario?: { routes: Array<{ path: string }>; stepTitles: string[] } | null): ReporterRequestEvidence[] | null {
   if (!text || Buffer.byteLength(text, "utf8") > MAX_REPORTER_AUDIT_BYTES) return null;
   try {
     const parsed: unknown = JSON.parse(text);
@@ -62,8 +63,10 @@ export function parseReporterAudit(text: string): ReporterRequestEvidence[] | nu
         || !(["GET", "POST", "OTHER"] as unknown[]).includes(req.method)
         || typeof req.path !== "string" || typeof req.step !== "string"
         || typeof req.originMatches !== "boolean" || typeof req.hasQuery !== "boolean"
-        || !(["/api/login", "/api/session", "/api/slots", "/api/book", "<unknown-route>"] as string[]).includes(req.path)
-        || !(["login", "session", "slots", "book 09:30", "confirm transaction", "<unknown-step>"] as string[]).includes(req.step)) return null;
+        || (req.path !== "<unknown-route>" && !/^\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/.test(req.path))
+        || (req.step !== "<unknown-step>" && (req.step.length < 1 || req.step.length > 256 || /[\u0000-\u001f]/.test(req.step)))
+        || (scenario ? !scenario.routes.some((route) => route.path === req.path)
+          || !scenario.stepTitles.includes(req.step as string) : false)) return null;
       requests.push({ method: req.method as ReporterRequestEvidence["method"], path: req.path, step: req.step, originMatches: req.originMatches, hasQuery: req.hasQuery });
     }
     return requests;

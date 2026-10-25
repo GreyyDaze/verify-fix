@@ -11,6 +11,7 @@ import { buildContract } from "../../../src/evidence/contract/contract.ts";
 import { evaluateMultiStepPolicy } from "../../../src/checks/multistep/policy.ts";
 import { runMultiStepSandbox, bridgeReporterMismatch } from "../../../src/checks/multistep/executor.ts";
 import { MAX_REPORTER_AUDIT_BYTES, parseReporterAudit } from "../../../src/checks/multistep/reporter.ts";
+import { scenarioLayout } from "../../../src/checks/multistep/layout.ts";
 import { checkEnv } from "../../../src/execution/sandbox/env.ts";
 import { emptyExecutionCost, type Bundle, type ExperimentExecutor, type Scene } from "../../../src/types.ts";
 import { verify } from "../../../src/verify.ts";
@@ -46,6 +47,33 @@ function bundle(): Bundle {
       environmentVariables: ["ENVIRONMENT_URL", "MULTISTEP_USER_US_EAST_1", "MULTISTEP_USER_EU_WEST_1"] },
     recordedOrigin: null, dir: WEB, playwright: null, api: null,
     multistep: { kind: "failing", steps: ["login", "session", "slots", "book 09:30"], problems: [] },
+    scenario: {
+      kind: "multistep",
+      routes: [
+        { method: "POST", path: "/api/login", step: "login" },
+        { method: "GET", path: "/api/session", step: "session", auth: true },
+        { method: "GET", path: "/api/slots", step: "slots" },
+        { method: "POST", path: "/api/book", step: "book 09:30", auth: true },
+      ],
+      stepTitles: ["login", "session", "slots", "book 09:30", "confirm transaction"],
+      mutation: { method: "POST", path: "/api/book", jsonPath: ["booking", "confirmed"], expected: true, replace: false },
+      slot: "09:30",
+      repair: [
+        { from: "body.confirmed", to: "body.booking.confirmed" },
+        { from: "body.booking", to: "body.booking.status" },
+        { from: "typeof body.account", to: "typeof body.booking.account" },
+        { from: "body.account", to: "body.booking.account" },
+        { from: "body.slot", to: "body.booking.slot" },
+        { from: "body.version", to: "body.booking.sessionVersion" },
+      ],
+      writes: [
+        { from: "write:bookingAccount:=:body.account as string", to: "write:bookingAccount:=:body.booking.account as string" },
+        { from: "write:bookingSlot:=:body.slot as string", to: "write:bookingSlot:=:body.booking.slot as string" },
+        { from: "write:bookingVersion:=:body.version as number", to: "write:bookingVersion:=:body.booking.sessionVersion as number" },
+        { from: "write:bookingConfirmed:=:body.confirmed === true", to: "write:bookingConfirmed:=:body.booking.confirmed === true" },
+        { from: "write:bookingResult:=:body.booking as string", to: "write:bookingResult:=:body.booking.status as string" },
+      ],
+    },
     scenes: [scene], envAssumptions: [{ id: "target-resolution", text: "synthetic", verified: true }],
     determinism: { targetRuns: 20, achieved: 20, sequentialPassRate: 1, overlapFailRate: 0, lastVerifiedAt: "2026-09-27" },
     runBudget: { maxPerScene: 1, used: 0 }, oracleProvenance: { recorded: 0, codeDerived: 1 },
@@ -226,7 +254,9 @@ test("dedicated reporter audit uses an exact bounded schema, not arbitrary stdou
   assert.equal(parseReporterAudit(JSON.stringify({ ...audit, rawPath: "/private/payload" })), null);
   assert.equal(parseReporterAudit(JSON.stringify({ ...audit, requests: [{ ...audit.requests[0]!, rawUrl: "https://secret.invalid" }] })), null);
   assert.equal(parseReporterAudit(JSON.stringify({ ...audit, overflow: true })), null);
-  assert.equal(parseReporterAudit(JSON.stringify({ ...audit, requests: [{ ...audit.requests[0]!, path: "/secret/value" }] })), null);
+  const routes = { routes: [{ path: "/api/login" }], stepTitles: ["login"] };
+  assert.equal(parseReporterAudit(JSON.stringify(audit), routes)?.length, 1);
+  assert.equal(parseReporterAudit(JSON.stringify({ ...audit, requests: [{ ...audit.requests[0]!, path: "/secret/value" }] }), routes), null);
   assert.equal(parseReporterAudit("x".repeat(MAX_REPORTER_AUDIT_BYTES + 1)), null);
 });
 
@@ -248,6 +278,7 @@ test("bridge traffic and JSON requests cannot replace a missing dedicated report
   assert.ok(passing.ok);
   if (!passing.ok) return;
   const filtered = structuredClone(passing.capture);
+  const passingLayout = scenarioLayout(passing.capture);
   // JSON reporter implementations can filter their pw:api request children;
   // the dedicated fd-3 audit is still mandatory. A forged passing assertion
   // cannot make a bridge-observed 401 into a passing HTTP status.
@@ -257,9 +288,9 @@ test("bridge traffic and JSON requests cannot replace a missing dedicated report
     step: ["login", "session", "slots", "book 09:30"][i]!, originMatches: true, hasQuery: false,
   }));
   const actual401 = bridge.map((item, i) => i === 3 ? { ...item, status: 401 } : item);
-  assert.match(bridgeReporterMismatch(actual401, filtered, goodAudit) ?? "", /HTTP status contradicts the required 200/);
+  assert.match(bridgeReporterMismatch(actual401, filtered, goodAudit, undefined, false, passingLayout) ?? "", /HTTP status contradicts the required 200/);
   const noAuth = bridge.map((item, i) => i === 3 ? { ...item, authorization: false } : item);
-  assert.match(bridgeReporterMismatch(noAuth, filtered, goodAudit) ?? "", /authorization-site mismatch/);
+  assert.match(bridgeReporterMismatch(noAuth, filtered, goodAudit, undefined, false, passingLayout) ?? "", /authorization-site mismatch/);
 });
 
 test("required steps in an unused helper or dead branch are FAILED; an unresolved step title stays UNCERTAIN", () => {

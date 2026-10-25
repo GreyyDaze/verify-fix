@@ -51,14 +51,16 @@ import { trustedMultiStepDetection } from "./detection.ts";
 import { SEED_MODULE } from "../../execution/sandbox/runner.ts";
 import { normalizeMultiStepCapture, type MultiStepCapture } from "./normalize.ts";
 import { startOriginBridge, type BridgeRequestEvidence, type OriginBridge } from "./origin-bridge.ts";
-import { knownRoute, knownStepTitle, routeFromUrl, MULTISTEP_ROUTES, MULTISTEP_STEP_TITLES, UNKNOWN_ROUTE } from "./routes.ts";
+import { knownRoute, knownStepTitle, routeFromUrl, UNKNOWN_ROUTE } from "./routes.ts";
+import { scenarioLayout, sourceLayout } from "./layout.ts";
+import type { MultistepEvidenceScenario, MultistepScenario } from "../../types.ts";
 import { multiStepSourceClosureProblem, multiStepSourcePath } from "./files.ts";
 import { evaluateMultiStepPolicy } from "./policy.ts";
 import { canonicalMultiStepScriptProblem, parseMultiStepProject } from "./source.ts";
 import { MAX_REPORTER_AUDIT_BYTES, parseReporterAudit, TRUSTED_REQUEST_REPORTER, type ReporterRequestEvidence } from "./reporter.ts";
 import { parseMultiStepScript } from "./source.ts";
 import { AUTOMATION_BYPASS_INPUT, trustedAutomationBypass, trustedRegionalAccounts } from "./accounts.ts";
-import { multiStepDetectionShapeProblems, multiStepShapeProblems } from "./shape.ts";
+import { multiStepDetectionShapeProblems, multiStepShapeProblems, multistepWitnessProblems } from "./shape.ts";
 import { boundDetectionFailureAssertion, boundFailureAssertion } from "./binding.ts";
 import { deriveRegionalAccountMapping } from "./region-account-mapping.ts";
 
@@ -97,6 +99,8 @@ export interface MultiStepSandboxOptions {
   originalFiles?: Record<string, string>;
   /** Only the revalidated remote failing-side detection scene can opt in. */
   detection?: { bundle: Bundle; scene: Scene };
+  /** Route/step layout the check under test must implement (bundle scenario). */
+  scenario?: MultistepEvidenceScenario;
   seed?: number;
 }
 
@@ -140,11 +144,11 @@ export function resolvePlaywrightCli(projectDir: string): string {
   }
 }
 
-function traceOf(capture: MultiStepCapture): TraceStep[] {
+function traceOf(capture: MultiStepCapture, layout: MultistepEvidenceScenario): TraceStep[] {
   return capture.steps.map((step, index) => ({
     index,
     kind: "step" as const,
-    what: `test.step '${knownStepTitle(step.title) ?? "<unknown-step>"}': ${step.status}${step.error ? " — step error (details omitted)" : ""}`,
+    what: `test.step '${knownStepTitle(layout, step.title) ?? "<unknown-step>"}': ${step.status}${step.error ? " — step error (details omitted)" : ""}`,
     outcome: step.status === "passed" ? ("ok" as const) : step.status === "failed" ? ("failed" as const) : ("skipped" as const),
   }));
 }
@@ -201,29 +205,33 @@ export function bridgeReporterMismatch(
   bridge: BridgeRequestEvidence[], capture: MultiStepCapture, audit: ReporterRequestEvidence[] | null = null,
   trustedOrigin?: string,
   trustedDetection = false,
+  scenario?: MultistepEvidenceScenario,
 ): string | null {
+  const layout = scenario ?? scenarioLayout(capture);
   const jsonRequests = capture.steps.flatMap((s) => s.requests.map((r) => ({
     method: r.method ?? "OTHER",
-    path: r.url ? routeFromUrl(r.url) ?? UNKNOWN_ROUTE : knownRoute(r.path) ?? UNKNOWN_ROUTE,
+    path: r.url ? routeFromUrl(layout, r.url) ?? UNKNOWN_ROUTE : knownRoute(layout, r.path) ?? UNKNOWN_ROUTE,
     status: r.status,
-    step: knownStepTitle(s.title) ?? "<unknown-step>",
+    step: knownStepTitle(layout, s.title) ?? "<unknown-step>",
     originMatches: Boolean(r.url && (() => { try { return !trustedOrigin || new URL(r.url).origin === trustedOrigin; } catch { return false; } })()),
     hasQuery: Boolean(r.url && (() => { try { return new URL(r.url).search !== ""; } catch { return true; } })()),
   })));
   if (bridge.length === 0) return "the HTTPS origin bridge recorded zero requests — no execution traffic can PASS";
-  const required = Object.entries(MULTISTEP_ROUTES).map(([path, method], index) => ({ path, method, step: MULTISTEP_STEP_TITLES[index] }));
-  if (multiStepShapeProblems(capture, true).length) return "bridge/reporter step sequence is not the canonical execution";
-  if (bridge.length !== 4 || capture.steps.length !== (capture.kind === "failing" ? 4 : 5)) {
-    return "bridge/reporter transaction is not the exact executed four-request sequence";
-  }
-  if (jsonRequests.length !== 0 && (jsonRequests.length !== 4
-    || (trustedDetection ? multiStepDetectionShapeProblems(capture) : multiStepShapeProblems(capture)).length)) {
-    return "bridge/reporter JSON response evidence is not the canonical transaction";
+  const required = layout.routes.map((route) => ({ path: route.path, method: route.method, step: route.step }));
+  if (multiStepShapeProblems(layout, capture, true).length) return "bridge/reporter step sequence is not the canonical execution";
+  if (bridge.length !== required.length || capture.steps.length !== (capture.kind === "failing" ? required.length : layout.stepTitles.length)) {
+    return `bridge/reporter transaction is not the exact executed ${required.length === 4 ? "four-request" : `${required.length}-request`} sequence`;
   }
   // The JSON reporter is advisory: Playwright normally filters pw:api steps
   // from it, and an untrusted CLI can print a forged JSON result. The trusted
   // fd-3 reporter is MANDATORY even when the JSON document lists requests.
   if (!audit || audit.length === 0) return "bridge/reporter dedicated request audit missing — no trustworthy execution evidence";
+  if (jsonRequests.length !== 0 && (jsonRequests.length !== required.length
+    || (trustedDetection
+      ? multiStepDetectionShapeProblems(layout as MultistepScenario, capture)
+      : [...multiStepShapeProblems(layout, capture), ...multistepWitnessProblems(layout, capture)]).length)) {
+    return "bridge/reporter JSON response evidence is not the canonical transaction";
+  }
   if (jsonRequests.length > 0 && (audit.length !== jsonRequests.length
     || audit.some((r, i) => r.method !== jsonRequests[i]?.method || r.path !== jsonRequests[i]?.path || r.step !== jsonRequests[i]?.step || !jsonRequests[i]?.originMatches))) {
     return "bridge/reporter JSON and request-audit evidence disagree — no trustworthy execution evidence";
@@ -233,7 +241,7 @@ export function bridgeReporterMismatch(
   for (let i = 0; i < bridge.length; i++) {
     const b = bridge[i]!;
     const r = reporter[i]!;
-    if (b.index !== i + 1 || !knownRoute(b.path) || !knownRoute(r.path) || b.hasQuery || r.hasQuery || r.originMatches !== true || r.step === "<unknown-step>") {
+    if (b.index !== i + 1 || !knownRoute(layout, b.path) || !knownRoute(layout, r.path) || b.hasQuery || r.hasQuery || r.originMatches !== true || r.step === "<unknown-step>") {
       return `bridge/reporter unrecognized route, origin, query or step at request ${i + 1} — no trustworthy execution evidence`;
     }
     if (b.method !== r.method) return `bridge/reporter method mismatch at request ${i + 1} — no trustworthy execution evidence`;
@@ -241,8 +249,8 @@ export function bridgeReporterMismatch(
     if (b.method !== required[i]!.method || b.path !== required[i]!.path || r.step !== required[i]!.step) {
       return `bridge/reporter transaction sequence mismatch at request ${i + 1} — no trustworthy execution evidence`;
     }
-    const expectedStep: Record<string, string> = { "/api/login": "login", "/api/session": "session", "/api/slots": "slots", "/api/book": "book 09:30" };
-    if (r.step !== expectedStep[r.path] || !capture.steps.some((s) => s.title === r.step)) {
+    const expected = layout.routes.find((route) => route.path === r.path);
+    if (!expected || r.step !== expected.step || !capture.steps.some((s) => s.title === r.step)) {
       return `bridge/reporter request-step mismatch at request ${i + 1} — no trustworthy execution evidence`;
     }
     // The dedicated reporter records requests on begin (before a response
@@ -261,7 +269,7 @@ export function bridgeReporterMismatch(
     if (!b.requestHeaderNames.includes("x-vercel-protection-bypass")) {
       return `bridge/reporter bypass header missing at request ${i + 1} — no protected target evidence`;
     }
-    const needsAuthorization = b.path === "/api/session" || b.path === "/api/book";
+    const needsAuthorization = layout.routes.find((route) => route.path === b.path)?.auth === true;
     if (b.authorization !== needsAuthorization) {
       return `bridge/reporter authorization-site mismatch at request ${i + 1} — no trustworthy execution evidence`;
     }
@@ -350,9 +358,10 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
   if (!browserFree.free) {
     return inconclusive("Multistep script uses browser APIs the adapter never launches — no trustworthy execution evidence");
   }
-  const projectModel = parseMultiStepProject(candidateFiles, checkFile);
-  const sourceModel = projectModel?.script ?? parseMultiStepScript(checkFile, checkSource, candidateFiles);
-  const canonicalProblem = canonicalMultiStepScriptProblem(sourceModel);
+  const runScenario = ctx.detection?.bundle.scenario ?? ctx.scenario ?? null;
+  const projectModel = parseMultiStepProject(candidateFiles, checkFile, runScenario);
+  const sourceModel = projectModel?.script ?? parseMultiStepScript(checkFile, checkSource, candidateFiles, runScenario);
+  const canonicalProblem = canonicalMultiStepScriptProblem(sourceModel, runScenario);
   // A direct adapter invocation may supply just the script. It still must
   // meet the independent canonical gate; the scene/verify entry points also
   // supply the construct and original tree for the full immutable policy.
@@ -362,8 +371,8 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
     return inconclusive("Multistep source is unsupported before execution (transaction policy unresolved) — no runner was started");
   }
   if (ctx.originalFiles) {
-    const original = parseMultiStepProject(new Map(Object.entries(ctx.originalFiles)), checkFile);
-    const policy = evaluateMultiStepPolicy(original, projectModel);
+    const original = parseMultiStepProject(new Map(Object.entries(ctx.originalFiles)), checkFile, runScenario);
+    const policy = evaluateMultiStepPolicy(original, projectModel, runScenario);
     if (policy.rejected || policy.uncertain) return inconclusive("Multistep recorded source policy rejects or cannot prove this candidate — no runner was started");
   }
   const detection = ctx.detection && ctx.originalFiles && ctx.checkFile === ctx.detection.bundle.check.file
@@ -374,7 +383,7 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
   }
 
   const trustedSourceFiles = new Map(Object.entries(ctx.originalFiles ?? ctx.files));
-  const trustedModel = parseMultiStepProject(trustedSourceFiles, checkFile);
+  const trustedModel = parseMultiStepProject(trustedSourceFiles, checkFile, runScenario);
   let trustedLocations = trustedModel?.construct?.locations ?? [];
   const declaredKeys = trustedModel?.construct?.environmentKeys ?? [];
   let trustedMapping: Record<string, string> | null = null;
@@ -434,7 +443,8 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
     // Unbridged HTTPS runs cannot prove bridge↔reporter request agreement.
     let environmentOrigin: string;
     try {
-      bridge = await startOriginBridge(ctx.baseUrl);
+      bridge = await startOriginBridge(ctx.baseUrl,
+        runScenario ? runScenario.routes.map((route) => route.path) : sourceLayout(sourceModel).routes.map((route) => route.path));
       environmentOrigin = bridge.origin;
     } catch {
       return inconclusive("Multistep HTTPS origin bridge could not be established safely — no runner was started");
@@ -577,14 +587,16 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
     }
 
     const capture = normalizeMultiStepCapture({ testResults: childResult.stdout, reporterOnly: true });
-    const audit = parseReporterAudit(childResult.audit);
+    const layout = ctx.detection?.bundle.scenario ?? ctx.scenario
+      ?? (sourceLayout(sourceModel).routes.length ? sourceLayout(sourceModel) : scenarioLayout(capture));
+    const audit = parseReporterAudit(childResult.audit, runScenario);
     const reporterEvidence = audit ?? [];
     const proxyEvidence: BridgeRequestEvidence[] = bridge ? [...bridge.evidence] : [];
     const diagnostics = { stderrBytes: childResult.stderrBytes, timedOut: childResult.timedOut };
 
     if (bridge && bridge.evidence.some((e) => e.forwardError)) {
       return inconclusive("Multistep HTTPS origin bridge could not reach the upstream target (forward error) — no trustworthy execution evidence", {
-        trace: traceOf(capture),
+        trace: traceOf(capture, layout),
         capture,
         exitCode: childResult.code,
         browserProcesses,
@@ -595,13 +607,13 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
       });
     }
     if (capture.problems.length > 0 || capture.steps.length === 0) {
-      return inconclusive("Multistep runner produced no admissible JSON step evidence", { trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses, environmentOrigin, proxyEvidence, reporterEvidence, diagnostics });
+      return inconclusive("Multistep runner produced no admissible JSON step evidence", { trace: traceOf(capture, layout), capture, exitCode: childResult.code, browserProcesses, environmentOrigin, proxyEvidence, reporterEvidence, diagnostics });
     }
     // Bridged execution: bridge evidence must corroborate the reporter.
     // Zero bridge requests with reporter traffic is UNCERTAIN by construction.
-    const mismatch = bridgeReporterMismatch(bridge.evidence, capture, audit, bridge.origin, Boolean(detection));
+    const mismatch = bridgeReporterMismatch(bridge.evidence, capture, audit, bridge.origin, Boolean(detection), layout);
     if (mismatch) {
-      return inconclusive(mismatch, { trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses, environmentOrigin: bridge.origin, proxyEvidence, reporterEvidence, diagnostics });
+      return inconclusive(mismatch, { trace: traceOf(capture, layout), capture, exitCode: childResult.code, browserProcesses, environmentOrigin: bridge.origin, proxyEvidence, reporterEvidence, diagnostics });
     }
     if (capture.kind === "failing") {
       // The reporter's last failed line must be the one uniquely protected
@@ -614,16 +626,16 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
         : { script: sourceModel, errors: sourceModel.errors };
       const bound = detection
         ? boundDetectionFailureAssertion(failureSteps, source, checkFile, detection.failureAssertion)
-        : boundFailureAssertion(failureSteps, source, checkFile, true);
+        : boundFailureAssertion(failureSteps, source, checkFile, true, runScenario);
       if (!bound || childResult.code === 0) {
         return inconclusive("Multistep failing assertion is not uniquely source-bound to the protected book contract", {
-          trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses, environmentOrigin,
+          trace: traceOf(capture, layout), capture, exitCode: childResult.code, browserProcesses, environmentOrigin,
           proxyEvidence, reporterEvidence, diagnostics,
         });
       }
     } else if (childResult.code !== 0) {
       return inconclusive("Multistep passing reporter disagrees with runner exit status", {
-        trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses, environmentOrigin,
+        trace: traceOf(capture, layout), capture, exitCode: childResult.code, browserProcesses, environmentOrigin,
         proxyEvidence, reporterEvidence, diagnostics,
       });
     }
@@ -631,14 +643,14 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
       return inconclusive(browserProcesses === null
         ? "Multistep browser-process measurement unavailable — no zero-browser claim"
         : "Multistep browser process observed — API-only execution not proven",
-      { trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses, environmentOrigin, proxyEvidence, reporterEvidence, diagnostics });
+      { trace: traceOf(capture, layout), capture, exitCode: childResult.code, browserProcesses, environmentOrigin, proxyEvidence, reporterEvidence, diagnostics });
     }
     // A failing-side recording or manifest swapped while the candidate ran
     // cannot support a conclusive detection, even if the reporter/proxy agreed
     // with the earlier copy. Reopen the complete remote-bound bundle again.
     if (ctx.detection && !trustedMultiStepDetection(ctx.detection.bundle, ctx.detection.scene)) {
       return inconclusive("Multistep detection provenance changed during execution", {
-        trace: traceOf(capture), capture, exitCode: childResult.code, browserProcesses,
+        trace: traceOf(capture, layout), capture, exitCode: childResult.code, browserProcesses,
         environmentOrigin, proxyEvidence, reporterEvidence, diagnostics,
       });
     }
@@ -650,7 +662,7 @@ export async function runMultiStepSandbox(ctx: MultiStepSandboxOptions): Promise
       passed,
       inconclusive: false,
       reason: null,
-      trace: traceOf(capture),
+      trace: traceOf(capture, layout),
       capture,
       exitCode: childResult.code,
       browserProcesses,

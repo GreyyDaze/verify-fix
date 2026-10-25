@@ -9,35 +9,70 @@ import { MULTISTEP_RECORDING_SCHEMA, type MultiStepRecording, type MultiStepReco
 import { validMultiStepStoredRecording } from "./recording-schema.ts";
 import { multiStepShapeProblems } from "./shape.ts";
 import type { MultiStepSourceModel } from "./source.ts";
+import { scenarioLayout } from "./layout.ts";
+import type { MultistepEvidenceScenario } from "../../types.ts";
 
 export type RemoteAssetProof = ManifestV3["provenance"]["assets"][number];
 export function digestBytes(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+function booleanLeafPath(value: unknown, path: string[] = [], depth = 0): string[] | null {
+  if (depth > 8) return null;
+  if (typeof value === "boolean") return path;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  let found: string[] | null = null;
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    const childPath = booleanLeafPath(child, [...path, key], depth + 1);
+    if (childPath) {
+      if (found) return null;
+      found = childPath;
+    }
+  }
+  return found;
+}
+
+function failedIndex(steps: MultiStepRecording["steps"]): number {
+  return steps.findIndex((step) => step.status === "failed");
+}
+
+function repairedSubjectFor(steps: MultiStepRecording["steps"]): string | null {
+  const index = failedIndex(steps);
+  const path = index < 0 ? null : booleanLeafPath(steps[index]?.requests[0]?.responseBody);
+  return path && path.length ? `body.${path.join(".")}` : null;
+}
+
 export function boundFailureAssertion(steps: MultiStepRecording["steps"],
   source: Pick<MultiStepSourceModel, "script" | "errors"> | null, file: string,
-  reporterOnly = false): MultiStepFailureAssertion | null {
-  if (source?.errors.length || !source?.script || source.script.file !== file
-    || file.split("/").at(-1) !== "multistep-booking.spec.ts") return null;
-  const book = steps[3];
-  if (!book || book.title !== "book 09:30" || book.status !== "failed" || book.error !== "ASSERTION_FAILED"
+  reporterOnly = false, scenario?: MultistepEvidenceScenario | null): MultiStepFailureAssertion | null {
+  if (source?.errors.length || !source?.script || source.script.file !== file) return null;
+  const index = failedIndex(steps);
+  const book = steps[index];
+  const repairedFor = (subject: string): string | null =>
+    scenario?.repair?.find((move) => move.from === subject)?.to ?? repairedSubjectFor(steps) ?? subject;
+  if (!book || book.error !== "ASSERTION_FAILED"
     || !Number.isSafeInteger(book.failureLine) || (book.failureLine ?? 0) < 1
     || (reporterOnly && book.requests.length === 0 ? false
-      : book.requests.length !== 1 || book.requests[0]!.method !== "POST"
-        || book.requests[0]!.path !== "/api/book" || book.requests[0]!.status !== 200)
+      : book.requests.length !== 1 || !book.requests[0]!.method || !book.requests[0]!.path
+        || book.requests[0]!.status !== 200)
     || (reporterOnly && book.assertions.length === 0 ? false
       : !book.assertions.some((a) => a.expected === true && a.actual !== true && a.passed !== true))) return null;
   const onLine = source.script.assertions.filter((a) => a.sourceLine === book.failureLine && a.stepTitle === book.title);
   // Exact source-coordinate match first — the local reporter always reports
   // the source line, and a stored recording was already re-based to it.
   const assertion = onLine[0];
+  // A reported line that lands on a DIFFERENT source assertion is a
+  // contradiction, not a runtime-coordinate offset. The bound assertion must
+  // also be the stale boolean proof the reporter actually recorded.
+  const failedEvidence = book.assertions.find((a) => a.expected === true && a.actual !== true && a.passed !== true);
   if (onLine.length === 1 && assertion) {
-    if (assertion.subject !== "body.confirmed" || assertion.matcher !== "toBe"
-      || assertion.target !== "true" || assertion.negated
-      || assertion.id !== assertionId("body.confirmed", "toBe", "true")) return null;
-    return { step: "book 09:30", line: assertion.sourceLine, id: assertion.id, subject: "body.confirmed",
-      repairedSubject: "body.booking.confirmed", matcher: "toBe", target: "true", negated: false };
+    if (!assertion.subject || !assertion.matcher || !assertion.target || assertion.negated
+      || assertion.id !== assertionId(assertion.subject, assertion.matcher, assertion.target)) return null;
+    if (!reporterOnly && (!failedEvidence || assertion.matcher !== "toBe" || assertion.target !== "true")) return null;
+    const repaired = repairedFor(assertion.subject);
+    if (!repaired) return null;
+    return { step: book.title, line: assertion.sourceLine, id: assertion.id, subject: assertion.subject,
+      repairedSubject: repaired, matcher: assertion.matcher, target: assertion.target, negated: false };
   }
   if (onLine.length > 0 || reporterOnly) return null;
   // Checkly 9.5.0 runtime coordinates: the scheduled runner reports the
@@ -50,18 +85,16 @@ export function boundFailureAssertion(steps: MultiStepRecording["steps"],
   // reporter's own expected=true / not-true / definitely-failed evidence.
   // Any reported line that lands on a different source assertion is still
   // rejected above; nothing here loosens the stale-assertion identity.
-  // Checkly 9.5.0 may omit the received value from a failed expect. After
-  // sanitization that is represented as null, so the hard failure proof is
-  // the failed step + expected=true assertion + the unique source assertion.
-  // Do not require a serialized "actual" value to be present.
   if (!book.assertions.some((a) => a.expected === true && a.actual !== true && a.passed !== true)) return null;
   const candidates = source.script.assertions.filter((a) => a.stepTitle === book.title
     && a.matcher === "toBe" && a.target === "true" && !a.negated);
   const stale = candidates[0];
-  if (candidates.length !== 1 || !stale || stale.subject !== "body.confirmed"
-    || stale.id !== assertionId("body.confirmed", "toBe", "true")) return null;
-  return { step: "book 09:30", line: stale.sourceLine, id: stale.id, subject: "body.confirmed",
-    repairedSubject: "body.booking.confirmed", matcher: "toBe", target: "true", negated: false };
+  if (candidates.length !== 1 || !stale || !stale.subject
+    || stale.id !== assertionId(stale.subject, stale.matcher, stale.target)) return null;
+  const repaired = repairedFor(stale.subject);
+  if (!repaired) return null;
+  return { step: book.title, line: stale.sourceLine, id: stale.id, subject: stale.subject,
+    repairedSubject: repaired, matcher: stale.matcher, target: stale.target, negated: false };
 }
 
 /** Local detection only: the ORIGINAL remote binding must already have been
@@ -72,16 +105,19 @@ export function boundDetectionFailureAssertion(steps: MultiStepRecording["steps"
   source: Pick<MultiStepSourceModel, "script" | "errors"> | null, file: string,
   protectedFailure: MultiStepFailureAssertion): boolean {
   if (source?.errors.length || !source?.script || source.script.file !== file
-    || file.split("/").at(-1) !== "multistep-booking.spec.ts"
-    || protectedFailure.subject !== "body.confirmed" || protectedFailure.repairedSubject !== "body.booking.confirmed"
-    || protectedFailure.step !== "book 09:30" || protectedFailure.negated
-    || protectedFailure.matcher !== "toBe" || protectedFailure.target !== "true"
-    || protectedFailure.id !== assertionId("body.confirmed", "toBe", "true")) return false;
-  const book = steps[3];
-  if (steps.length !== 4 || !book || book.title !== "book 09:30" || book.status !== "failed"
+    || !protectedFailure.subject || !protectedFailure.repairedSubject
+    || protectedFailure.negated || !protectedFailure.matcher || !protectedFailure.target
+    || protectedFailure.id !== assertionId(protectedFailure.subject, protectedFailure.matcher, protectedFailure.target)) return false;
+  const index = failedIndex(steps);
+  const book = steps[index];
+  // A reporter-only detection capture has no request records; the reporter
+  // already proves the step sequence, so only a routed capture is counted.
+  const routed = steps.some((step) => step.requests.length > 0);
+  if ((routed && steps.length !== scenarioLayout({ steps }).routes.length) || !book || book.status !== "failed"
+    || book.title !== protectedFailure.step
     || book.error !== "ASSERTION_FAILED" || !Number.isSafeInteger(book.failureLine) || (book.failureLine ?? 0) < 1
-    || (book.requests.length !== 0 && (book.requests.length !== 1 || book.requests[0]!.method !== "POST"
-      || book.requests[0]!.path !== "/api/book" || book.requests[0]!.status !== 200))
+    || (book.requests.length !== 0 && (book.requests.length !== 1 || !book.requests[0]!.method
+      || !book.requests[0]!.path || book.requests[0]!.status !== 200))
     || (book.assertions.length !== 0 && !book.assertions.some((a) => a.expected === true
       && a.actual !== true && a.passed !== true))) return false;
   const onLine = source.script.assertions.filter((a) => a.sourceLine === book.failureLine && a.stepTitle === book.title);
@@ -113,7 +149,7 @@ export function finalizeRemoteMultiStepRecording(draft: MultiStepRecordingDraft,
     && detail.stoppedAt === result.stoppedAt && detail.hasFailures === result.hasFailures
     && detail.hasErrors === result.hasErrors && result.hasErrors === false
     && (side === "failing" ? result.hasFailures === true : result.hasFailures === false);
-  if (!final || draft.kind !== side || multiStepShapeProblems(draft).length
+  if (!final || draft.kind !== side || multiStepShapeProblems(scenarioLayout(draft), draft).length
     || !result.stoppedAt || !Number.isFinite(Date.parse(result.startedAt)) || !Number.isFinite(Date.parse(result.stoppedAt))
     || !ctx.sourceModel?.script || ctx.sourceModel.errors.length || ctx.sourceModel.script.file !== ctx.sourceFile
     || asset.result !== side || asset.name !== "test-results.json" || asset.type !== "remote-asset"
@@ -125,8 +161,9 @@ export function finalizeRemoteMultiStepRecording(draft: MultiStepRecordingDraft,
   // A reported runtime line that matched no source assertion was re-based by
   // the fallback above: stored steps carry SOURCE coordinates so the offline
   // binding check replays the exact-line rule unchanged.
-  const steps = side === "failing" && failure !== null && draft.steps[3]?.failureLine !== failure.line
-    ? draft.steps.map((step, index) => index === 3 ? { ...step, failureLine: failure.line } : step)
+  const failed = failedIndex(draft.steps);
+  const steps = side === "failing" && failure !== null && failed >= 0 && draft.steps[failed]?.failureLine !== failure.line
+    ? draft.steps.map((step, index) => index === failed ? { ...step, failureLine: failure.line } : step)
     : draft.steps;
   const recording: MultiStepRecording = {
     schemaVersion: MULTISTEP_RECORDING_SCHEMA,
@@ -166,12 +203,15 @@ export function matchesRemoteMultiStepBinding(record: MultiStepRecording, ctx: O
 export function failurePointFromRecording(record: MultiStepRecording, file: string): FailurePoint | null {
   const b = record.binding;
   const fail = b.failureAssertion;
-  if (record.kind !== "failing" || !fail || b.sourceFile !== file || record.steps[3]?.requests[0]?.status !== 200) return null;
+  const index = failedIndex(record.steps);
+  const request = index < 0 ? undefined : record.steps[index]?.requests[0];
+  if (record.kind !== "failing" || !fail || b.sourceFile !== file || request?.status !== 200
+    || !request.method || !request.path) return null;
   return {
     action: { apiName: "test.step", title: fail.step, error: "ASSERTION_FAILED" },
     request: null,
     assertion: { file, line: fail.line, column: null, assertionId: fail.id },
-    dependency: { method: "POST", url: "https://recorded.invalid/api/book", path: "/api/book",
+    dependency: { method: request.method, url: `https://recorded.invalid${request.path}`, path: request.path,
       passingStatus: null, msBeforeStep: null, stepLine: fail.line, stepTitle: fail.step },
   };
 }

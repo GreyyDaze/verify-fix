@@ -29,6 +29,7 @@ import { parseMultiStepProject } from "../../checks/multistep/source.ts";
 import { deriveRegionalAccountMapping } from "../../checks/multistep/region-account-mapping.ts";
 import { isSyntacticallyValidRegion } from "../../checks/multistep/trusted-scope.ts";
 import { knownRoute } from "../../checks/multistep/routes.ts";
+import type { MultistepEvidenceScenario } from "../../types.ts";
 import { sceneExpected } from "../../evidence/contract/contract.ts";
 import { fnv1a } from "../../evidence/assertion/id.ts";
 import { effectiveConcurrency, needsTarget, parseMode, type ParsedMode } from "../scene/modes.ts";
@@ -227,6 +228,7 @@ export class SceneExecutor implements ExperimentExecutor {
         checkFile,
         seed,
         ...(detectionScene ? { detection: { bundle, scene: detectionScene } } : {}),
+        ...(bundle.scenario ? { scenario: bundle.scenario } : {}),
       });
       return { passed: out.passed, inconclusive: out.inconclusive, reason: out.reason, trace: out.trace, browserProcesses: out.browserProcesses };
     }
@@ -409,7 +411,8 @@ export class SceneExecutor implements ExperimentExecutor {
         const urls = await this.proxy.arm({ mode, target: this.target, runs: batchRuns, replayHar, replayBrowserAssetsFromTarget: replayBrowserAssets,
           failingHar, barrierTimeoutMs: this.barrierTimeoutMs,
           trustedMultiStepDetection: mode.kind === "multistep-detection"
-            ? trustedMultiStepDetection(bundle, scene) ?? undefined : undefined });
+            ? trustedMultiStepDetection(bundle, scene) ?? undefined : undefined,
+          ...(bundle.scenario ? { scenario: bundle.scenario } : {}) });
         const startedAt = Date.now();
         const settled = await Promise.all(
           urls.map((url, runIndex) => {
@@ -470,7 +473,7 @@ export class SceneExecutor implements ExperimentExecutor {
             return this.uncertain(scene, "Multistep browser process observed — API-only execution not proven", rep + 1, mergedTrace, environment);
           }
           const traffic = isMultiStep
-            ? runHits.slice(0, 4).map((hit) => `${hit.method === "GET" || hit.method === "POST" ? hit.method : "OTHER"} ${knownRoute(hit.path) ?? "<unknown-route>"} ${hit.status}`).join(", ")
+            ? runHits.slice(0, bundle.scenario?.routes.length ?? 4).map((hit) => `${hit.method === "GET" || hit.method === "POST" ? hit.method : "OTHER"} ${bundle.scenario && knownRoute(bundle.scenario, hit.path) || "<unknown-route>"} ${hit.status}`).join(", ")
             : summarize(runHits);
           push({ kind: "step", what: `${tag}${runHits.length} request(s) reached the proxy → ${runHits.length ? traffic : "none"}`, outcome: runHits.length ? "ok" : "skipped" });
           if (bundle.check.checkType === "MULTI_STEP") {
@@ -483,12 +486,11 @@ export class SceneExecutor implements ExperimentExecutor {
             return this.uncertain(scene, `${tag}no request reached ENVIRONMENT_URL — nothing was observed in this scene state`, rep + 1, mergedTrace, environment);
           }
           if (mode.kind === "multistep-detection") {
-            const expected = [["POST", "/api/login"], ["GET", "/api/session"],
-              ["GET", "/api/slots"], ["POST", "/api/book"]] as const;
-            if (runHits.length !== 4 || runHits.some((hit, i) => hit.ordinal !== i + 1
-              || hit.method !== expected[i]![0] || hit.path !== expected[i]![1]
-              || hit.status !== 200 || hit.source !== (i === 3 ? "injected" : "target"))) {
-              return this.uncertain(scene, `${tag}the fixed HTTP-200 nested booking mutation did not occur exactly once after three completed requests`,
+            const routes = bundle.scenario?.routes ?? [];
+            if (!routes.length || runHits.length !== routes.length || runHits.some((hit, i) => hit.ordinal !== i + 1
+              || hit.method !== routes[i]!.method || hit.path !== routes[i]!.path
+              || hit.status !== 200 || hit.source !== (i === routes.length - 1 ? "injected" : "target"))) {
+              return this.uncertain(scene, `${tag}the bundle scenario mutation did not occur exactly once after the preceding requests`,
                 rep + 1, mergedTrace, environment);
             }
           }
@@ -505,7 +507,7 @@ export class SceneExecutor implements ExperimentExecutor {
       costRow.repetitions += 1;
       observedOutcomes.push(repPassed ? "pass" : "fail");
       this.onRepetition?.({ sceneId: scene.sceneId, repetition: rep, checkPassed: repPassed,
-        hits: isMultiStep ? allHits.map((hit) => ({ ...hit, path: knownRoute(hit.path) ?? "<unknown-route>" })) : allHits });
+        hits: isMultiStep ? allHits.map((hit) => ({ ...hit, path: bundle.scenario && knownRoute(bundle.scenario, hit.path) || "<unknown-route>" })) : allHits });
       if (this.verbose) {
         console.error(`[scene] ${scene.sceneId} rep=${rep + 1}/${reps} concurrency=${concurrency} observed=${repPassed ? "pass" : "fail"} expected=${sceneExpected(scene).observed} hits=${allHits.length} (${environment})`);
       }

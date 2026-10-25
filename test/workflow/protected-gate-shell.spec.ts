@@ -49,13 +49,12 @@ for (const [phase, build, cleanup] of [
     const root = mkdtempSync(join(tmpdir(), `verify-fix-shell-${phase}-`));
     try {
       const githubEnv = join(root, "github-env");
-      const trustedPreview = join(root, "trusted", "incidents", "synthetic-preview");
-      mkdirSync(trustedPreview, { recursive: true });
-      writeFileSync(join(trustedPreview, "manifest.json"), JSON.stringify({ check: { checkType: "API" } }));
+      const bundleDir = join(root, "bundle");
+      mkdirSync(bundleDir, { recursive: true });
+      writeFileSync(join(bundleDir, "manifest.json"), JSON.stringify({ check: { checkType: "API" } }));
       const sha = "a".repeat(40);
       const url = "https://synthetic-deploy.invalid";
       const env = { ...synthetic, GITHUB_ENV: githubEnv, RUNNER_TEMP: root,
-        VERIFY_FIX_BUNDLE: "incidents/synthetic-preview",
         MULTISTEP_USER_US_EAST_1: "synthetic-multistep-east",
         MULTISTEP_USER_EU_WEST_1: "synthetic-multistep-west",
         TARGET_URL: url, TARGET_REVISION: sha, VERIFIED_ID: "42", VERIFIED_SHA: sha, VERIFIED_URL: url,
@@ -116,26 +115,41 @@ for (const [phase, build, cleanup] of [
   });
 }
 
-test("Phase 7 bundle guard fails closed without an explicit reviewed path or on a legacy API bundle", () => {
+test("bundle guard fails closed without a configured identity or on a mismatched bundle", () => {
   const root = mkdtempSync(join(tmpdir(), "verify-fix-bundle-guard-"));
   try {
-    const bundle = join(root, "trusted", "incidents", "synthetic-phase7-fixture");
+    const bundle = join(root, "bundle");
     mkdirSync(bundle, { recursive: true });
-    const legacy = { schemaVersion: "v3", check: { checkType: "API", file: "checks/availability.check.ts" },
-      recordings: { multistepFailing: null } };
-    writeFileSync(join(bundle, "manifest.json"), JSON.stringify(legacy));
-    const step = "Require a reviewed Phase 7 Multistep incident bundle";
-    const missing = run(step, root, { APPROVED_BUNDLE: "", VERIFY_FIX_BUNDLE: "incidents/slots-availability-api" });
+    const manifest = join(bundle, "manifest.json");
+    const step = "Require the captured bundle to match the configured check";
+    const identity = {
+      VERIFY_FIX_EXPECTED_CHECK_TYPE: "MULTI_STEP",
+      VERIFY_FIX_EXPECTED_CHECK_FILE: "checks/multistep-booking.spec.ts",
+      VERIFY_FIX_EXPECTED_LOGICAL_ID: "slots-booking-multistep",
+      VERIFY_FIX_EXPECTED_MULTISTEP_RECORDING: "recordings/failing.multistep.json",
+    };
+    // Unconfigured identity fails closed even with a valid manifest.
+    writeFileSync(manifest, JSON.stringify({ schemaVersion: "v3", check: { checkType: "MULTI_STEP" } }));
+    const missing = run(step, root, {});
     assert.notEqual(missing.status, 0);
-    const old = run(step, root, { APPROVED_BUNDLE: "incidents/synthetic-phase7-fixture",
-      VERIFY_FIX_BUNDLE: "incidents/synthetic-phase7-fixture" });
+    // A different check (legacy API shape) is rejected.
+    writeFileSync(manifest, JSON.stringify({ schemaVersion: "v3",
+      check: { checkType: "API", file: "checks/availability.check.ts" },
+      recordings: { multistepFailing: null } }));
+    const old = run(step, root, identity);
     assert.notEqual(old.status, 0);
-    writeFileSync(join(bundle, "manifest.json"), JSON.stringify({ schemaVersion: "v3",
+    // The configured identity and recording path pass.
+    writeFileSync(manifest, JSON.stringify({ schemaVersion: "v3",
       check: { checkType: "MULTI_STEP", file: "checks/multistep-booking.spec.ts", logicalId: "slots-booking-multistep" },
       recordings: { multistepFailing: "recordings/failing.multistep.json" } }));
-    const matchingShape = run(step, root, { APPROVED_BUNDLE: "incidents/synthetic-phase7-fixture",
-      VERIFY_FIX_BUNDLE: "incidents/synthetic-phase7-fixture" });
+    const matchingShape = run(step, root, identity);
     assert.equal(matchingShape.status, 0, matchingShape.stderr?.toString());
+    // An optional recording pin still fails closed when it does not match.
+    writeFileSync(manifest, JSON.stringify({ schemaVersion: "v3",
+      check: { checkType: "MULTI_STEP", file: "checks/multistep-booking.spec.ts", logicalId: "slots-booking-multistep" },
+      recordings: { multistepFailing: "recordings/other.json" } }));
+    const wrongRecording = run(step, root, identity);
+    assert.notEqual(wrongRecording.status, 0);
     // This is deliberately only a shallow pre-approval *shape* guard. The
     // trusted verifier must still validate authenticated result provenance,
     // all files, the candidate source and the complete decision law.
@@ -145,13 +159,12 @@ test("Phase 7 bundle guard fails closed without an explicit reviewed path or on 
 test("approved Phase 7 preview receives two distinct Multistep identities only for a Multistep bundle", () => {
   const root = mkdtempSync(join(tmpdir(), "verify-fix-preview-multistep-"));
   try {
-    const bundle = join(root, "trusted", "incidents", "synthetic-preview-multistep");
+    const bundle = join(root, "bundle");
     mkdirSync(bundle, { recursive: true });
     writeFileSync(join(bundle, "manifest.json"), JSON.stringify({ check: { checkType: "MULTI_STEP" } }));
     const output = join(root, "github-env");
     const build = "Build protected runtime and deployment metadata";
     const env = { ...synthetic, RUNNER_TEMP: root, GITHUB_ENV: output,
-      VERIFY_FIX_BUNDLE: "incidents/synthetic-preview-multistep",
       MULTISTEP_USER_US_EAST_1: "synthetic-ms-east", MULTISTEP_USER_EU_WEST_1: "synthetic-ms-west",
       TARGET_URL: "https://synthetic-preview.invalid", TARGET_REVISION: "a".repeat(40),
       DEPLOYMENT_ID: "42", DEPLOYMENT_ENVIRONMENT: "Preview" };

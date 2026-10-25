@@ -6,7 +6,7 @@
 import type { Assertion, Bundle, OracleStrength, SceneObservation, SceneType, WeaknessScan } from "../../types.ts";
 import { parseMultiStepProject, type MultiStepScriptModel } from "../../checks/multistep/source.ts";
 import { trustedMultiStepDetection } from "../../checks/multistep/detection.ts";
-import { MULTISTEP_DETECTION_MODE } from "../../execution/scene/modes.ts";
+import { multistepDetectionMode } from "../../execution/scene/modes.ts";
 import type { ContractReport } from "../contract/contract.ts";
 
 export interface MutantResult {
@@ -91,8 +91,9 @@ export function assessAdequacy(input: AdequacyInput): AdequacyOutput {
 
   const missingEnvContext = b.envAssumptions.filter((a) => !a.verified).map((a) => a.id);
 
-  const detection = b.check.checkType === "MULTI_STEP" && b.multistep?.problems.length === 0
-    ? b.scenes.find((scene) => scene.type === "DETECTION" && scene.mode === MULTISTEP_DETECTION_MODE) : null;
+  const detectionMode = b.scenario ? multistepDetectionMode(b.scenario) : null;
+  const detection = b.check.checkType === "MULTI_STEP" && b.multistep?.problems.length === 0 && detectionMode
+    ? b.scenes.find((scene) => scene.type === "DETECTION" && scene.mode === detectionMode) : null;
   const sourceModel = detection && trustedMultiStepDetection(b, detection)
     ? parseMultiStepProject(new Map(Object.entries(b.files)), b.check.file) : null;
   const boundScript = sourceModel?.errors.length === 0 ? sourceModel.script : null;

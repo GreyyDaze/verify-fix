@@ -118,21 +118,35 @@ export function evaluateApiPolicy(
   if (candidateExact.length !== candidate.request.assertions.length) return fail("API contract assertions must remain exact; weaker operators are forbidden");
   if (candidate.request.assertions.length < original.request.assertions.length) return fail("one or more API contract assertions were removed");
 
+  // A captured response may legitimately move one scalar into a renamed field.
+  // The bundle, not a check-specific literal, decides which field that is:
+  // exactly one JSON-body assertion may disappear, and exactly one unused
+  // JSON-body assertion may replace it when operator and target are unchanged.
+  const originalFields = original.request.assertions.filter((assertion) =>
+    assertion.property === "jsonBody" && typeof assertion.selector === "string" && assertion.selector.length > 0);
+  const candidateFields = candidate.request.assertions.filter((assertion) =>
+    assertion.property === "jsonBody" && typeof assertion.selector === "string" && assertion.selector.length > 0);
+  const missingFields = originalFields.filter((field) =>
+    !candidateFields.some((candidateField) => assertionKey(candidateField) === assertionKey(field)));
+  const extraFields = candidateFields.filter((field) =>
+    !originalFields.some((originalField) => assertionKey(originalField) === assertionKey(field)));
+  let renamedField: { from: string; to: string; key: string } | null = null;
+  if (missingFields.length === 1 && extraFields.length === 1
+    && extraFields[0]!.operator === missingFields[0]!.operator
+    && extraFields[0]!.target === missingFields[0]!.target) {
+    renamedField = {
+      from: missingFields[0]!.selector!, to: extraFields[0]!.selector!,
+      key: assertionKey(missingFields[0]!),
+    };
+  }
+
   for (const required of original.request.assertions) {
-    if (required.property === "jsonBody" && required.selector === "availability") continue;
+    if (renamedField && assertionKey(required) === renamedField.key) continue;
     if (!candidate.request.assertions.some((assertion) => assertionKey(assertion) === assertionKey(required))) {
       return fail(`required assertion ${required.assertion.subject}.${required.operator}(${JSON.stringify(required.target)}) was removed or changed`);
     }
   }
-
-  const originalField = original.request.assertions.find((assertion) => assertion.property === "jsonBody" && assertion.selector === "availability");
-  if (originalField) {
-    const replacement = candidate.request.assertions.filter((assertion) =>
-      assertion.property === "jsonBody" && assertion.operator === originalField.operator && assertion.target === originalField.target,
-    );
-    if (replacement.length !== 1) return fail("the exact availability contract must have one exact field assertion");
-    if (replacement[0].selector !== originalField.selector) notes.push(`API contract field changed from ${originalField.selector} to ${replacement[0].selector}`);
-  }
+  if (renamedField) notes.push(`API contract field changed from ${renamedField.from} to ${renamedField.to}`);
 
   notes.push("API request method, route, query, body, setup boundary, and exact assertions are preserved");
   return { rejected: null, uncertain: null, notes, original, candidate };

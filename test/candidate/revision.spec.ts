@@ -7,6 +7,7 @@ import { afterEach, describe, test } from "node:test";
 import { loadBundle } from "../../src/capture/bundle/load.ts";
 import { incidentLogicalId, logicalEntries, resolveCheckIdentity } from "../../src/candidate/check-identity.ts";
 import {
+  assertGitRevisionStillCurrent,
   bindCandidateTarget,
   loadDeploymentMetadata,
   parseGitHubPullRequestUrl,
@@ -252,6 +253,90 @@ describe("pull-request identity and target binding", () => {
     });
     assert.equal(binding.exactRevision, true);
     assert.equal(binding.gateEligible, true);
+  });
+});
+
+describe("pinned git revision gate", () => {
+  test("an exact clean SHA is immutable and gate-eligible from any Git host", () => {
+    const root = repository();
+    mkdirSync(join(root, "web/checks"), { recursive: true });
+    writeFileSync(join(root, "web/checks/booking.spec.ts"), "test\n");
+    const base = commitAll(root);
+    const revision = snapshotLocalCandidate(join(root, "web"), base, base);
+    try {
+      assert.equal(revision.metadata.source, "git-revision");
+      assert.equal(revision.metadata.headSha, base);
+      assert.equal(revision.metadata.dirty, false);
+      const metadataDir = repository();
+      const metadataPath = join(metadataDir, "deployment.json");
+      writeFileSync(metadataPath, JSON.stringify({
+        provider: "kubernetes",
+        deploymentId: "rollout-42",
+        revision: base,
+        url: "https://preview.example/",
+      }));
+      const binding = bindCandidateTarget({
+        revision,
+        target: "https://preview.example",
+        targetRevision: base,
+        deployment: loadDeploymentMetadata(metadataPath),
+        executor: "hybrid",
+        cloudApproved: true,
+        allowForkCloud: false,
+      });
+      assert.equal(binding.scope, "revision");
+      assert.equal(binding.exactRevision, true);
+      assert.equal(binding.gateEligible, true);
+    } finally {
+      revision.dispose();
+    }
+  });
+
+  test("the pin must equal HEAD and the tree must be clean", () => {
+    const root = repository();
+    writeFileSync(join(root, "package.json"), "{}\n");
+    const base = commitAll(root);
+    assert.throws(() => snapshotLocalCandidate(root, base, "c".repeat(40)), /does not equal --candidate-revision/);
+    writeFileSync(join(root, "package.json"), "{\"changed\":true}\n");
+    assert.throws(() => snapshotLocalCandidate(root, base, base), /uncommitted changes/);
+  });
+
+  test("hybrid pinning needs cloud approval and an exact deployment binding", () => {
+    const root = repository();
+    writeFileSync(join(root, "package.json"), "{}\n");
+    const base = commitAll(root);
+    const revision = snapshotLocalCandidate(root, base, base);
+    try {
+      assert.throws(() => bindCandidateTarget({
+        revision, target: "https://preview.example", targetRevision: base, deployment: null,
+        executor: "hybrid", cloudApproved: false, allowForkCloud: false,
+      }), /requires --cloud-approved/);
+      const metadataDir = repository();
+      const metadataPath = join(metadataDir, "deployment.json");
+      writeFileSync(metadataPath, JSON.stringify({
+        provider: "fly", deploymentId: "d1", revision: "c".repeat(40), url: "https://preview.example",
+      }));
+      assert.throws(() => bindCandidateTarget({
+        revision, target: "https://preview.example", targetRevision: base,
+        deployment: loadDeploymentMetadata(metadataPath),
+        executor: "hybrid", cloudApproved: true, allowForkCloud: false,
+      }), /does not equal --target-revision/);
+    } finally {
+      revision.dispose();
+    }
+  });
+
+  test("a moving checkout is rejected after the run", () => {
+    const root = repository();
+    writeFileSync(join(root, "package.json"), "{}\n");
+    const base = commitAll(root);
+    const revision = snapshotLocalCandidate(root, base, base);
+    try {
+      git(root, "commit", "--allow-empty", "-qm", "moved");
+      assert.throws(() => assertGitRevisionStillCurrent(revision), /moved during verification/);
+    } finally {
+      revision.dispose();
+    }
   });
 });
 

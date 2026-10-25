@@ -16,7 +16,7 @@
 // never to PASS or FAIL. No LLM. No invented trace/HAR/video.
 
 import type { ObservationValue } from "../../types.ts";
-import { MULTISTEP_STEP_TITLES } from "./routes.ts";
+import { scenarioLayout } from "./layout.ts";
 import { multiStepShapeProblems } from "./shape.ts";
 import { bindRawEvidence, rawJsonUniqueKeys, rawReporterSchema, rawTreeBounded } from "./raw-evidence.ts";
 
@@ -629,10 +629,11 @@ export function normalizeMultiStepCapture(input: NormalizeMultiStepInput): Multi
     // Playwright may repeat the SAME failed assertion under result.errors.
     // A second/different error cannot be hidden behind four successful HTTP
     // responses or silently treated as the stale assertion's explanation.
+    const failedIndex = steps.findIndex((step) => step.status === "failed");
     for (const error of found.resultErrors) {
-      const echo: JsonStep = { title: "book 09:30", error };
-      if (failedSteps.length !== 1 || steps[3]?.status !== "failed"
-        || canonicalFailureLine(echo) !== steps[3].failureLine
+      const echo = { title: failedSteps[0]?.title ?? "", error } as JsonStep;
+      if (failedSteps.length !== 1 || failedIndex < 0
+        || canonicalFailureLine(echo) !== steps[failedIndex]!.failureLine
         || !/expect\s*\(/i.test(stepError(echo) ?? "")) {
         reporterErrors = 1;
         problems.push("MULTISTEP_RESULT_STATS_INVALID");
@@ -671,7 +672,10 @@ export function normalizeMultiStepCapture(input: NormalizeMultiStepInput): Multi
   const kind: MultiStepCapture["kind"] = failed || (stats !== null && stats.unexpected > 0) ? "failing" : "passing";
   const reporterStatus = reporterResults === 1 && resultStatuses.length === 1 && ["passed", "failed"].includes(resultStatuses[0]!)
     ? resultStatuses[0] as "passed" | "failed" : null;
-  if (steps.length > 0) problems.push(...multiStepShapeProblems({ kind, stats, reporterStatus, reporterErrors, steps }, input.reporterOnly === true));
+  if (steps.length > 0) {
+    const capture = { kind, stats, reporterStatus, reporterErrors, steps };
+    problems.push(...multiStepShapeProblems(scenarioLayout(capture), capture, input.reporterOnly === true));
+  }
   if (resultStatuses.length === 1 && resultStatuses[0] !== (kind === "failing" ? "failed" : "passed")) {
     problems.push("MULTISTEP_RESULT_STATS_INVALID");
   }

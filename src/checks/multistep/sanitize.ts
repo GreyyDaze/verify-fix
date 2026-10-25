@@ -6,7 +6,7 @@
 import type { MultiStepCapture, MultiStepRequestEvidence } from "./normalize.ts";
 import type { MultiStepTransaction } from "./transaction.ts";
 import { multiStepShapeProblems } from "./shape.ts";
-import { knownRoute, knownStepTitle, MULTISTEP_ROUTES, MULTISTEP_STEP_TITLES, routeFromUrl, type MultiStepRoute } from "./routes.ts";
+import { scenarioLayout } from "./layout.ts";
 
 export const ACCOUNT_LABEL = "<account>";
 export const TOKEN_LABEL = "<token>";
@@ -20,7 +20,7 @@ export type SanitizeResult =
 /** Fixed categories only. Never serialize a raw parser/asset/transaction error. */
 const KNOWN_PROBLEMS = new Set([
   "MULTISTEP_EVIDENCE_MISSING", "MULTISTEP_EVIDENCE_INVALID", "MULTISTEP_TOKEN_RELATIONSHIP_INVALID",
-  "MULTISTEP_ACCOUNT_RELATIONSHIP_INVALID", "MULTISTEP_SLOT_RELATIONSHIP_INVALID",
+  "MULTISTEP_ACCOUNT_RELATIONSHIP_INVALID", "MULTISTEP_SLOT_RELATIONSHIP_INVALID", "MULTISTEP_TRANSACTION_RELATIONSHIP_INVALID",
   "MULTISTEP_ARCHIVE_INVALID", "MULTISTEP_ASSET_UNSAFE", "MULTISTEP_SIDE_MISMATCH",
   "MULTISTEP_STEP_SEQUENCE_INVALID", "MULTISTEP_STEP_SCHEMA_INVALID", "MULTISTEP_REQUEST_SCHEMA_INVALID",
   "MULTISTEP_REQUEST_SEQUENCE_INVALID", "MULTISTEP_FAILURE_STEP_UNBOUND", "MULTISTEP_SANITIZATION_INCOMPLETE",
@@ -37,6 +37,8 @@ const KNOWN_PROBLEMS = new Set([
   "MULTISTEP_FAILING_RESULT_MISSING", "MULTISTEP_PASSING_RESULT_MISSING",
   "MULTISTEP_FAILING_RECORDING_MISSING", "MULTISTEP_PASSING_RECORDING_MISSING",
   "MULTISTEP_FAILING_RECORDING_INVALID", "MULTISTEP_PASSING_RECORDING_INVALID",
+  // Bundle-supplied scenario absent or rejected by the closed grammar.
+  "MULTISTEP_SCENARIO_INVALID",
 ]);
 /** True only for the exact fixed problem names above. Used by the taxonomy
  * test to prove every emitter spells a real category (no typo can masquerade
@@ -98,68 +100,61 @@ function redactAssertionValue(value: unknown): unknown {
   if (value === null || value === undefined) return null;
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return [0, 1, 200, 1500].includes(value) ? value : REDACTED;
-  if (typeof value === "string") return fixedString(value, ["CONFIRMED", "09:30", "string", "number", "object", "undefined"]) ?? REDACTED;
+  if (typeof value === "string") return fixedString(value, ["CONFIRMED", "string", "number", "object", "undefined"]) ?? REDACTED;
   // Arbitrary nested objects and strings may carry secrets. Only the type is
   // relevant to assertion failure attribution; the raw value is never stored.
   return REDACTED;
 }
 
-function safeBody(route: MultiStepRoute, side: "request" | "response", input: unknown, tx: MultiStepTransaction): Record<string, unknown> | null {
-  const body = payload(input);
-  if (!body) return null;
-  const out: Record<string, unknown> = {};
-  const account = (value: unknown): string | null => typeof value === "string" && value === tx.account?.value ? ACCOUNT_LABEL : null;
-  const slot = (value: unknown): string | null => fixedString(value, ["09:30"]);
-  const version = (value: unknown): number | null => integer(value);
-  const put = (key: string, value: unknown): void => { if (value !== null) out[key] = value; };
+const SAFE_WORDS = new Set(["CONFIRMED", "string", "number", "object", "undefined"]);
 
-  if (side === "request") {
-    if (route === "/api/login") put("account", account(body.account));
-    if (route === "/api/book") put("slot", slot(body.slot));
-    return Object.keys(out).length ? out : null;
+function safeScalar(value: unknown, tx: MultiStepTransaction): unknown {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return integer(value) ?? REDACTED;
+  if (typeof value === "string") {
+    if (value === tx.account?.value) return ACCOUNT_LABEL;
+    if (value === tx.token?.value) return TOKEN_LABEL;
+    if (tx.slot?.value && (value === tx.slot.value || /^\d{2}:\d{2}$/.test(value))) return tx.slot.value;
+    if (SAFE_WORDS.has(value) || /^[A-Z][A-Z0-9_]{0,31}$/.test(value)) return value;
+    return REDACTED;
   }
-  if (route === "/api/login") {
-    put("ok", boolean(body.ok));
-    put("account", account(body.account));
-    put("version", version(body.version));
-    if (body.token === tx.token?.value) out.token = TOKEN_LABEL;
-    // Deployment-reported `store: memory` is not storage proof; omit it
-    // entirely rather than projecting a self-asserted trust signal.
-  } else if (route === "/api/session") {
-    put("valid", boolean(body.valid));
-    put("account", account(body.account));
-    put("tokenVersion", version(body.tokenVersion));
-    put("currentVersion", version(body.currentVersion));
-  } else if (route === "/api/slots") {
-    put("delayMs", version(body.delayMs));
-    if (Array.isArray(body.slots)) out.slots = body.slots.slice(0, 64).map((s) => slot(s) ?? REDACTED);
-  } else if (route === "/api/book") {
-    put("confirmed", boolean(body.confirmed));
-    put("booking", fixedString(body.booking, ["CONFIRMED"]));
-    put("account", account(body.account));
-    put("slot", slot(body.slot));
-    put("version", version(body.version));
-    const booking = record(body.booking);
-    if (booking) {
-      const nested: Record<string, unknown> = {};
-      const add = (key: string, value: unknown): void => { if (value !== null) nested[key] = value; };
-      add("confirmed", boolean(booking.confirmed));
-      add("status", fixedString(booking.status, ["CONFIRMED"]));
-      add("account", account(booking.account));
-      add("slot", slot(booking.slot));
-      add("sessionVersion", version(booking.sessionVersion));
-      out.booking = nested;
-    }
-  }
-  return Object.keys(out).length ? out : null;
+  return REDACTED;
 }
 
-function safeRequest(request: MultiStepRequestEvidence, tx: MultiStepTransaction): MultiStepRequestEvidence | null {
+/** Rebuild a values-free JSON body. Unknown strings never survive; role
+ * values are replaced by fixed labels; keys are bounded identifiers. */
+function safeBody(input: unknown, tx: MultiStepTransaction): Record<string, unknown> | null {
+  const body = payload(input);
+  if (!body) return null;
+  const scrub = (value: unknown, depth: number): unknown => {
+    if (depth > 8) return REDACTED;
+    if (Array.isArray(value)) return value.slice(0, 64).map((item) => scrub(item, depth + 1));
+    const record = value !== null && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown> : null;
+    if (!record) return safeScalar(value, tx);
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(record).slice(0, 32)) {
+      if (!/^[A-Za-z_$][A-Za-z0-9_$-]{0,63}$/.test(key)) continue;
+      out[key] = scrub(child, depth + 1);
+    }
+    return out;
+  };
+  const rebuilt = scrub(body, 0);
+  return rebuilt !== null && typeof rebuilt === "object" && !Array.isArray(rebuilt) && Object.keys(rebuilt).length
+    ? rebuilt as Record<string, unknown> : null;
+}
+
+function safeRequest(request: MultiStepRequestEvidence, tx: MultiStepTransaction, route: { method: string; path: string }): MultiStepRequestEvidence | null {
   // URL/path must BOTH identify the same exact canonical route and contain no
   // query or fragment. The URL's origin is replaced wholesale.
-  const route = routeFromUrl(request.url);
-  if (!route || knownRoute(request.path) !== route || request.queryKeys.length !== 0
-    || request.method !== MULTISTEP_ROUTES[route]
+  let urlPath: string | null = null;
+  try {
+    const url = request.url ? new URL(request.url) : null;
+    urlPath = url && url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash
+      ? url.pathname : null;
+  } catch { return null; }
+  if (urlPath !== route.path || request.path !== route.path || request.queryKeys.length !== 0
+    || request.method !== route.method
     || request.status === null || !Number.isInteger(request.status) || request.status < 100 || request.status > 599) return null;
   const requestHeaders: Record<string, string> = {};
   if (Object.hasOwn(request.requestHeaders, "authorization")) {
@@ -170,17 +165,17 @@ function safeRequest(request: MultiStepRequestEvidence, tx: MultiStepTransaction
     requestHeaders["content-type"] = REDACTED;
   }
   return {
-    title: `${request.method} ${route}`,
+    title: `${request.method} ${route.path}`,
     method: request.method,
-    url: `${ORIGIN_LABEL}${route}`,
-    path: route,
+    url: `${ORIGIN_LABEL}${route.path}`,
+    path: route.path,
     queryKeys: [],
     requestHeaders,
-    requestBody: safeBody(route, "request", request.requestBody, tx),
+    requestBody: safeBody(request.requestBody, tx),
     status: request.status,
     statusText: null,
     responseHeaders: {},
-    responseBody: safeBody(route, "response", request.responseBody, tx),
+    responseBody: safeBody(request.responseBody, tx),
     expected: redactAssertionValue(request.expected),
     actual: redactAssertionValue(request.actual),
     timings: null,
@@ -193,7 +188,8 @@ export function sanitizeMultiStepCapture(capture: MultiStepCapture, transaction:
   // stats-less capture can never masquerade as a sequence problem.
   if (!capture.stats || integer(capture.stats.expected) === null || integer(capture.stats.unexpected) === null
     || integer(capture.stats.flaky) === null) return { ok: false, reason: "MULTISTEP_RESULT_STATS_INVALID" };
-  const shape = multiStepShapeProblems(capture);
+  const layout = scenarioLayout(capture);
+  const shape = multiStepShapeProblems(layout, capture);
   if (shape.length) return { ok: false, reason: shape[0]! };
   if (capture.problems.length) return { ok: false, reason: multistepProblemCategory(capture.problems[0]!) };
   if (transaction.problems.length) return { ok: false, reason: multistepProblemCategory(transaction.problems[0]!) };
@@ -203,25 +199,25 @@ export function sanitizeMultiStepCapture(capture: MultiStepCapture, transaction:
   const secrets = new Set([transaction.account.value, transaction.token.value]);
     // A wrong ordered-step count is a sequence problem, never the generic
   // EVIDENCE_INVALID fallback.
-  if (capture.steps.length < 4 || capture.steps.length > 5) return { ok: false, reason: "MULTISTEP_STEP_SEQUENCE_INVALID" };
+  if (capture.steps.length < 1 || capture.steps.length > 64) return { ok: false, reason: "MULTISTEP_STEP_SEQUENCE_INVALID" };
   const steps: MultiStepCapture["steps"] = [];
   for (let i = 0; i < capture.steps.length; i++) {
     const step = capture.steps[i]!;
-    const title = knownStepTitle(step.title);
-    if (step.status !== "passed" && step.status !== "failed" || step.assertions.length > 200) {
+    const title = step.title;
+    if (step.status !== "passed" && step.status !== "failed" || step.assertions.length > 200
+      || typeof title !== "string" || title.length === 0) {
       return { ok: false, reason: "MULTISTEP_STEP_SCHEMA_INVALID" };
     }
-    if (title === null || title !== MULTISTEP_STEP_TITLES[i]) return { ok: false, reason: "MULTISTEP_STEP_SEQUENCE_INVALID" };
+    if (title !== layout.stepTitles[i]) return { ok: false, reason: "MULTISTEP_STEP_SEQUENCE_INVALID" };
     const requests: MultiStepRequestEvidence[] = [];
     for (const req of step.requests) {
-      const saved = safeRequest(req, transaction);
-      if (!saved || (i < 4 && saved.path !== (Object.keys(MULTISTEP_ROUTES) as MultiStepRoute[])[i])) {
-        return { ok: false, reason: "MULTISTEP_REQUEST_SCHEMA_INVALID" };
-      }
+      const route = layout.routes[i];
+      const saved = route ? safeRequest(req, transaction, route) : null;
+      if (!saved) return { ok: false, reason: "MULTISTEP_REQUEST_SCHEMA_INVALID" };
       try { if (req.url) secrets.add(new URL(req.url).origin); } catch { return { ok: false, reason: "MULTISTEP_REQUEST_SCHEMA_INVALID" }; }
       requests.push(saved);
     }
-    if (requests.length !== (i < 4 ? 1 : 0)) return { ok: false, reason: "MULTISTEP_REQUEST_SEQUENCE_INVALID" };
+    if (requests.length !== (i < layout.routes.length ? 1 : 0)) return { ok: false, reason: "MULTISTEP_REQUEST_SEQUENCE_INVALID" };
     steps.push({
       title,
       status: step.status,
@@ -235,7 +231,7 @@ export function sanitizeMultiStepCapture(capture: MultiStepCapture, transaction:
   }
   const failed = steps.filter((step) => step.status === "failed");
   if (capture.kind === "failing" ? failed.length !== 1 || steps.at(-1)?.status !== "failed" || capture.stats.unexpected < 1
-    : failed.length !== 0 || steps.length !== 5 || capture.stats.unexpected !== 0) {
+    : failed.length !== 0 || steps.length !== layout.stepTitles.length || capture.stats.unexpected !== 0) {
     return { ok: false, reason: "MULTISTEP_FAILURE_STEP_UNBOUND" };
   }
   // No raw logs, paths, trace/check-run metadata, free-form errors or problem
@@ -248,7 +244,7 @@ export function sanitizeMultiStepCapture(capture: MultiStepCapture, transaction:
     steps, checkRunData: null, logs: null,
     recurrence: { attempts: capture.recurrence.attempts }, problems: [],
   };
-  const sanitizedShape = multiStepShapeProblems(sanitized);
+  const sanitizedShape = multiStepShapeProblems(scenarioLayout(sanitized), sanitized);
   if (sanitizedShape.length) return { ok: false, reason: sanitizedShape[0]! };
   const serialized = JSON.stringify(sanitized);
   for (const secret of secrets) {

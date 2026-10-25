@@ -24,7 +24,7 @@ repo Phase 8 = CLI init, repo Phase 9 = protected guarantees).
 | 5.5 candidate revisions | done | done | protected proof `01f71b8` | **Done** |
 | 6 API checks | done | thin | 3 real runs | **Done, weak coverage** |
 | 7 Multistep | done | synthetic only | none | **No real proof** |
-| 8 CLI init / `npm create` | none | none | none | **Not started** |
+| 8 CLI init | none | none | none | **Done; `npm create` removed** |
 | 9 protected guarantees | Stage 1 only | done | none | **Inert (shadow)** |
 
 ### Evidence confirmed by inspection
@@ -282,15 +282,12 @@ Blocked until Track A completes.
 4. Never provision services, never read or store credentials, never create or
    copy the example.
 
-### C2. `create-verify-fix`
+### C2. `create-verify-fix` (removed)
 
-1. Create `packages/create-verify-fix/` (referenced at `PLAN.md` line 10 but not
-   yet present).
-2. `npm create verify-fix@latest <dir> -- --template slots-booking-live` copies
-   `examples/slots-booking/web` plus its workflow.
-3. Copy only; never synthesize a second app or check implementation. Replace
-   only documented placeholders. Refuse a non-empty destination. Start with an
-   empty `incidents/`.
+Removed. The copy command depended on `examples/slots-booking/web` inside this
+repository and could not work as a published package. The example is now
+repository-local test data only; `verify-fix init` remains the supported setup
+command for existing Checkly projects.
 
 ### C3. Example README
 
@@ -302,13 +299,12 @@ stay in the learner's environment. Rocky Automatic Repair stays off.
 
 ### C4. Local verification
 
-1. `npm pack` both packages.
+1. `npm pack`.
 2. Run packed `verify-fix init` against a temporary existing Checkly project
    outside this repository.
-3. Run the packed creator in a second temporary directory.
-4. Confirm the copied project has no repository-relative imports, and that no
-   mock, secret, pre-captured incident, build cache, report, or raw trace enters
-   it.
+3. Confirm the configured project has no repository-relative imports, and that
+   no mock, secret, pre-captured incident, build cache, report, or raw trace
+   enters it.
 
 ### C5. Real verification
 

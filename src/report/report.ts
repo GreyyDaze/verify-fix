@@ -36,6 +36,8 @@ export interface ReportDetails {
   candidateRevision?: CandidateRevisionMetadata | null;
   candidateCheck?: { logicalId: string; name: string | null; file: string | null } | null;
   targetBinding?: CandidateTargetBinding | null;
+  /** Whole-bundle fingerprint: proof the verifier graded the pinned evidence. */
+  bundleEvidence?: { digest: string; pinnedDigest: string | null; verified: boolean } | null;
   /** Normalized Multistep evidence summary from the bundle's sanitized recording. */
   multistep?: { kind: string | null; steps: string[]; problems: string[] } | null;
   protectedRequirements?: {
@@ -98,7 +100,10 @@ export function buildReport(contract: ContractReport, decision: Decision, observ
   if (details.candidateRevision) {
     const revision = details.candidateRevision;
     lines.push("**Candidate revision:**");
-    lines.push(`- Source: ${revision.source === "github-pr" ? "GitHub pull request" : "local working tree"} — ${markdownText(revision.sourceReference)}`);
+    const sourceLabel = revision.source === "github-pr"
+      ? "GitHub pull request"
+      : revision.source === "git-revision" ? "pinned Git revision" : "local working tree";
+    lines.push(`- Source: ${sourceLabel} — ${markdownText(revision.sourceReference)}`);
     lines.push(`- Repository root: ${markdownCode(revision.repositoryRoot)}`);
     lines.push(`- Checkly project path: ${markdownCode(revision.projectPath)}`);
     lines.push(`- Base SHA: ${markdownCode(revision.baseSha)}`);
@@ -220,6 +225,7 @@ export function buildReport(contract: ContractReport, decision: Decision, observ
       candidateRevision: details.candidateRevision ?? null,
       candidateCheck: details.candidateCheck ?? null,
       targetBinding: details.targetBinding ?? null,
+      bundleEvidence: details.bundleEvidence ?? null,
       checklyEvidence: { testSessionIds: checklySessionIds, resultIds: checklyResultIds },
       multistep: details.multistep ?? null,
       protectedRequirements: details.protectedRequirements ?? null,

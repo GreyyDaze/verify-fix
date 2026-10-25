@@ -37,6 +37,34 @@ const CONSTRUCT = readFileSync(join(WEB, CHECK), "utf8");
 const ORIGINAL = parseMultiStepProject(new Map([[FILE, SPEC], [CHECK, CONSTRUCT]]), FILE)!;
 assert.deepEqual(ORIGINAL.errors, [], "the canonical baseline must be fully modeled");
 
+const SCENARIO = {
+  kind: "multistep" as const,
+  routes: [
+    { method: "POST", path: "/api/login", step: "login" },
+    { method: "GET", path: "/api/session", step: "session", auth: true },
+    { method: "GET", path: "/api/slots", step: "slots" },
+    { method: "POST", path: "/api/book", step: "book 09:30", auth: true },
+  ],
+  stepTitles: ["login", "session", "slots", "book 09:30", "confirm transaction"],
+  mutation: { method: "POST", path: "/api/book", jsonPath: ["booking", "confirmed"], expected: true, replace: false },
+  slot: "09:30",
+  repair: [
+    { from: "body.confirmed", to: "body.booking.confirmed" },
+    { from: "body.booking", to: "body.booking.status" },
+    { from: "typeof body.account", to: "typeof body.booking.account" },
+    { from: "body.account", to: "body.booking.account" },
+    { from: "body.slot", to: "body.booking.slot" },
+    { from: "body.version", to: "body.booking.sessionVersion" },
+  ],
+  writes: [
+    { from: "write:bookingAccount:=:body.account as string", to: "write:bookingAccount:=:body.booking.account as string" },
+    { from: "write:bookingSlot:=:body.slot as string", to: "write:bookingSlot:=:body.booking.slot as string" },
+    { from: "write:bookingVersion:=:body.version as number", to: "write:bookingVersion:=:body.booking.sessionVersion as number" },
+    { from: "write:bookingConfirmed:=:body.confirmed === true", to: "write:bookingConfirmed:=:body.booking.confirmed === true" },
+    { from: "write:bookingResult:=:body.booking as string", to: "write:bookingResult:=:body.booking.status as string" },
+  ],
+};
+
 const GOOD = readFileSync(join(PATCHES, "01-good-nested-field.spec.ts"), "utf8");
 const GOOD_MODEL = parseMultiStepProject(new Map([[FILE, GOOD], [CHECK, CONSTRUCT]]), FILE)!;
 assert.deepEqual(GOOD_MODEL.errors, [], "the known-good repair must be fully modeled");
@@ -78,7 +106,7 @@ test("the eight fixtures exist and the canonical baseline plus good repair are f
 });
 
 test("the good repair is accepted by the original-vs-candidate policy", () => {
-  const policy = evaluateMultiStepPolicy(ORIGINAL, GOOD_MODEL);
+  const policy = evaluateMultiStepPolicy(ORIGINAL, GOOD_MODEL, SCENARIO);
   assert.equal(policy.rejected, null, `the correct repair was rejected: ${policy.rejected}`);
   assert.equal(policy.uncertain, null, `the correct repair must be judgeable: ${policy.uncertain}`);
 });
@@ -86,7 +114,7 @@ test("the good repair is accepted by the original-vs-candidate policy", () => {
 for (const row of MATRIX.filter((r) => r.want !== "accept")) {
   test(`Multistep candidate ${row.candidate} is convicted: ${row.why}`, () => {
     const candidate = model(readCandidate(row.candidate));
-    const policy = evaluateMultiStepPolicy(ORIGINAL, candidate);
+    const policy = evaluateMultiStepPolicy(ORIGINAL, candidate, SCENARIO);
 
     if (row.want === "policy") {
       // Layer 1: the policy must reach a definite verdict against the ORIGINAL.
@@ -108,7 +136,7 @@ test("every fake loses at least one layer of protection; none is silently equiva
   const survivors: string[] = [];
   for (const row of MATRIX.filter((r) => r.want !== "accept")) {
     const candidate = model(readCandidate(row.candidate));
-    const policy = evaluateMultiStepPolicy(ORIGINAL, candidate);
+    const policy = evaluateMultiStepPolicy(ORIGINAL, candidate, SCENARIO);
     const kept = tuples(candidate).filter((t) => GOOD_TUPLES.has(t)).length;
     const convicted = policy.rejected !== null || policy.uncertain !== null
       || kept < GOOD_TUPLES.size || (candidate.script?.steps.length ?? 0) < STEP_TITLES.length;

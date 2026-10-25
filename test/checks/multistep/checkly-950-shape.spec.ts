@@ -11,6 +11,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { scenarioLayout } from "../../../src/checks/multistep/layout.ts";
 import { normalizeMultiStepCapture } from "../../../src/checks/multistep/normalize.ts";
 import { extractTransaction } from "../../../src/checks/multistep/transaction.ts";
 import { multiStepShapeProblems } from "../../../src/checks/multistep/shape.ts";
@@ -232,7 +233,7 @@ test("real Checkly 9.5.0 failing shape: four ordered steps, hooks skipped, stale
   assert.deepEqual(capture.steps[3]!.requests[0]!.responseBody, {
     booking: { confirmed: true, status: "CONFIRMED", account: FAKE_ACCOUNT, slot: SELECTED_SLOT, sessionVersion: 1 },
   });
-  assert.deepEqual(multiStepShapeProblems(capture), []);
+  assert.deepEqual(multiStepShapeProblems(scenarioLayout(capture), capture), []);
   const tx = extractTransaction(capture);
   assert.deepEqual(tx.problems, []);
   assert.equal(tx.token!.occurrences, 3);
@@ -247,7 +248,7 @@ test("real Checkly 9.5.0 passing shape: five ordered steps with confirmation", (
   assert.equal(capture.kind, "passing");
   assert.equal(capture.steps.length, 5);
   assert.equal(capture.steps[4]!.title, "confirm transaction");
-  assert.deepEqual(multiStepShapeProblems(capture), []);
+  assert.deepEqual(multiStepShapeProblems(scenarioLayout(capture), capture), []);
 });
 
 test("real Checkly 9.5.0 evidence sanitizes to a values-free recording", () => {

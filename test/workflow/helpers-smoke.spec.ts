@@ -5,6 +5,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import * as deploymentUrlRoles from "../../.github/helpers/deployment-url-roles.mjs";
+import * as bundleDigestHelper from "../../.github/helpers/bundle-digest.mjs";
 import * as probeReadiness from "../../.github/helpers/probe-readiness.mjs";
 import * as readiness from "../../.github/helpers/readiness.mjs";
 import * as productionPreflight from "../../.github/helpers/run-production-url-preflight.mjs";
@@ -13,6 +14,7 @@ const helpersDirUrl = new URL("../../.github/helpers/", import.meta.url);
 const helpersDirPath = fileURLToPath(helpersDirUrl);
 
 const EXPECTED_HELPERS = [
+  "bundle-digest.mjs",
   "deployment-url-roles.mjs",
   "probe-readiness.mjs",
   "readiness.mjs",
@@ -51,6 +53,7 @@ test("every runtime helper imports as ordinary ESM without executing an entrypoi
 
 test("library helpers expose the documented entry functions", () => {
   assert.equal(typeof deploymentUrlRoles.resolveUrlRoles, "function");
+  assert.equal(typeof bundleDigestHelper.bundleDigest, "function");
   assert.equal(typeof deploymentUrlRoles.normalizeHttpsOrigin, "function");
   assert.equal(typeof deploymentUrlRoles.validatePreflightInputs, "function");
   assert.equal(typeof deploymentUrlRoles.validateDeploymentRecord, "function");

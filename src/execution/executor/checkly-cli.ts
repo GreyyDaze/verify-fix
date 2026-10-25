@@ -156,12 +156,12 @@ export class ChecklyCliExecutor implements ExperimentExecutor {
     const checkName = ctx?.checkName ?? bundle.check.name ?? bundle.check.logicalId;
     if (!checkName) return this.uncertain(scene, "bundle has no check name for Checkly --grep", 0, [], [], [], environment);
     if (isMultiStep) {
-      const original = parseMultiStepProject(new Map(Object.entries(bundle.files)), bundle.check.file);
-      const candidate = parseMultiStepProject(new Map(Object.entries(files)), checkFile);
+      const original = parseMultiStepProject(new Map(Object.entries(bundle.files)), bundle.check.file, bundle.scenario);
+      const candidate = parseMultiStepProject(new Map(Object.entries(files)), checkFile, bundle.scenario);
       if (!original || !candidate) {
         return this.uncertain(scene, "Multistep trusted or candidate construct could not be resolved before a cloud run", 0, [], [], [], environment);
       }
-      const policy = evaluateMultiStepPolicy(original, candidate);
+      const policy = evaluateMultiStepPolicy(original, candidate, bundle.scenario);
       const trustedLocations = original.construct?.locations ?? [];
       const declared = original.construct?.environmentKeys ?? [];
       const candidateMapping = deriveRegionalAccountMapping(Object.entries(files), trustedLocations, declared);

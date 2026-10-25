@@ -53,7 +53,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { knownRoute, UNKNOWN_ROUTE } from "./routes.ts";
+import { canonicalPath, UNKNOWN_ROUTE } from "./routes.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -165,7 +165,7 @@ async function runOpenssl(args: string[], cwd: string): Promise<void> {
  * Throws when the boundary cannot be established safely — the caller must
  * surface that as UNCERTAIN, never as PASS/FAILED and never by relaxing TLS.
  */
-export async function startOriginBridge(upstreamUrl: string): Promise<OriginBridge> {
+export async function startOriginBridge(upstreamUrl: string, allowedRoutes?: string[]): Promise<OriginBridge> {
   let upstream: URL;
   try {
     upstream = new URL(upstreamUrl);
@@ -197,7 +197,9 @@ export async function startOriginBridge(upstreamUrl: string): Promise<OriginBrid
     const handle = (req: IncomingMessage, res: ServerResponse): void => {
       const rawUrl = req.url ?? "/";
       const qIndex = rawUrl.indexOf("?");
-      const path = knownRoute(qIndex === -1 ? rawUrl : rawUrl.slice(0, qIndex)) ?? UNKNOWN_ROUTE;
+      const rawPath = qIndex === -1 ? rawUrl : rawUrl.slice(0, qIndex);
+      const canonical = canonicalPath(rawPath);
+      const path = canonical && allowedRoutes?.includes(canonical) ? canonical : UNKNOWN_ROUTE;
       const query = qIndex !== -1 && qIndex < rawUrl.length - 1;
       const method = req.method ?? "OTHER";
       const authorization = Object.keys(req.headers).some((h) => h.toLowerCase() === "authorization");

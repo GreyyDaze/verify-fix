@@ -62,7 +62,7 @@ export function startDetectionApp(options: {
       let body: Record<string, unknown>;
       if (req.method === "POST" && route === "/api/login" && typeof data.account === "string") {
         accounts.push(data.account);
-        body = { ok: true, account: data.account, version: 1, token: `token-${data.account}` };
+        body = { ok: true, account: data.account, version: 1, token: `token-${data.account}`, store: "memory" };
       } else if (req.method === "GET" && route === "/api/session" && bearer) {
         body = { valid: true, account: bearer, tokenVersion: 1, currentVersion: 1 };
       } else if (req.method === "GET" && route === "/api/slots") {

@@ -10,13 +10,15 @@ import type { ApiRecording, Bundle, BundleConfig, Scene } from "../../types.ts";
 import type { ManifestV3 } from "./types.ts";
 import { assertProtectedPolicyEnvelope } from "../../policy/requirements.ts";
 import { parseCheckConfig } from "../../execution/scene/config-diff.ts";
-import { MULTISTEP_DETECTION_MODE, parseMode } from "../../execution/scene/modes.ts";
+import { multistepDetectionMode, parseMode } from "../../execution/scene/modes.ts";
 import { recordedNestedBookingConfirmed } from "../../checks/multistep/shape.ts";
 import { validMultiStepStoredRecording } from "../../checks/multistep/recording-schema.ts";
 import { multistepProblemCategory } from "../../checks/multistep/sanitize.ts";
 import { readBoundedBundleFile, multiStepSourceClosureProblem, multiStepSourcePath, MULTISTEP_MAX_SOURCE_FILE_BYTES, MULTISTEP_MAX_SOURCE_FILES } from "../../checks/multistep/files.ts";
 import { parseMultiStepProject } from "../../checks/multistep/source.ts";
 import { storedMultiStepIdentityProblem } from "../../checks/multistep/identity.ts";
+import { validateMultistepScenario } from "./scenario.ts";
+import { multistepWitness } from "./manifest.ts";
 import { failurePointFromRecording, matchesRemoteMultiStepBinding } from "../../checks/multistep/binding.ts";
 import type { MultiStepRecording } from "../../checks/multistep/capture.ts";
 
@@ -243,8 +245,20 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
       : { monitors: [], complete: false, reason: "the recorded sibling-monitor inventory is malformed" };
   }
   bundle.multistep = null;
+  bundle.scenario = null;
+  if (m.check.checkType !== "MULTI_STEP" && m.scenario !== undefined && m.scenario !== null) {
+    throw new Error(`${dir}: scenario is only valid for MULTI_STEP bundles`);
+  }
   if (m.check.checkType === "MULTI_STEP") {
     const problems: string[] = [];
+    if (m.scenario !== undefined && m.scenario !== null) {
+      const validated = validateMultistepScenario(m.scenario);
+      if (validated.scenario) bundle.scenario = validated.scenario;
+      else problems.push(validated.problem);
+    } else if (m.results.failing) {
+      // An incident bundle without a scenario cannot drive detection generically.
+      problems.push("MULTISTEP_SCENARIO_INVALID");
+    }
     const paths = Object.keys(files).sort();
     if (!Array.isArray(m.check.files) || JSON.stringify([...m.check.files].sort()) !== JSON.stringify(paths)
       || m.check.file !== file || !multiStepSourcePath(file)
@@ -337,8 +351,9 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
     const bound = recorded.failing?.binding.failureAssertion;
     if (bound && expectedPoint) failureAssertion = { file, line: bound.line, id: bound.id, step: bound.step };
     const detection = m.scenes.filter((scene) => scene.type === "DETECTION");
-    if (recorded.failing && (detection.length !== 1 || !recordedNestedBookingConfirmed(recorded.failing.steps)
-      || detection[0]!.mode !== MULTISTEP_DETECTION_MODE
+    const scenario = bundle.scenario;
+    if (recorded.failing && (!scenario || detection.length !== 1 || !recordedNestedBookingConfirmed(scenario, recorded.failing.steps)
+      || detection[0]!.mode !== multistepDetectionMode(scenario)
       || detection[0]!.verdict.provenance.kind !== "recorded"
       || detection[0]!.verdict.provenance.runId !== recorded.failing.binding.resultId
       || detection[0]!.verdict.provenance.artifactId !== "recordings/failing.multistep.json"
@@ -348,6 +363,12 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
     }
     if (!recorded.failing && detection.length) problems.push("MULTISTEP_SCENE_PROVENANCE_INVALID");
     // Never substitute a passing run for the missing failing run.
+    // Older captured bundles predate the values-free witness. Re-derive it
+    // from the trusted stored failing recording, never from the manifest alone.
+    if (bundle.scenario && !bundle.scenario.witness && recorded.failing) {
+      const witness = multistepWitness(bundle.scenario.routes, recorded.failing.steps);
+      if (witness) bundle.scenario = { ...bundle.scenario, witness };
+    }
     const selected = m.results.failing ? recordings.failing : recordings.passing;
     bundle.multistep = { kind: selected?.kind ?? null, steps: selected?.steps ?? [],
       problems: [...new Set(problems)], failureAssertion: problems.length ? null : failureAssertion };

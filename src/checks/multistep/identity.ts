@@ -1,17 +1,13 @@
-// The one incident check this adapter can interpret. This is *not* inferred
-// from the project-level checkly.config.ts (which also defines other checks)
-// or from a result's human-readable name. The executed construct, its exact
-// entrypoint, deployed Checkly check, and its effective configuration must
-// all describe the same transaction before a remote recording can be bound.
+// A remote deployed check is bound to the construct parsed from the captured
+// project, never to one example check. The construct supplies its own logical
+// ID, name, entrypoint, tags, schedule and regions; the deployed Checkly check
+// must describe exactly that transaction before a remote recording is bound.
 import type { ChecklyCheck } from "../../capture/checkly/types.ts";
 import type { ManifestV3 } from "../../capture/bundle/types.ts";
 import type { MultiStepSourceModel } from "./source.ts";
+import { multiStepSourcePath } from "./files.ts";
 import { isSyntacticallyValidRegion } from "./trusted-scope.ts";
 
-export const MULTISTEP_LOGICAL_ID = "slots-booking-multistep";
-export const MULTISTEP_CHECK_NAME = "slots booking multistep transaction";
-export const MULTISTEP_CONSTRUCT_FILE = "checks/multistep-booking.check.ts";
-export const MULTISTEP_ENTRYPOINT = "checks/multistep-booking.spec.ts";
 /**
  * The structural env keys every Multistep check declares. Account-variable
  * NAMES are deliberately absent: they are derived from the construct's own
@@ -22,7 +18,6 @@ export const MULTISTEP_STRUCTURAL_ENV_KEYS = [
   "ENVIRONMENT_URL",
   "VERCEL_AUTOMATION_BYPASS_SECRET",
 ] as const;
-export const MULTISTEP_TAGS = ["slots-booking", "verify-fix-example", "multistep"] as const;
 /** Validate a construct's OWN location set: distinct, syntactically valid,
  *  and bounded. The set itself is never compared to a fixed list. */
 export function isValidRegionSet(locations: unknown): locations is string[] {
@@ -30,6 +25,35 @@ export function isValidRegionSet(locations: unknown): locations is string[] {
     && locations.every((location) => isSyntacticallyValidRegion(location))
     && new Set(locations).size === locations.length;
 }
+
+/** A construct may declare any customer tags (or none). Bounded, static,
+ *  distinct strings only: order is not significant when comparing to the
+ *  deployed check. */
+export function isValidTagSet(tags: unknown): tags is string[] {
+  return Array.isArray(tags) && tags.length <= 16
+    && tags.every((tag) => typeof tag === "string" && tag.length > 0 && tag.length <= 64)
+    && new Set(tags).size === tags.length;
+}
+
+const LOGICAL_ID = /^[A-Za-z0-9_-]{1,128}$/;
+function isValidLogicalId(value: unknown): value is string {
+  return typeof value === "string" && LOGICAL_ID.test(value);
+}
+function isValidCheckName(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 256
+    && !/[\u0000-\u001f\u007f]/.test(value);
+}
+function isValidFrequency(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 1440;
+}
+function isValidFrequencyOffset(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 3600;
+}
+const sameSorted = (a: readonly string[], b: readonly string[]): boolean => {
+  if (a.length !== b.length) return false;
+  const sortedB = [...b].sort();
+  return [...a].sort().every((value, index) => value === sortedB[index]);
+};
 
 /**
  * Every declared env key must be a structural key plus exactly one
@@ -63,25 +87,27 @@ export function hasCompleteEnvDeclarations(
     || entry.secret === true);
 }
 
-const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
-const envIdentity = (items: Array<{ key: string; secret?: boolean | null }>): Array<{ key: string; secret: boolean }> =>
-  items.map((item) => ({ key: item.key, secret: item.secret === true }));
-
 /** Fixed category, never source text, an env value, or an API exception. */
 export function canonicalMultiStepIdentityProblem(model: MultiStepSourceModel | null): string | null {
   const c = model?.construct;
-  if (!model || model.errors.length || !c || !c.executed || !model.script || model.script.file !== MULTISTEP_ENTRYPOINT
-    || c.logicalId !== MULTISTEP_LOGICAL_ID || c.name !== MULTISTEP_CHECK_NAME
-    || c.entrypoint !== MULTISTEP_ENTRYPOINT
-    || !isValidRegionSet(c.locations) || !same(c.tags, MULTISTEP_TAGS)
-    || c.frequencyMinutes !== 5 || c.runParallel !== true || c.doubleCheck !== false || c.activated !== true || c.muted !== false
+  if (!model || model.errors.length || !c || !c.executed || !model.script
+    || !isValidLogicalId(c.logicalId) || !isValidCheckName(c.name)
+    || !c.entrypoint || multiStepSourcePath(c.entrypoint) !== c.entrypoint
+    || model.script.file !== c.entrypoint
+    || !model.constructFile || multiStepSourcePath(model.constructFile) !== model.constructFile
+    || !isValidRegionSet(c.locations) || !isValidTagSet(c.tags)
+    || !isValidFrequency(c.frequencyMinutes)
+    || (c.frequencyOffsetSeconds !== null && !isValidFrequencyOffset(c.frequencyOffsetSeconds))
+    || c.runParallel !== true || c.doubleCheck !== false || c.activated !== true || c.muted !== false
     || !hasCompleteEnvDeclarations(c.environmentKeys, c.locations.length, c.environmentDefinitions)) return "MULTISTEP_CONSTRUCT_IDENTITY_INVALID";
   return null;
 }
 
 /** The Checkly API's deployed script is independently compared byte-for-byte
  * with the *actual* construct entrypoint before any project file is saved.
- * A same-basename file elsewhere does not satisfy this comparison. */
+ * The provider may report its project-relative entrypoint exactly, or only its
+ * basename; either must name this construct's own entrypoint. A same-basename
+ * file in a different directory is still rejected. */
 interface DeployedProblem {
   problem: string | null;
   /** Mismatched field names only — never values or raw provider text. */
@@ -112,21 +138,26 @@ function providerGeneratedFrequencyOffset(offset: unknown, frequency: number | n
 
 export function deployedProblem(check: ChecklyCheck, model: MultiStepSourceModel | null,
   sourceText: string | null): DeployedProblem {
-  if (!model || model.construct === null || canonicalMultiStepIdentityProblem(model)) return { problem: "MULTISTEP_CONSTRUCT_IDENTITY_INVALID", fields: [] };
-  if (check.checkType !== "MULTI_STEP" || check.name !== MULTISTEP_CHECK_NAME || !check.id
+  const c = model?.construct;
+  if (!model || !c || canonicalMultiStepIdentityProblem(model)) return { problem: "MULTISTEP_CONSTRUCT_IDENTITY_INVALID", fields: [] };
+  const entrypoint = c.entrypoint!;
+  const bareEntrypoint = entrypoint.split("/").at(-1);
+  if (check.checkType !== "MULTI_STEP" || check.name !== c.name || !check.id
     || typeof check.script !== "string" || !sourceText || check.script !== sourceText
-    || (check.scriptPath !== MULTISTEP_ENTRYPOINT && check.scriptPath !== "multistep-booking.spec.ts")) {
+    || (check.scriptPath !== entrypoint && check.scriptPath !== bareEntrypoint)) {
     return { problem: "MULTISTEP_DEPLOYED_SOURCE_MISMATCH", fields: [] };
   }
   const fields: string[] = [];
-  if (check.frequency !== 5) fields.push("frequency");
+  if (check.frequency !== c.frequencyMinutes) fields.push("frequency");
   if (check.activated !== true) fields.push("activated");
   if (check.muted !== false) fields.push("muted");
   if (check.runParallel !== true) fields.push("runParallel");
-  if (!isValidRegionSet(check.locations)) fields.push("locations");
-  if (!same(check.tags, MULTISTEP_TAGS)) fields.push("tags");
+  if (!isValidRegionSet(check.locations) || !sameSorted(check.locations, c.locations)) fields.push("locations");
+  if (!isValidTagSet(check.tags) || !sameSorted(check.tags, c.tags)) fields.push("tags");
   const declared = check.environmentVariables ?? [];
-  if (!hasCompleteEnvDeclarations(declared.map((entry) => entry.key), (check.locations ?? []).length, declared)) fields.push("environmentVariables");
+  const declaredKeys = declared.map((entry) => entry.key);
+  if (!hasCompleteEnvDeclarations(declaredKeys, (check.locations ?? []).length, declared)
+    || !sameSorted(declaredKeys, c.environmentKeys)) fields.push("environmentVariables");
   if ((check.privateLocations?.length ?? 0) !== 0) fields.push("privateLocations");
   if (check.groupId != null) fields.push("groupId");
   if (check.runtimeId != null) fields.push("runtimeId");
@@ -135,8 +166,8 @@ export function deployedProblem(check: ChecklyCheck, model: MultiStepSourceModel
   if (check.shouldFail === true) fields.push("shouldFail");
   // Source-controlled offset: the deployed check must equal it exactly.
   // Omitted from source: only the provider-generated metadata above passes.
-  if (model.construct !== null && model.construct.frequencyOffsetSeconds !== null) {
-    if (check.frequencyOffset !== model.construct.frequencyOffsetSeconds) fields.push("frequencyOffset");
+  if (c.frequencyOffsetSeconds !== null) {
+    if (check.frequencyOffset !== c.frequencyOffsetSeconds) fields.push("frequencyOffset");
   } else if (check.frequencyOffset != null && check.frequencyOffset !== 0
     && !providerGeneratedFrequencyOffset(check.frequencyOffset, check.frequency)) {
     fields.push("frequencyOffset");
@@ -187,15 +218,18 @@ function storedConfigShape(m: ManifestV3): boolean {
 /** The sanitized, stored manifest must agree with the immutable construct;
  * dropping a masking field while projecting API data cannot turn it valid. */
 export function storedMultiStepIdentityProblem(m: ManifestV3, model: MultiStepSourceModel | null): string | null {
-  if (canonicalMultiStepIdentityProblem(model)) return "MULTISTEP_CONSTRUCT_IDENTITY_INVALID";
+  const c = model?.construct;
+  if (!model || !c || canonicalMultiStepIdentityProblem(model)) return "MULTISTEP_CONSTRUCT_IDENTITY_INVALID";
   if (!storedConfigShape(m)) return "MULTISTEP_DEPLOYED_CONFIG_MISMATCH";
-  if (m.check.logicalId !== MULTISTEP_LOGICAL_ID || m.check.name !== MULTISTEP_CHECK_NAME
-    || m.check.file !== MULTISTEP_ENTRYPOINT || m.check.deployedId !== m.check.id
-    || !m.check.files.includes(MULTISTEP_CONSTRUCT_FILE)
-    || m.config.frequencyMinutes !== 5 || m.config.activated !== true || m.config.muted !== false
+  if (m.check.logicalId !== c.logicalId || m.check.name !== c.name
+    || m.check.file !== c.entrypoint || m.check.deployedId !== m.check.id
+    || !model.constructFile || !m.check.files.includes(model.constructFile)
+    || m.config.frequencyMinutes !== c.frequencyMinutes || m.config.activated !== true || m.config.muted !== false
     || m.config.runParallel !== true || !isValidRegionSet(m.config.locations)
-    || !same(m.config.tags, MULTISTEP_TAGS)
+    || !sameSorted(m.config.locations, c.locations)
+    || !isValidTagSet(m.config.tags) || !sameSorted(m.config.tags, c.tags)
     || !hasCompleteEnvDeclarations(m.config.environmentVariables.map((entry) => entry.key), m.config.locations.length, m.config.environmentVariables)
+    || !sameSorted(m.config.environmentVariables.map((entry) => entry.key), c.environmentKeys)
     || m.config.privateLocations.length !== 0 || m.config.runtimeId !== null
     || m.config.retryStrategy !== null
     || m.config.doubleCheck !== false || m.config.apiRequest !== null

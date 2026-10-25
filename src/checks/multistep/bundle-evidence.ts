@@ -13,7 +13,7 @@ import { recordedNestedBookingConfirmed } from "./shape.ts";
 import { multistepDetectionMode } from "../../execution/scene/modes.ts";
 import { validateMultistepScenario } from "../../capture/bundle/scenario.ts";
 import type { MultistepScenario } from "../../types.ts";
-import { MULTISTEP_CHECK_NAME, storedMultiStepIdentityProblem } from "./identity.ts";
+import { storedMultiStepIdentityProblem } from "./identity.ts";
 import { isSyntacticallyValidRegion, trustedMultistepScope } from "./trusted-scope.ts";
 
 const ASSET_NAMES = new Set(["test-results.json", "check-run-data.json", "logs.txt"]);
@@ -181,7 +181,8 @@ export function constrainMultiStepManifest(m: ManifestV3,
       description: failing ? "Recorded Multistep failure; raw diagnostics and RCA omitted." : "Recorded Multistep baseline; raw diagnostics omitted.",
       sourceReference: null, status: failing ? "captured" : "no-failure-yet" },
     check: { id: safeId(m.check.id) ?? "<unrecognized-id>", deployedId: safeId(m.check.deployedId) ?? "<unrecognized-id>",
-      name: MULTISTEP_CHECK_NAME, checkType: "MULTI_STEP", repo: null, file: primary, files: paths,
+      name: typeof m.check.name === "string" && m.check.name.length > 0 && m.check.name.length <= 256
+        ? m.check.name : "<unrecognized-name>", checkType: "MULTI_STEP", repo: null, file: primary, files: paths,
       logicalId: safeId(m.check.logicalId), projectCommit: /^[a-f0-9]{40}$/.test(m.check.projectCommit ?? "") ? m.check.projectCommit : null },
     config: {
       frequencyMinutes: m.config.frequencyMinutes === null ? null : count(m.config.frequencyMinutes, 1440),

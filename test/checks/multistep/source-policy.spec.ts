@@ -10,8 +10,9 @@ import { parseMultiStepProject, parseMultiStepScript } from "../../../src/checks
 import { evaluateMultiStepPolicy } from "../../../src/checks/multistep/policy.ts";
 import { parseProjectInventory } from "../../../src/evidence/assertion/inventory.ts";
 import { assertionId } from "../../../src/evidence/assertion/id.ts";
-import { deployedMultiStepProblem } from "../../../src/checks/multistep/identity.ts";
+import { deployedMultiStepProblem, storedMultiStepIdentityProblem } from "../../../src/checks/multistep/identity.ts";
 import type { ChecklyCheck } from "../../../src/capture/checkly/types.ts";
+import type { ManifestV3 } from "../../../src/capture/bundle/types.ts";
 
 const web = fileURLToPath(new URL("../../../examples/slots-booking/web/", import.meta.url));
 const constructSource = readFileSync(`${web}checks/multistep-booking.check.ts`, "utf8");
@@ -32,6 +33,24 @@ function candidateWith(mutate: (source: string) => string) {
   const mutated = new Map(files);
   mutated.set("checks/multistep-booking.spec.ts", mutate(scriptSource));
   return parseMultiStepProject(mutated, "checks/multistep-booking.spec.ts");
+}
+
+/** A second, unrelated customer identity. Same transaction bytes, different
+ * logical ID, name, entrypoint filename and tags. */
+function customerProject() {
+  const construct = constructSource
+    .replace('"slots-booking-multistep"', '"customer-order-flow"')
+    .replace('"slots booking multistep transaction"', '"customer order flow transaction"')
+    .replace('path.join(__dirname, "multistep-booking.spec.ts")', 'path.join(__dirname, "customer-order-flow.spec.ts")')
+    .replace('["slots-booking", "verify-fix-example", "multistep"]', '["customer", "orders"]');
+  const sourceFiles = new Map([
+    ["checks/customer-order-flow.check.ts", construct],
+    ["checks/customer-order-flow.spec.ts", scriptSource],
+  ]);
+  return {
+    construct, sourceFiles,
+    model: parseMultiStepProject(sourceFiles, "checks/customer-order-flow.spec.ts"),
+  };
 }
 
 test("ordered five-step parsing: canonical titles, all awaited, none conditional", () => {
@@ -259,16 +278,74 @@ test("canonical deployed Multistep admission binds source identity and every mod
     attack(changed);
     assert.ok(deployedMultiStepProblem(changed, model, scriptSource), `${label} may not be admitted`);
   }
-  for (const [label, before, after] of [
-    ["logical ID", "slots-booking-multistep", "other-logical-id"],
-    ["construct name", "slots booking multistep transaction", "other transaction"],
-    ["construct entrypoint", 'entrypoint: path.join(__dirname, "multistep-booking.spec.ts")', 'entrypoint: path.join(__dirname, "other.spec.ts")'],
-    ["double-check retry", "doubleCheck: false", "doubleCheck: true"],
-    ["unknown double-check default", "doubleCheck: false,", ""],
+  for (const [label, before, after, expected] of [
+    ["construct name", "slots booking multistep transaction", "other transaction", "MULTISTEP_DEPLOYED_SOURCE_MISMATCH"],
+    ["construct entrypoint", 'entrypoint: path.join(__dirname, "multistep-booking.spec.ts")', 'entrypoint: path.join(__dirname, "other.spec.ts")', "MULTISTEP_CONSTRUCT_IDENTITY_INVALID"],
+    ["double-check retry", "doubleCheck: false", "doubleCheck: true", "MULTISTEP_CONSTRUCT_IDENTITY_INVALID"],
+    ["unknown double-check default", "doubleCheck: false,", "", "MULTISTEP_CONSTRUCT_IDENTITY_INVALID"],
   ]) {
     const mutated = new Map(files);
     mutated.set("checks/multistep-booking.check.ts", constructSource.replace(before, after));
     const candidate = parseMultiStepProject(mutated, "checks/multistep-booking.spec.ts");
-    assert.equal(deployedMultiStepProblem(deployed, candidate, scriptSource), "MULTISTEP_CONSTRUCT_IDENTITY_INVALID", label);
+    assert.equal(deployedMultiStepProblem(deployed, candidate, scriptSource), expected, label);
   }
+  // The provider's check payload has no customer logical ID, so a source-only
+  // logical-ID rename is not deployed drift: the deployed name, entrypoint and
+  // configuration still describe the same check.
+  const renamed = new Map(files);
+  renamed.set("checks/multistep-booking.check.ts", constructSource.replace('"slots-booking-multistep"', '"customer-order-flow"'));
+  const renamedModel = parseMultiStepProject(renamed, "checks/multistep-booking.spec.ts");
+  assert.equal(deployedMultiStepProblem(deployed, renamedModel, scriptSource), null,
+    "an arbitrary customer logical ID is bound by the deployed check identity");
+});
+
+test("an arbitrary customer Multistep identity is admitted when the deployed check matches its own construct", () => {
+  const custom = customerProject();
+  const customModel = custom.model;
+  assert.deepEqual(customModel?.errors, []);
+  const deployed: ChecklyCheck = {
+    id: "customer-deployed-id", name: "customer order flow transaction", checkType: "MULTI_STEP",
+    activated: true, muted: false, frequency: 5, frequencyOffset: 0, runParallel: true,
+    locations: ["us-east-1", "eu-central-1"], tags: ["customer", "orders"],
+    groupId: null, runtimeId: null, privateLocations: [], retryStrategy: null, doubleCheck: false,
+    script: scriptSource, scriptPath: "checks/customer-order-flow.spec.ts",
+    environmentVariables: [
+      { key: "ENVIRONMENT_URL", value: "customer-origin", secret: false },
+      { key: "MULTISTEP_USER_US_EAST_1", value: "customer-east", secret: true },
+      { key: "MULTISTEP_USER_EU_CENTRAL_1", value: "customer-west", secret: true },
+      { key: "VERCEL_AUTOMATION_BYPASS_SECRET", value: "customer-bypass", secret: true },
+    ],
+  };
+  assert.equal(deployedMultiStepProblem(deployed, customModel, scriptSource), null);
+  const wrongName = structuredClone(deployed);
+  wrongName.name = "slots booking multistep transaction";
+  assert.equal(deployedMultiStepProblem(wrongName, customModel, scriptSource), "MULTISTEP_DEPLOYED_SOURCE_MISMATCH");
+
+  const manifest = {
+    check: {
+      id: "customer-deployed-id", deployedId: "customer-deployed-id", name: "customer order flow transaction",
+      checkType: "MULTI_STEP", repo: null, file: "checks/customer-order-flow.spec.ts",
+      files: ["checks/customer-order-flow.check.ts", "checks/customer-order-flow.spec.ts"],
+      logicalId: "customer-order-flow", projectCommit: null,
+    },
+    config: {
+      frequencyMinutes: 5, locations: ["us-east-1", "eu-central-1"], privateLocations: [],
+      runParallel: true, retryStrategy: null, doubleCheck: false, activated: true, muted: false,
+      tags: ["customer", "orders"], runtimeId: null,
+      environmentVariables: [
+        { key: "ENVIRONMENT_URL", secret: false },
+        { key: "MULTISTEP_USER_US_EAST_1", secret: true },
+        { key: "MULTISTEP_USER_EU_CENTRAL_1", secret: true },
+        { key: "VERCEL_AUTOMATION_BYPASS_SECRET", secret: true },
+      ],
+      playwright: null, apiRequest: null, repair: { intent: null, aiAutoRepairEnabled: null },
+    },
+  } as unknown as ManifestV3;
+  assert.equal(storedMultiStepIdentityProblem(manifest, customModel), null);
+  const renamed = structuredClone(manifest);
+  renamed.check.logicalId = "slots-booking-multistep";
+  assert.equal(storedMultiStepIdentityProblem(renamed, customModel), "MULTISTEP_DEPLOYED_CONFIG_MISMATCH");
+  const missingConstruct = structuredClone(manifest);
+  missingConstruct.check.files = ["checks/customer-order-flow.spec.ts"];
+  assert.equal(storedMultiStepIdentityProblem(missingConstruct, customModel), "MULTISTEP_DEPLOYED_CONFIG_MISMATCH");
 });

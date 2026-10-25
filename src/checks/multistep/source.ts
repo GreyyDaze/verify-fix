@@ -104,6 +104,9 @@ export interface MultiStepScriptModel {
 export interface MultiStepSourceModel {
   construct: MultiStepConstructModel | null;
   script: MultiStepScriptModel | null;
+  /** Project-relative path of the file that declares the construct. The
+   *  construct's identity is independent of any fixed example filename. */
+  constructFile?: string | null;
   errors: string[];
 }
 
@@ -1330,7 +1333,7 @@ export function parseMultiStepProject(files: Map<string, string>, preferredFile?
   scenario?: MultistepEvidenceScenario | null): MultiStepSourceModel | null {
   const boundary = multiStepSourceClosureProblem(files);
   if (boundary || (preferredFile && !multiStepSourcePath(preferredFile))) {
-    return { construct: null, script: null, errors: [boundary ?? "MULTISTEP_SOURCE_PATH_UNSAFE"] };
+    return { construct: null, script: null, constructFile: null, errors: [boundary ?? "MULTISTEP_SOURCE_PATH_UNSAFE"] };
   }
   const normalized = new Map<string, string>();
   for (const [key, value] of files) normalized.set(norm(key), value);
@@ -1364,5 +1367,5 @@ export function parseMultiStepProject(files: Map<string, string>, preferredFile?
       if (shape) errors.push(shape);
     }
   }
-  return { construct: construct?.model ?? null, script, errors: [...new Set(errors)] };
+  return { construct: construct?.model ?? null, script, constructFile: construct?.constructFile ?? null, errors: [...new Set(errors)] };
 }

@@ -34,12 +34,12 @@ This document records the key architectural choices, their rationale, and tradeo
 
 ### 3. Shadow → Migration → Enforcement Rollout
 
-**Decision:** Protected requirements default to `shadow` mode (report-only). Explicit opt-in to `migration` (versioned bundles) then `enforce` (block PRs).
+**Decision:** The protected-requirements static gate has three modes, defaulting to `shadow` (report-only). Explicit opt-in to `migration` (pins a versioned policy digest) then `enforce` (blocks the verdict on mismatch).
 
 **Rationale:**
-- Rolling out a static gate that blocks PRs on day one is risky. Shadow mode lets teams see what *would* block without breaking workflow.
-- Migration pins bundle digests, ensuring requirements are stable before enforcement.
-- The CLI default is `enforce` (code-level), but the gate adapter passes `--requirements-mode shadow` unless overridden.
+- Rolling out a gate that blocks PRs on day one is risky. Shadow mode lets teams see what *would* block without changing any outcome.
+- Migration pins the policy digest, so requirements are stable before enforcement begins.
+- The gate adapter (`scripts/ci-gate.sh`) defaults to `shadow`; callers opt into `enforce` by setting `VF_REQUIREMENTS_MODE=enforce`.
 
 **Tradeoff:** Requires discipline to advance stages. Documented in `USER-GUIDE.md`.
 

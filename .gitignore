@@ -23,6 +23,9 @@ bundle-*/
 /fixtures/bundles/
 .verify-fix/
 
+# internal planning and QA artifacts (scratchpad, build log, verification tracker)
+docs/internal/
+
 # OS / editor
 .DS_Store
 *.swp

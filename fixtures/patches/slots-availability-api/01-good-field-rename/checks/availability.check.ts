@@ -9,7 +9,7 @@ export const availabilityAssertions = [
   AssertionBuilder.headers("content-type").equals("application/json"),
   AssertionBuilder.jsonBody("slot").equals(SLOT),
   // CORRECT REPAIR. The application renamed this response field from
-  // `availability` to `status` (incidents/slots-availability-api). The
+  // `availability` to `status` (the historical API field-rename incident). The
   // monitoring contract is unchanged in strength: same status, same
   // content-type, same exact slot, same exact value. Only the field name
   // follows the application's new contract.

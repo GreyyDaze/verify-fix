@@ -1,7 +1,7 @@
 // Playwright trace (.zip) → HAR 1.2 + the list of test steps with their errors.
 //
 // Format, verified against playwright-core / @playwright/test 1.63 and against
-// real traces downloaded from Checkly (fixtures/bundles/slots-booking-overlap):
+// real traces downloaded from Checkly during the historical incident work:
 //   <n>-trace.network  JSON lines { type: "resource-snapshot", snapshot: <HAR entry> }
 //                      bodies are referenced by request.postData / response.content:
 //                        _file: "resources/<sha1>.<ext>"   (1.5x+; the text field is "")

@@ -2,7 +2,10 @@
 
 **The rule:** keep the bundle **out of the user's project repo** (the customer repo being fixed) — and out of the verify-fix repo too. It is **proof, not code**.
 
-*(Temporary exception: this verify-fix repo still keeps a few **sanitized** bundles in `fixtures/` and `incidents/` as test evidence while the test suite is migrated to synthetic bundles and a CI capture stage. They are not a pattern for users and are being retired.)*
+*(This repository follows that rule: no captured bundle is committed. Tests
+that need evidence build it in temporary directories from code and synthetic
+results. A developer who captures a real incident keeps it outside the repo or
+under the ignored `incidents/` directory.)*
 
 ---
 

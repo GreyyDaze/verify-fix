@@ -85,8 +85,8 @@ the protected preview and production proofs below have all been carried out.
 This walkthrough is preserved as historical provenance: current main already
 contains the `status` contract and the repaired check, so recreating the old
 baseline requires the recorded historical revisions or a new controlled
-incident. Do not run these commands blindly against current production, and do
-not overwrite `incidents/slots-availability-api`._
+incident. Do not run these commands blindly against current production.
+Captured bundles stay local and are never committed.
 
 Run these commands only from your Mac. Use the real production URL printed by
 Vercel. Do not guess it. The commands keep secrets in the shell and in the two
@@ -151,15 +151,15 @@ export VERIFY_FIX_TGZ="$(npm pack --json | jq -r '.[0].filename')"
 npm exec --yes --package="$PWD/$VERIFY_FIX_TGZ" -- verify-fix bundle \
   --check "$CHECK_ID" \
   --project "$PWD/examples/slots-booking/web" \
-  --out "$PWD/incidents/slots-availability-api" \
+  --out "${HOME}/.verify-fix/bundles/slots-availability-api" \
   --measure 20 \
   --target "$ENVIRONMENT_URL" \
   --trigger-rca
 ```
 
-Rocky Automatic Repair must remain off. Do not commit a bundle until its secret
-scan and golden test pass. Do not run `checkly deploy` for the repair until the
-exact-revision verify-fix gate passes.
+Rocky Automatic Repair must remain off. Never commit the captured bundle: keep
+it outside the repository (see `docs/BUNDLE-STORAGE-PLAN.md`). Do not run
+`checkly deploy` for the repair until the exact-revision verify-fix gate passes.
 
 That gate has since passed for the Phase 6 repair: the protected preview proof
 and the production proof (through the manually verified stable alias, after the

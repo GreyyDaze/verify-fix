@@ -9,7 +9,7 @@ import type { CheckResult } from "../../../src/capture/checkly/types.ts";
 
 const checkFile = "checks/availability.check.ts";
 const setupFile = "checks/availability.setup.ts";
-const incidentCheckRoot = "incidents/slots-availability-api/check";
+const incidentCheckRoot = "fixtures/checks/slots-availability-api";
 const baseline = readFileSync(`${incidentCheckRoot}/${checkFile}`, "utf8");
 const setup = readFileSync(`${incidentCheckRoot}/${setupFile}`, "utf8");
 

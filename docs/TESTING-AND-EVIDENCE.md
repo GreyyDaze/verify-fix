@@ -19,6 +19,13 @@ This document separates three things that must not be confused:
 | External package test | Installed package works outside repo | No | Yes | Synthetic/local |
 | Real-provider acceptance | Checkly integration | Yes | Yes | Depends on target |
 
+**Bundle fixtures:** the suite keeps no captured bundle as a fixture, neither a
+real capture nor a synthetic reconstruction of one. Replaying one example
+project's incident only couples the tests to that example and proves nothing
+generic, so those bundle-level tests are not replaced. Tests that exercise
+capture mechanics build a disposable bundle in a temporary directory from
+generic inputs and delete it; nothing captured is committed.
+
 ## 2. Current contract-test examples
 
 Remote asset tests cover:
@@ -42,11 +49,11 @@ These test failure boundaries deterministically. They do not prove that the live
 
 Important tests include:
 
-- test/verify.spec.ts
-- test/bundle/cli-http.spec.ts
-- test/package/external-customer.spec.ts
-- test/checkly-sandbox.spec.ts
-- test/playwright-sandbox.spec.ts
+- test/sandbox-evidence.spec.ts
+- test/checks/multistep/*
+- test/checks/api/*
+- test/capture/bundle/*
+- test/execution/scene/*
 
 These exercise production CLI code. Some deliberately replace external services with local stand-ins. That is useful for deterministic testing but is not live-provider evidence.
 

@@ -37,9 +37,10 @@ repo Phase 8 = CLI init, repo Phase 9 = protected guarantees).
 - Phase 7 has no real capture: only 5 `manifest.json` files exist on disk
   (2 Playwright fixtures, 1 API incident, 2 seeded DSL bundles). None is a real
   Multistep capture.
-- Only `incidents/slots-availability-api/manifest.json` carries
-  `determinism.method: "checkly-cloud"`. Both Playwright bundles record
-  `local-runner`, which the docs state openly.
+- Of the historical captures, only the API incident manifest recorded
+  `determinism.method: "checkly-cloud"`. Both Playwright bundles recorded
+  `local-runner`, which the docs state openly. None of those bundles is
+  committed today; a developer captures them locally when needed.
 
 ### Candidate fixture coverage (the repair matrix)
 
@@ -132,8 +133,9 @@ the two `MULTISTEP_USER_*` values and the approved
 Blocker: both real Playwright incidents record
 `determinism.method: "local-runner"`, so the determinism gate is open on local
 numbers. The incidents themselves are genuine captures; only the measurement is
-local. `incidents/slots-availability-api` is the only bundle that records
-`checkly-cloud`, so Phase 6 already demonstrates the intended standard.
+local. The historical API incident bundle was the only one that recorded
+`checkly-cloud`, so Phase 6 already demonstrates the intended standard. These
+bundles are not committed; capture them locally to re-measure.
 
 This is a measurement upgrade, not a missing feature. The docs state the current
 values openly and do not claim cloud provenance for them.
@@ -150,9 +152,12 @@ values openly and do not claim cloud provenance for them.
    sanitized evidence:
 
    ```bash
-   verify-fix bundle --check <overlap-check-id> --out fixtures/bundles/slots-booking-overlap --measure 20
-   verify-fix bundle --check <drift-check-id>   --out fixtures/bundles/slots-booking-drift   --measure 20
+   verify-fix bundle --check <overlap-check-id> --out "$HOME/.verify-fix/bundles/slots-booking-overlap" --measure 20
+   verify-fix bundle --check <drift-check-id>   --out "$HOME/.verify-fix/bundles/slots-booking-drift"   --measure 20
    ```
+
+   Keep both bundles outside the repository (or under the ignored
+   `incidents/` directory). No captured bundle is committed.
 
 3. For the overlap bundle also pass `--measure-overlap N` so the
    `live-concurrent:2` reproduction is measured, not assumed. The existing
@@ -209,10 +214,9 @@ Blocker: the gate computes but cannot block. Default is `shadow`.
    `enforce` mode against the live account and record every verdict that would
    change. Confirm zero false positives and zero false UNCERTAIN.
 5. Stage 2 — migration: add versioned requirements to the active bundles
-   (`fixtures/bundles/slots-booking-overlap`, `slots-booking-drift`,
-   `incidents/slots-availability-api`), pin their digests in
-   `.github/workflows/protected-gate.yml`, and confirm requirements are derived
-   from trusted config, never from candidate files.
+   captured for the live account (kept outside the repository), pin their
+   digests in `.github/workflows/protected-gate.yml`, and confirm requirements
+   are derived from trusted config, never from candidate files.
 6. Stage 3 — enforcement: flip the default in `src/cli.ts` from `shadow` to
    `enforce`, run the full suite, then prove the real gate blocks a bad fix and
    passes a good one on a live pull request.
@@ -246,7 +250,7 @@ files driven through the CLI.
    - `09-hardcode-status`
    - `10-hardcoded-host`
 2. Add a driver spec that runs each through the real `verify()` CLI entry point
-   against `incidents/slots-availability-api` and asserts:
+   against a locally captured API incident bundle (never a committed one) and asserts:
    `01` PASS; `02`–`10` FAILED; missing target UNCERTAIN.
 3. Add an imported-helper variant proving 9.4 resolves assertions, constants,
    and setup helpers from the final candidate tree.

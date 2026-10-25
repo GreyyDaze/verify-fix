@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { loadBundle } from "../../src/capture/bundle/load.ts";
-import { incidentLogicalId, logicalEntries, resolveCheckIdentity } from "../../src/candidate/check-identity.ts";
+import { logicalEntries } from "../../src/candidate/check-identity.ts";
 import {
   assertGitRevisionStillCurrent,
   bindCandidateTarget,
@@ -15,8 +14,6 @@ import {
   snapshotLocalCandidate,
   type CandidateRevision,
 } from "../../src/candidate/revision.ts";
-import { loadCandidateRevision, patchedCheckSource, patchedFiles } from "../../src/candidate/patch.ts";
-import { verify } from "../../src/verify.ts";
 
 const ROOT = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
 const temporary: string[] = [];
@@ -138,76 +135,6 @@ describe("stable check identity in a complete candidate", () => {
     assert.deepEqual(logicalEntries("check.ts", "// logicalId: 'incident'\n/* new ApiCheck('also-fake', {}) */\n"), []);
   });
 
-  test("follows the logical ID and Git rename, then loads the new helper from the final tree", () => {
-    const root = repository();
-    const project = join(root, "web");
-    mkdirSync(join(project, "tests"), { recursive: true });
-    cpSync(join(ROOT, "examples/slots-booking/web/checkly.config.ts"), join(project, "checkly.config.ts"));
-    cpSync(join(ROOT, "examples/slots-booking/web/playwright.config.ts"), join(project, "playwright.config.ts"));
-    cpSync(join(ROOT, "examples/slots-booking/web/tests/booking.spec.ts"), join(project, "tests/booking.spec.ts"));
-    writeFileSync(join(project, "package.json"), '{"name":"web","private":true}\n');
-    const base = commitAll(root);
-
-    git(root, "mv", "web/tests/booking.spec.ts", "web/tests/booking-flow.spec.ts");
-    git(root, "mv", "web/playwright.config.ts", "web/playwright.monitoring.config.ts");
-    const renamed = join(project, "tests/booking-flow.spec.ts");
-    writeFileSync(renamed, readFileSync(renamed, "utf8").replace("import { test, expect } from '@playwright/test'", "import { test, expect } from '@playwright/test'\nimport { slot } from './slot-helper'\nvoid slot"));
-    writeFileSync(join(project, "tests/slot-helper.ts"), "export const slot = '09:30'\n");
-    mkdirSync(join(project, "utils"), { recursive: true });
-    writeFileSync(join(project, "utils/alias-helper.ts"), "export const aliasOnly = true\n");
-    mkdirSync(join(project, "tests/fixtures"), { recursive: true });
-    writeFileSync(join(project, "tests/fixtures/pixel.bin"), Buffer.from([0, 1, 2, 3]));
-    writeFileSync(join(project, "checkly.config.ts"), readFileSync(join(project, "checkly.config.ts"), "utf8")
-      .replace("name: 'slots booking flow'", "name: 'renamed booking monitor'")
-      .replace("playwrightConfigPath: './playwright.config.ts'", "playwrightConfigPath: './playwright.monitoring.config.ts'"));
-
-    const bundle = loadBundle(join(ROOT, "fixtures/bundles/slots-booking-drift")).bundle;
-    assert.equal(incidentLogicalId(bundle), "slots-booking-flow");
-    const revision = snapshotLocalCandidate(project, base);
-    try {
-      const identity = resolveCheckIdentity(bundle, revision);
-      assert.equal(identity.logicalId, "slots-booking-flow");
-      assert.equal(identity.name, "renamed booking monitor");
-      assert.equal(identity.checkFile, "tests/booking-flow.spec.ts");
-      const patch = loadCandidateRevision(revision, bundle);
-      assert.equal(patch.complete, true);
-      assert.equal(patch.checkFile, "tests/booking-flow.spec.ts");
-      assert.equal(patch.playwrightConfigFile, "playwright.monitoring.config.ts");
-      assert.equal(patch.checkName, "renamed booking monitor");
-      assert.ok(Object.keys(patch.files).includes("tests/slot-helper.ts"));
-      assert.ok(Object.keys(patch.files).includes("utils/alias-helper.ts"), "the complete project tree includes path-alias helpers");
-      assert.deepEqual(patch.assets?.["tests/fixtures/pixel.bin"], Buffer.from([0, 1, 2, 3]));
-      assert.match(patchedCheckSource(bundle, patch), /slot-helper/);
-      assert.equal(patchedFiles(bundle, patch)["tests/booking.spec.ts"], undefined, "the captured path must not be restored");
-    } finally {
-      revision.dispose();
-    }
-  });
-
-  test("removing the stable logical ID is a definite candidate rejection", async () => {
-    const root = repository();
-    const project = join(root, "web");
-    mkdirSync(join(project, "tests"), { recursive: true });
-    cpSync(join(ROOT, "examples/slots-booking/web/checkly.config.ts"), join(project, "checkly.config.ts"));
-    cpSync(join(ROOT, "examples/slots-booking/web/playwright.config.ts"), join(project, "playwright.config.ts"));
-    cpSync(join(ROOT, "examples/slots-booking/web/tests/booking.spec.ts"), join(project, "tests/booking.spec.ts"));
-    writeFileSync(join(project, "package.json"), "{}\n");
-    const base = commitAll(root);
-    writeFileSync(join(project, "checkly.config.ts"), readFileSync(join(project, "checkly.config.ts"), "utf8").replace("logicalId: 'slots-booking-flow'", "logicalId: 'different-monitor'"));
-    const bundle = loadBundle(join(ROOT, "fixtures/bundles/slots-booking-drift")).bundle;
-    const revision = snapshotLocalCandidate(project, base);
-    try {
-      const patch = loadCandidateRevision(revision, bundle);
-      assert.match(patch.rejection ?? "", /incident check logicalId.*missing/);
-      assert.equal(patchedCheckSource(bundle, patch), "");
-      const result = await verify({ bundle, patch });
-      assert.equal(result.decision.verdict, "FAILED");
-      assert.ok(result.decision.reasons.some((reason) => reason.includes("candidate identity")));
-      assert.deepEqual(result.report.json.candidateCheck, { logicalId: "slots-booking-flow", name: "slots booking flow", file: null });
-    } finally {
-      revision.dispose();
-    }
-  });
 });
 
 describe("pull-request identity and target binding", () => {

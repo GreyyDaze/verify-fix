@@ -5,7 +5,7 @@
 // CLI runs. This replaces the earlier single string-replacement repair, which
 // could only express one candidate.
 //
-// The incident (incidents/slots-availability-api) was caused by the APPLICATION
+// The incident (fixtures/checks/slots-availability-api) was caused by the APPLICATION
 // renaming `availability` -> `status`, so the correct repair asserts the new
 // contract. The fakes below are the AI-move families: remove the assertion,
 // weaken the operator, monitor a different route, rewrite the response, drop
@@ -27,7 +27,7 @@ const ROOT = new URL("../../../", import.meta.url).pathname;
 const PATCH_DIR = join(ROOT, "fixtures/patches/slots-availability-api");
 const checkFile = "checks/availability.check.ts";
 const setupFile = "checks/availability.setup.ts";
-const incidentRoot = join(ROOT, "incidents/slots-availability-api/check");
+const incidentRoot = join(ROOT, "fixtures/checks/slots-availability-api");
 const original = readFileSync(join(incidentRoot, checkFile), "utf8");
 const setup = readFileSync(join(incidentRoot, setupFile), "utf8");
 const token = "verify-token";

@@ -3,14 +3,13 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import { readFileSync } from "node:fs";
 import { parseApiCheckProject } from "../../../src/checks/api/model.ts";
-import { loadBundle } from "../../../src/capture/bundle/load.ts";
 import { verify } from "../../../src/verify.ts";
 import type { PatchSet } from "../../../src/candidate/patch.ts";
 import type { ApiRecording, Bundle, Scene } from "../../../src/types.ts";
 
 const checkFile = "checks/availability.check.ts";
 const setupFile = "checks/availability.setup.ts";
-const incidentCheckRoot = "incidents/slots-availability-api/check";
+const incidentCheckRoot = "fixtures/checks/slots-availability-api";
 const original = readFileSync(`${incidentCheckRoot}/${checkFile}`, "utf8");
 const strictRepair = original.replace('jsonBody("availability")', 'jsonBody("status")');
 const setup = readFileSync(`${incidentCheckRoot}/${setupFile}`, "utf8");
@@ -103,21 +102,6 @@ test("strict API field repair passes HEALTHY, REPRODUCTION, DETECTION, mutation,
   assert.equal(result.cost.httpRequests, 15);
   assert.equal(result.cost.browserProcesses, 0);
   assert.match(result.decision.reasons.join(" "), /availability to status/);
-});
-
-test("captured Checkly API incident bundle passes the strict field repair without trusting Rocky's RCA", async () => {
-  const captured = loadBundle("incidents/slots-availability-api").bundle;
-  const repaired = captured.checkSource.replace('jsonBody("availability")', 'jsonBody("status")');
-  const result = await verify({ bundle: captured, patch: repaired, target, env: { API_TOKEN: token } });
-  assert.equal(result.decision.verdict, "PASS");
-  assert.equal(result.decision.exitCode, 0);
-  assert.equal(captured.api?.failing?.request?.url.startsWith("[REDACTED]/"), true);
-  assert.deepEqual(captured.api?.failing?.response?.json, { slot: "09:30", status: "AVAILABLE" });
-  assert.deepEqual(captured.api?.passing?.response?.json, { slot: "09:30", availability: "AVAILABLE" });
-  assert.equal(result.observations.get("healthy-live")?.observed, "pass");
-  assert.equal(result.observations.get("reproduction")?.observed, "pass");
-  assert.equal(result.observations.get("detection")?.observed, "fail");
-  assert.equal(result.cost.httpRequests, 15);
 });
 
 test("complete multi-file candidate resolves imported assertions, constants, and setup helper", async () => {

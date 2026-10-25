@@ -90,8 +90,8 @@ secrets/variables, your shell) and never in this repository — and answers
 `x-request-id` headers before every request.
 
 Phase 6 is complete: the field-rename incident (`availability` → `status`,
-app-only, check left stale) was captured with the packed CLI into
-`incidents/slots-availability-api`, the strict repair was verified through the
+app-only, check left stale) was captured locally with the packed CLI (the
+bundle is not committed), the strict repair was verified through the
 protected preview and production proofs, and `checkly deploy` ran only after
 PASS. The `status` contract above is current; `availability` was the
 historical baseline the incident was built from. Commands, environment

@@ -386,8 +386,7 @@ src/
 
   cli/                         init.ts, measure-local.ts
   decision/                    THE verdict law — no LLM, an ordered table
-fixtures/bundles/              committed, sanitized incident fixtures
-incidents/                     real captured Checkly incidents
+fixtures/                     test-only inputs (check sources and patches; no captured bundles)
 test/                          node:test suites, mirroring src/ by responsibility
 docs/PROJECT-GUIDE.md          this document
 ```
@@ -635,14 +634,16 @@ State: `mode` and a `Map<account, {version, lockHolders}>`. Endpoints:
 `expect(book.status).toBe(200)` weakened to `toBeGreaterThanOrEqual(0)` (must be
 caught).
 
-### 5.18 `test/verify.spec.ts`
-25 `node:test` tests in five groups: the sandbox evidence rule (empty registry,
-hitless check, trace ids bind to inventory ids, one entry per failed assertion,
-outcome-marker parsing, seeded randomness); executor classification (vacuous /
-other host / crash / budget); static engine (env-dodge, comment stripping);
-decision table (uncertain → 2, mismatch still wins, unobserved scene is not a
-pass); and the seeded suite (01 → PASS with scene-c `fail`, identical rows on
-re-run; 02–10 → exit 1; 11 → never PASS and reproducible; CLI exit code).
+### 5.18 `test/sandbox-evidence.spec.ts`
+Sandbox evidence rules that need no captured bundle: empty registry and a
+hitless check are vacuous, the sandbox gets only Checkly's variables plus the
+check's own, the outcome marker is explicit, seeded randomness is reproducible,
+and comment stripping preserves line numbers.
+
+Captured-bundle integration suites (golden tests, seeded example verdicts, and
+the packed-CLI external-customer run) are intentionally not committed. They
+depended on example-specific evidence, so the repository keeps no captured
+bundle and no test that loads one.
 
 ---
 
@@ -675,23 +676,17 @@ must be available; no runtime dependencies. Dev dependencies (`typescript`,
 ```bash
 npm ci                       # dev deps for type-checking (optional for running)
 
-# verify the good patch
+# capture an incident first; keep the bundle outside this repo or under the
+# ignored incidents/ directory (docs/BUNDLE-STORAGE-PLAN.md)
 node --no-warnings src/cli.ts verify \
-  --patch fixtures/slots-booking/patches/01-good-serialize.ts \
-  --bundle fixtures/slots-booking/bundle/incidents/slots-booking-overlap \
-  --executor synthetic
-echo $?                      # 0
+  --patch <candidate-file-or-directory> \
+  --bundle <captured-bundle> \
+  --executor scene
 
 # machine-readable, and see every run
-node --no-warnings src/cli.ts verify --patch … --bundle … --executor synthetic --json --verbose
+node --no-warnings src/cli.ts verify --patch … --bundle … --executor scene --json --verbose
 
-# the whole seeded suite
-for p in fixtures/slots-booking/patches/*.ts; do
-  node --no-warnings src/cli.ts verify --patch "$p" --bundle fixtures/slots-booking/bundle/incidents/slots-booking-overlap --executor synthetic >/dev/null 2>&1
-  echo "exit=$? $(basename "$p")"
-done
-
-npm test                     # 25 tests, ~50 s (runs real sandboxes)
+npm test                     # synthetic unit/integration suites; no committed bundle
 npm run typecheck            # tsc --noEmit
 ```
 
@@ -1357,8 +1352,8 @@ the browser runner, the live gate, and the complete-candidate intake all have
 their proofs — including the protected proof at commit `01f71b8` in run
 `36041826149`. Phase 6 is complete as well: the authenticated booking API
 (`GET /api/v1/availability`) and its Checkly `ApiCheck` live in the same
-project, the real `availability` → `status` incident was captured as
-`incidents/slots-availability-api`, and the strict repair passed the protected
+project, the real `availability` → `status` incident was captured locally (the
+bundle is not committed), and the strict repair passed the protected
 preview proof (run `36059967113`), the merge (`f8bf9f06`), and the production
 proof (run `36119394291`) through the manually verified stable alias. A first
 production attempt (run `36109648763`) failed only because Vercel Deployment
@@ -1371,13 +1366,11 @@ run DSL, Playwright, or API checks against a chosen target, split scenes
 between the local proxy and Checkly's cloud CLI, grade code/config/app-preview
 repairs, and return PASS/FAILED/UNCERTAIN with exit 0/1/2.
 
-The repository has two real captured Playwright incidents. The overlap bundle
-has a 20/20 one-at-a-time API baseline and reproduces its 401 in 20/20 browser
-pairs. The drift bundle reproduces its stale locator in 20/20 runs. Their
-manifests say `method: local-runner`, so the determinism gate is open without
-pretending the numbers came from Checkly's cloud. Phase 6 added the real API
-incident bundle `incidents/slots-availability-api` to the same standard:
-sanitized evidence only, never credentials.
+The repository commits no captured bundles. Historical captures (the Playwright
+overlap and drift incidents and the API field-rename incident) remain described
+in the plan as provenance, but they are not repo inputs: a developer captures a
+fresh bundle locally, keeps it outside the repo, and passes its path to
+`verify`.
 
 The automated suite has 158 tests. It uses the real local app for the DSL
 suite. It uses fake project-local Playwright and Checkly CLIs as test doubles
@@ -1413,9 +1406,10 @@ Phase 7 suite. The current pre-commit Node v24.21.0 checkpoint passed
 workflow/bundle/API/executor/candidate/package/scene/sandbox tests (the last
 includes the packed external-consumer run), all with
 zero skips. The 482-test full suite had 475 pass, exactly the same seven
-known `test/verify.spec.ts` failures, zero skips. These are old DSL assertions
-against the newly nested app response, not real Checkly failures; an eighth
-failure or a skip is unacceptable. Root/example typechecks and builds,
+known `test/verify.spec.ts` failures, zero skips. Those were old DSL assertions
+against the newly nested app response, not real Checkly failures. That suite
+has since been removed together with the committed captured bundles, so the
+current suite has no captured-bundle dependency. Root/example typechecks and builds,
 helper and workflow shell syntax checks, and the local collision check
 (5/5) also passed.
 

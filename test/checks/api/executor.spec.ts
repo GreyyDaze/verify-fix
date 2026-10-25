@@ -9,7 +9,7 @@ import type { ApiRecording, Bundle, Scene } from "../../../src/types.ts";
 
 const checkFile = "checks/availability.check.ts";
 const setupFile = "checks/availability.setup.ts";
-const incidentCheckRoot = "incidents/slots-availability-api/check";
+const incidentCheckRoot = "fixtures/checks/slots-availability-api";
 const baseline = readFileSync(`${incidentCheckRoot}/${checkFile}`, "utf8");
 const candidate = baseline.replace('jsonBody("availability")', 'jsonBody("status")');
 const setup = readFileSync(`${incidentCheckRoot}/${setupFile}`, "utf8");

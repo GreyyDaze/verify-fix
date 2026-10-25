@@ -49,8 +49,8 @@ function detail(result: CheckResultSummary, field: "availability" | "status"): C
 
 test("contract: synthetic Checkly API bundle captures sanitized request, response, setup provenance, history, and API scenes", async () => {
   const project = mkdtempSync(join(tmpdir(), "verify-fix-api-project-"));
-  cpSync("incidents/slots-availability-api/check/checkly.config.ts", join(project, "checkly.config.ts"));
-  cpSync("incidents/slots-availability-api/check/checks", join(project, "checks"), { recursive: true });
+  cpSync("fixtures/checks/slots-availability-api/checkly.config.ts", join(project, "checkly.config.ts"));
+  cpSync("fixtures/checks/slots-availability-api/checks", join(project, "checks"), { recursive: true });
   const failing = summary("api-failing", false, "2026-09-24T10:10:00.000Z");
   const passing = summary("api-passing", true, "2026-09-24T10:05:00.000Z");
   // Synthetic ChecklyClient: validates bundle mechanics only; this test does not prove live Checkly API shapes.

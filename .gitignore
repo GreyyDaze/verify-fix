@@ -19,6 +19,8 @@ hedera
 
 # captured evidence bundles (proof, not code); see docs/BUNDLE-STORAGE-PLAN.md
 bundle-*/
+/incidents/
+/fixtures/bundles/
 .verify-fix/
 
 # OS / editor

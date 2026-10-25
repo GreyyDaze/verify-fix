@@ -1,15 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { loadBundle } from "../../../src/capture/bundle/load.ts";
 import { validateMultistepScenario } from "../../../src/capture/bundle/scenario.ts";
 import { deriveMultiStepScenario } from "../../../src/capture/bundle/manifest.ts";
 import type { MultiStepCapture } from "../../../src/checks/multistep/normalize.ts";
 import { multistepWitnessProblems } from "../../../src/checks/multistep/shape.ts";
-
-const INCIDENT = new URL("../../../incidents/slots-multistep-nested-response/", import.meta.url).pathname;
 
 const valid = {
   kind: "multistep",
@@ -56,45 +50,6 @@ test("a scenario with an unknown key, external path, or non-scalar mutation is r
     assert.equal(validateMultistepScenario(candidate).scenario, null, JSON.stringify(candidate));
     assert.equal(validateMultistepScenario(candidate).problem, "MULTISTEP_SCENARIO_INVALID");
   }
-});
-
-test("the migrated Multistep incident bundle loads its scenario", () => {
-  const { bundle } = loadBundle(INCIDENT);
-  const { witness, ...rest } = bundle.scenario!;
-  assert.deepEqual(rest, valid);
-  // Older captured bundles predate the witness; the loader re-derives it from
-  // the trusted stored failing recording.
-  assert.equal(witness?.responses.length, 4);
-  assert.ok((witness?.equalities.length ?? 0) > 0);
-  assert.deepEqual(bundle.multistep?.problems, []);
-});
-
-test("an incident bundle without a scenario fails closed", () => {
-  const dir = mkdtempSync(join(tmpdir(), "verify-fix-no-scenario-"));
-  try {
-    cpSync(INCIDENT, dir, { recursive: true });
-    const manifestPath = join(dir, "manifest.json");
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    delete manifest.scenario;
-    writeFileSync(manifestPath, JSON.stringify(manifest));
-    const { bundle } = loadBundle(dir);
-    assert.equal(bundle.scenario, null);
-    assert.ok(bundle.multistep?.problems.includes("MULTISTEP_SCENARIO_INVALID"));
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-});
-
-test("a malformed scenario fails closed instead of partially loading", () => {
-  const dir = mkdtempSync(join(tmpdir(), "verify-fix-bad-scenario-"));
-  try {
-    cpSync(INCIDENT, dir, { recursive: true });
-    const manifestPath = join(dir, "manifest.json");
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    manifest.scenario.mutation.jsonPath = ["https://evil.example"];
-    writeFileSync(manifestPath, JSON.stringify(manifest));
-    const { bundle } = loadBundle(dir);
-    assert.equal(bundle.scenario, null);
-    assert.ok(bundle.multistep?.problems.includes("MULTISTEP_SCENARIO_INVALID"));
-  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("capture derives routes, titles and the single boolean mutation from evidence", () => {

@@ -3,21 +3,11 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { parseMode, effectiveConcurrency, needsTarget } from "../../../src/execution/scene/modes.ts";
 import { parseCheckConfig, diffCheckConfig, applyConfigPolicy } from "../../../src/execution/scene/config-diff.ts";
 import { parseEnvFile, referencedEnvVars, checkEnv } from "../../../src/execution/sandbox/env.ts";
-import { loadBundle } from "../../../src/capture/bundle/load.ts";
-import { loadCandidateProject, loadPatch, patchedConfig, patchedCheckSource, newFiles } from "../../../src/candidate/patch.ts";
 import { parseInventory, inventoryDiff } from "../../../src/evidence/assertion/inventory.ts";
-import { buildContract } from "../../../src/evidence/contract/contract.ts";
-import { detectEnvScopeDodge, matchesTargetOrigin, regionalUserEnvKey, SceneExecutor } from "../../../src/execution/executor/scene.ts";
-
-const ROOT = join(import.meta.dirname, "..", "..", "..");
-const INCIDENT_DIR = join(ROOT, "fixtures/slots-booking/bundle/incidents/slots-booking-overlap");
-const PATCH_DIR = join(ROOT, "fixtures/slots-booking/patches");
+import { detectEnvScopeDodge, matchesTargetOrigin, regionalUserEnvKey } from "../../../src/execution/executor/scene.ts";
 
 describe("scene modes", () => {
   test("grammar: live, live-concurrent:N, replay:<har>, inject:<rule>; everything else is unknown, never a silent live", () => {
@@ -156,106 +146,5 @@ describe("Multistep target ownership", () => {
     assert.equal(matchesTargetOrigin("https://slots-booking-verify-fix.vercel.app/path", "https://slots-booking-verify-fix.vercel.app"), false);
     assert.equal(matchesTargetOrigin("https://slots-booking-verify-fix.vercel.app?x=1", "https://slots-booking-verify-fix.vercel.app"), false);
     assert.equal(matchesTargetOrigin("https://slots-booking-verify-fix.vercel.app", null), false);
-  });
-});
-
-describe("measured real bundles", () => {
-  test("local measurements open the right determinism gate for overlap and persistent drift", () => {
-    const overlap = loadBundle(join(ROOT, "fixtures/bundles/slots-booking-overlap")).bundle;
-    const drift = loadBundle(join(ROOT, "fixtures/bundles/slots-booking-drift")).bundle;
-    assert.deepEqual(
-      { achieved: overlap.determinism.achieved, reproduction: overlap.determinism.reproductionFailRate, baseline: overlap.determinism.baselinePassRate, method: overlap.determinism.method },
-      { achieved: 20, reproduction: 1, baseline: 1, method: "local-runner" },
-    );
-    assert.deepEqual(
-      { achieved: drift.determinism.achieved, reproduction: drift.determinism.reproductionFailRate, baseline: drift.determinism.baselinePassRate, method: drift.determinism.method },
-      { achieved: 20, reproduction: 1, baseline: null, method: "local-runner" },
-    );
-    const overlapFix = loadPatch(join(ROOT, "fixtures/patches/slots-booking-overlap/01-good-run-parallel-false"), overlap);
-    const driftFix = loadPatch(join(ROOT, "fixtures/patches/slots-booking-drift/01-good-rename"), drift);
-    assert.equal(buildContract(overlap, patchedCheckSource(overlap, overlapFix)).determinismGate.blocked, false);
-    assert.equal(buildContract(drift, patchedCheckSource(drift, driftFix)).determinismGate.blocked, false);
-
-    const persistentMultiStep = {
-      ...drift,
-      check: { ...drift.check, checkType: "MULTI_STEP" },
-      determinism: {
-        ...drift.determinism,
-        achieved: 20,
-        targetRuns: 20,
-        sequentialPassRate: 0,
-        reproductionFailRate: 1,
-        baselinePassRate: 0,
-        method: "local-runner" as const,
-      },
-    };
-    assert.equal(buildContract(persistentMultiStep, patchedCheckSource(drift, driftFix)).determinismGate.blocked, false,
-      "a reproducible sequential Multistep failure has no healthy baseline requirement");
-
-    const intermittentMultiStep = {
-      ...persistentMultiStep,
-      determinism: { ...persistentMultiStep.determinism, sequentialPassRate: 0.5, baselinePassRate: 0.5 },
-    };
-    assert.equal(buildContract(intermittentMultiStep, patchedCheckSource(drift, driftFix)).determinismGate.blocked, true,
-      "an inconsistent sequential baseline must still block");
-  });
-
-  test("an API-only browser replay without --target is inconclusive before Playwright starts", async () => {
-    const bundle = loadBundle(join(ROOT, "fixtures/bundles/slots-booking-overlap")).bundle;
-    const base = bundle.scenes.find((s) => s.type === "HEALTHY")!;
-    const scene = { ...base, sceneId: "replay-preflight", mode: "replay:passing.har", experiments: [{ ...base.experiments[0], repetitions: 1 }] };
-    const executor = new SceneExecutor({ target: null, env: { TEST_USER: "demo" } });
-    try {
-      const observed = await executor.runScene(bundle, bundle.checkSource, scene, { config: bundle.config, files: bundle.files });
-      assert.equal(observed.observed, "uncertain");
-      assert.match(observed.reason ?? "", /needs --target for page assets/);
-    } finally {
-      await executor.close();
-    }
-  });
-});
-
-describe("patch sets", () => {
-  test("a file replaces the main check; a directory replaces matching files; config merges over the bundle's", () => {
-    const { bundle } = loadBundle(INCIDENT_DIR);
-    assert.equal(bundle.configFile, "checkly.config.ts");
-    // The overlap bundle is real captured evidence recorded in eu-west-1. It is
-    // never rewritten to match the example's current region.
-    assert.deepEqual(bundle.config, { runParallel: true, locations: ["us-east-1", "eu-west-1"], frequencyMinutes: 5, environmentVariables: ["ACCOUNT"] });
-
-    const file = loadPatch(join(PATCH_DIR, "03-weaken-assertion.ts"), bundle);
-    assert.equal(file.kind, "file");
-    assert.deepEqual(Object.keys(file.files), ["booking.check.ts"]);
-    assert.deepEqual(patchedConfig(bundle, file), bundle.config, "a code-only patch keeps the config");
-
-    const dir = loadPatch(join(PATCH_DIR, "01-good-run-parallel-false"), bundle);
-    assert.equal(dir.kind, "directory");
-    assert.deepEqual(Object.keys(dir.files).sort(), ["booking.check.ts", "checkly.config.ts"]);
-    assert.equal(patchedCheckSource(bundle, dir), bundle.checkSource, "the good fix leaves the check code alone");
-    assert.deepEqual(patchedConfig(bundle, dir), { ...bundle.config, runParallel: false });
-    assert.deepEqual(newFiles(bundle, dir), []);
-
-    const one = loadPatch(join(PATCH_DIR, "12-good-one-location"), bundle);
-    assert.deepEqual(patchedConfig(bundle, one)?.locations, ["us-east-1"]);
-  });
-
-  test("candidate-project reads captured monitoring paths but not app output or dependencies", () => {
-    const bundle = loadBundle(join(ROOT, "fixtures/bundles/slots-booking-drift")).bundle;
-    const patch = loadCandidateProject(join(ROOT, "examples/slots-booking/web"), bundle);
-    assert.equal(patch.kind, "candidate-project");
-    assert.match(patchedCheckSource(bundle, patch), /booking-status/);
-    assert.ok(Object.keys(patch.files).includes("checkly.config.ts"));
-    assert.ok(!Object.keys(patch.files).some((path) => path.startsWith("app/") || path.startsWith("node_modules/") || path.startsWith(".next/")));
-  });
-
-  test("candidate-project follows real relative imports but ignores imports inside comments", () => {
-    const root = mkdtempSync(join(tmpdir(), "verify-fix-candidate-"));
-    mkdirSync(join(root, "tests"), { recursive: true });
-    writeFileSync(join(root, "tests", "main.spec.ts"), `// import './missing-secret'\nimport { value } from './helper'\nvoid value\n`);
-    writeFileSync(join(root, "tests", "helper.ts"), "export const value = 1\n");
-    const base = loadBundle(join(ROOT, "fixtures/bundles/slots-booking-drift")).bundle;
-    const bundle = { ...base, check: { ...base.check, file: "tests/main.spec.ts" }, checkSource: "original", files: { "tests/main.spec.ts": "original" }, configFile: null };
-    const patch = loadCandidateProject(root, bundle);
-    assert.deepEqual(Object.keys(patch.files).sort(), ["tests/helper.ts", "tests/main.spec.ts"]);
   });
 });

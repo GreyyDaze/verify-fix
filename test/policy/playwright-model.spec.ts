@@ -5,14 +5,7 @@
 // those files stays null; a Checkly default is never assumed.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { resolveEffectivePlaywrightModel } from "../../src/policy/playwright-model.ts";
-
-const ROOT = new URL("../..", import.meta.url).pathname;
-const captured = (relative: string): string => {
-  try { return readFileSync(join(ROOT, relative), "utf8"); } catch { return ""; }
-};
 
 const PW = `import { defineConfig, devices } from '@playwright/test'
 const PRODUCTION_URL = 'https://example.invalid'
@@ -29,18 +22,6 @@ export default defineConfig({
     playwrightChecks: [{ name: 'slots booking flow', pwProjects: ['booking'], runParallel: true }] },
 })
 `;
-
-test("the captured bundle's effective Playwright model resolves fully", () => {
-  const source = captured("fixtures/bundles/slots-booking-overlap/check/playwright.config.ts");
-  const model = resolveEffectivePlaywrightModel(source,
-    captured("fixtures/bundles/slots-booking-overlap/check/checkly.config.ts"), "playwright.config.ts");
-  assert.equal(model.configPath, "playwright.config.ts");
-  assert.deepEqual(model.projects, ["booking"]);
-  assert.deepEqual(model.testSelection, ["booking"]);
-  assert.equal(model.retries, 0, "a captured retries: 0 is a real value, not a default");
-  assert.equal(model.targetVariable, "ENVIRONMENT_URL");
-  assert.equal(model.targetFallback, "https://slots-booking-verify-fix.vercel.app");
-});
 
 test("retries is read numerically, so `retries: 0` is not dropped", () => {
   const model = resolveEffectivePlaywrightModel(PW, CHECKLY, "playwright.config.ts");

@@ -152,9 +152,3 @@ npx checkly deploy
 | Check fails at `book-status` | The locator was renamed; this is the drift incident. |
 | API check expects `availability` | The app now returns `status`; this is the field-rename incident. |
 | Multistep reads flat `body.confirmed` | The app now nests it under `booking.confirmed`. |
-
-## Related docs
-
-- [`web/README.md`](web/README.md) — deployment, protected gate, and full walkthrough
-- [`../../docs/VERIFICATION-PLAN.md`](../../docs/VERIFICATION-PLAN.md)
-- [`../../docs/BUNDLE-STORAGE-PLAN.md`](../../docs/BUNDLE-STORAGE-PLAN.md)

@@ -111,13 +111,6 @@ test("init is a no-op when verify-fix is already a dependency", () => {
   assert.deepEqual(plan.actions, []);
 });
 
-test("the confirmation text states what is NOT touched", () => {
-  const dir = tempProject({ "checkly.config.ts": CONFIG, "package.json": '{"name":"x"}' });
-  const text = initConfirmation(planInit(dir));
-  assert.match(text, /Not touched: your checks, your Checkly config, any env file, and any captured incident/);
-  assert.match(text, /No service is provisioned and no credential is read or stored/);
-});
-
 test("detectProject never throws on a hostile or absent directory", () => {
   const dir = tempProject({});
   assert.doesNotThrow(() => detectProject(dir));

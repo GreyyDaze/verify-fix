@@ -82,14 +82,7 @@ Two-phase model:
 - **Gate fails closed** — missing bundle, fingerprint mismatch, missing check identity, missing deployment metadata → immediate non-zero exit.
 - **Candidate code never trusted** — requirements derived from live Checkly API + captured result, sealed in bundle before candidate runs.
 
-## Security Model
-
-- **Bundles never in candidate repo** — stored externally (GitHub Actions artifact, local filesystem, or object store). Fingerprint proves integrity.
-- **Secrets only in CI env** — `CHECKLY_API_KEY`, `TEST_USER_*`, `MULTISTEP_USER_*`, `VERCEL_AUTOMATION_BYPASS_SECRET` never touch the bundle or logs.
-- **Gate fails closed** — missing bundle, fingerprint mismatch, missing check identity, missing deployment metadata → immediate non-zero exit.
-- **Candidate code never trusted** — requirements derived from live Checkly API + captured result, sealed in bundle before candidate runs.
-
-## Techniques
+## Implementation Techniques
 
 This section describes how verify-fix implements each capability deterministically.
 

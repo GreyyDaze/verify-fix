@@ -4,10 +4,14 @@ import { defineConfig, devices } from '@playwright/test'
 
 // Checkly's convention: ENVIRONMENT_URL points the check at a deployment.
 //   - `npx checkly test -e ENVIRONMENT_URL=https://<preview>.vercel.app`
-//   - Vercel/GitHub deployment integration sets it automatically.
-// When it is not set, the check targets production.
+//   - The deploy workflow sets it from the verified stable alias.
+// When it is not set, Checkly monitors production and local runs use the app
+// started by `npm run dev` / `npm run start`.
 const PRODUCTION_URL = 'https://slots-booking-verify-fix.vercel.app'
-const vercelBypass = process.env.CHECKLY_SECRET_VERCEL_AUTOMATION_BYPASS_SECRET
+const LOCAL_URL = 'http://localhost:3000'
+const isCheckly = process.env.CHECKLY === '1'
+// Exposed at runtime as a check-level environment variable by checkly.config.ts.
+const vercelBypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
 
 export default defineConfig({
   testDir: './tests',
@@ -19,7 +23,7 @@ export default defineConfig({
   reporter: 'list',
 
   use: {
-    baseURL: process.env.ENVIRONMENT_URL ?? PRODUCTION_URL,
+    baseURL: process.env.ENVIRONMENT_URL ?? (isCheckly ? PRODUCTION_URL : LOCAL_URL),
     // Vercel's automation bypass is supplied only by CI. The secret is sent as
     // a request header. It is never stored in this project or an incident bundle.
     ...(vercelBypass ? { extraHTTPHeaders: { 'x-vercel-protection-bypass': vercelBypass } } : {}),

@@ -11,9 +11,17 @@
 // candidate fixes illustrate possible repairs.
 import { test, expect } from '@playwright/test'
 // GOOD FIX: each stable Checkly location uses its own declared account.
-const TEST_USERS_BY_REGION: Record<string, string | undefined> = { 'us-east-1': process.env.TEST_USER_US_EAST_1, 'eu-west-1': process.env.TEST_USER_EU_WEST_1 }
-const TEST_USER = TEST_USERS_BY_REGION[process.env.CHECKLY_REGION ?? '']
-if (!TEST_USER) throw new Error(`No declared test user is configured for region ${process.env.CHECKLY_REGION ?? 'unset'}`)
+const TEST_USERS_BY_REGION: Record<string, string | undefined> = {
+  'us-east-1': process.env.TEST_USER_US_EAST_1,
+  'eu-central-1': process.env.TEST_USER_EU_CENTRAL_1,
+}
+const REGION = process.env.CHECKLY_REGION
+// On Checkly, fail closed if this location has no account. Locally, use the
+// single TEST_USER the README documents so `npx playwright test` still works.
+const TEST_USER = REGION ? TEST_USERS_BY_REGION[REGION] : (process.env.TEST_USER ?? 'demo')
+if (!TEST_USER) {
+  throw new Error(`No declared test user is configured for region ${REGION ?? 'unset'}`)
+}
 
 test.describe('slots booking flow', () => {
   test('log in and book the 09:30 slot', async ({ page }) => {

@@ -17,15 +17,15 @@ import * as path from "node:path";
 // only — values come from the environment at the later checkpoint.
 new MultiStepCheck("slots-booking-multistep", {
   name: "slots booking multistep transaction",
+  description: "Logs in, reads the session, lists slots, books 09:30, and confirms the booking.",
   activated: true,
   muted: false,
   frequency: Frequency.EVERY_5M,
   locations: ["us-east-1", "eu-central-1"],
   // Both locations run concurrently; per-region accounts keep them isolated.
   runParallel: true,
-  // An omitted double-check may inherit an account default that retries a
-  // failure. Preserve one attempt per scheduled run and fail closed on drift.
-  doubleCheck: false,
+  // The project-level retryStrategy disables retries. A retry would hide the
+  // transaction failures this check exists to detect.
   tags: ["slots-booking", "verify-fix-example", "multistep"],
   environmentVariables: [
     { key: "ENVIRONMENT_URL", value: process.env.ENVIRONMENT_URL ?? "" },

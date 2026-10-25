@@ -7,12 +7,13 @@ const EXPECTED_AVAILABILITY = "AVAILABLE";
 export const availabilityAssertions = [
   AssertionBuilder.statusCode().equals(200),
   AssertionBuilder.headers("content-type").equals("application/json"),
-  AssertionBuilder.jsonBody("slot").equals(SLOT),
-  AssertionBuilder.jsonBody("status").equals(EXPECTED_AVAILABILITY),
+  AssertionBuilder.jsonBody("$.slot").equals(SLOT),
+  AssertionBuilder.jsonBody("$.status").equals(EXPECTED_AVAILABILITY),
 ];
 
 new ApiCheck("slots-availability-api", {
   name: "slots availability API",
+  description: "Checks that the 09:30 slot is available for booking.",
   activated: true,
   muted: false,
   frequency: Frequency.EVERY_5M,

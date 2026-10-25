@@ -63,7 +63,9 @@ examples/slots-booking/
 | Variable | Purpose | Required |
 | --- | --- | --- |
 | `ENVIRONMENT_URL` | Target deployment for every check | yes |
-| `TEST_USER` | Shared browser account | local / browser |
+| `TEST_USER` | Local browser account (defaults to `demo`) | local only |
+| `TEST_USER_US_EAST_1` | Browser account for `us-east-1` | Playwright check |
+| `TEST_USER_EU_CENTRAL_1` | Browser account for `eu-central-1` | Playwright check |
 | `API_TOKEN` | Bearer token for `/api/v1/availability` | API check |
 | `MULTISTEP_USER_US_EAST_1` | Multistep account for `us-east-1` | Multistep |
 | `MULTISTEP_USER_EU_CENTRAL_1` | Multistep account for `eu-central-1` | Multistep |

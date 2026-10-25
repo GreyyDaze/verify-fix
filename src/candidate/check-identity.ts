@@ -1,5 +1,4 @@
 // Stable Checkly identity resolution for a complete candidate tree.
-//
 // Display names and file paths may change. The logical ID is the durable key.
 // The incident's logical ID is derived from its captured source when older v3
 // bundles stored the project ID instead of the nested check ID.

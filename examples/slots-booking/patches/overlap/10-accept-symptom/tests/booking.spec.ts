@@ -8,7 +8,7 @@
 //
 // Assertions are deliberately explicit (no `if`, no try/catch, no soft
 // expects). This is the "good" version of the check; the incident and the
-// candidate fixes come later in the plan.
+// candidate fixes illustrate possible repairs.
 import { test, expect } from '@playwright/test'
 
 // Set by Checkly (check-level environment variable), by `checkly test -e`,

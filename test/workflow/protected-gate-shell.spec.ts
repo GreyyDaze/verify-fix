@@ -156,7 +156,7 @@ test("bundle guard fails closed without a configured identity or on a mismatched
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("approved Phase 7 preview receives two distinct Multistep identities only for a Multistep bundle", () => {
+test("approved preview receives two distinct Multistep identities only for a Multistep bundle", () => {
   const root = mkdtempSync(join(tmpdir(), "verify-fix-preview-multistep-"));
   try {
     const bundle = join(root, "bundle");

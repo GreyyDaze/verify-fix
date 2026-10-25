@@ -232,7 +232,7 @@ export class ChecklyClient {
   /**
    * Enumerate every check in the account so an incident bundle can record the
    * real sibling monitors instead of guessing which other checks a project-wide
-   * change might affect (Phase 9 task 9.10).
+   * change might affect.
    *
    * BOUNDED: at most MAX_LIST_CHECK_PAGES pages of MAX_LIST_CHECK_PAGE_SIZE.
    * A partial enumeration would make the regression scope unknowable, so a

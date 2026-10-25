@@ -7,14 +7,14 @@ on:
     inputs:
       verifier_ref:
         description: >-
-          V: reviewed immutable verifier and incident bundle commit. Distinct
-          from the later protected-workflow snapshot W.
+          Reviewed immutable verifier and incident bundle commit. Distinct
+          from the later protected-workflow snapshot.
         required: true
         type: string
       workflow_ref:
         description: >-
-          W: immutable reusable-workflow snapshot containing trusted helpers;
-          later the caller's `uses:` pin. Not the verifier commit V.
+          Immutable reusable-workflow snapshot containing trusted helpers;
+          later the caller's `uses:` pin. Not the verifier commit.
         required: true
         type: string
       deployment_id:
@@ -58,19 +58,18 @@ env:
   # mismatch STOPs the gate — it never grades a fix against unverified evidence.
   VERIFY_FIX_BUNDLE_ARTIFACT: ${{ vars.VERIFY_FIX_BUNDLE_ARTIFACT || '' }}
   VERIFY_FIX_BUNDLE_ARTIFACT_RUN: ${{ vars.VERIFY_FIX_BUNDLE_ARTIFACT_RUN || '' }}
-  # Part C of docs/BUNDLE-STORAGE-PLAN.md: the caller pins the whole-bundle
+  # The caller pins the whole-bundle
   # SHA-256 fingerprint recorded when the bundle was captured outside the
   # candidate's repo.
   VERIFY_FIX_BUNDLE_DIGEST: ${{ vars.VERIFY_FIX_BUNDLE_DIGEST || '' }}
-  # Phase 9 Stage 2 — the expected digest of the trusted bundle's sealed
+  # The expected digest of the trusted bundle's sealed
   # protected-requirements policy. Pinned by the caller from the reviewed
   # bundle commit. Empty means "no pin", which the verifier reports as
   # PROTECTED_POLICY_PIN_MISSING instead of silently accepting the bundle.
   VERIFY_FIX_REQUIREMENTS_DIGEST: ${{ vars.VERIFY_FIX_REQUIREMENTS_DIGEST || '' }}
-  # Rollout mode for the protected gate. Shadow reports and cannot block
-  # (Phase 9 Stage 1/2); enforcement is Stage 3 and requires the migrated
-  # bundles to resolve alertBehaviour, dependencyMetadata and runtime from the
-  # live Checkly API. See docs/VERIFICATION-PLAN.md.
+  # Rollout mode for the protected gate. Shadow reports and cannot block;
+  # enforcement requires the migrated bundles to resolve alertBehaviour,
+  # dependencyMetadata and runtime from the live Checkly API.
   VERIFY_FIX_REQUIREMENTS_MODE: ${{ vars.VERIFY_FIX_REQUIREMENTS_MODE || 'shadow' }}
 
 jobs:
@@ -513,7 +512,7 @@ jobs:
   # manual-only → waiting; a later event with both valid statuses may become
   # ready. Malformed, conflicting, ambiguous, wrong-deployment, or wrong-SHA
   # evidence fails closed. Helper code is the trusted checkout at
-  # inputs.workflow_ref (later the caller's W pin), never candidate code.
+  # inputs.workflow_ref (later the caller's workflow pin), never candidate code.
   production-preflight:
     name: secret-free production URL preflight
     if: >-
@@ -750,7 +749,7 @@ jobs:
           env_file="$(mktemp "$RUNNER_TEMP/verify-fix-production.XXXXXXXX")"
           metadata_file="$(mktemp "$RUNNER_TEMP/verify-fix-production-target.XXXXXXXX")"
           chmod 0600 "$env_file" "$metadata_file"
-          # The earlier Phase 7 bundle guard already required MULTI_STEP.
+          # The earlier bundle guard already required MULTI_STEP.
           input_names=(TEST_USER TEST_USER_US_EAST_1 TEST_USER_EU_WEST_1 API_TOKEN BYPASS MULTISTEP_USER_US_EAST_1 MULTISTEP_USER_EU_WEST_1)
           # Neither region may share a browser account or the other region's
           # account. Do not print any value. The verifier also checks trimming,

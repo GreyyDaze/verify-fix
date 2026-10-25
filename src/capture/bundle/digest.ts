@@ -1,5 +1,5 @@
 // Whole-bundle fingerprint. A bundle is proof, not code: it is stored outside
-// the candidate's repo (see docs/BUNDLE-STORAGE-PLAN.md) and pinned by this
+// the candidate's repo and pinned by this
 // SHA-256 so a swapped or edited bundle can never be graded against. The
 // digest is a deterministic function of the bundle's directory contents:
 // every regular file, ordered by its POSIX relative path, with the path and a

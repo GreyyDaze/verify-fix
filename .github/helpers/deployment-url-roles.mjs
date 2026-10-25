@@ -1,5 +1,5 @@
 // @ts-check
-// URL-role resolver for the secret-free production preflight (Stage 2).
+// URL-role resolver for the secret-free production preflight.
 //
 // Two URL roles exist for one GitHub deployment of the current main revision,
 // and BOTH are environment origins (no path, query, or fragment):

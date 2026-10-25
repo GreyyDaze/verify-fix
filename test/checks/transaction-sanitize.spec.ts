@@ -1,4 +1,4 @@
-// Stage-7 focused tests: structured transaction extraction and
+// Structured transaction extraction and
 // relationship-preserving sanitization. Fixtures are locally constructed.
 
 import { test } from "node:test";

@@ -1,5 +1,5 @@
 // @ts-check
-// Secret-free production URL preflight (Stage 2).
+// Secret-free production URL preflight.
 //
 // Pure dependency-free ESM (`.mjs`): executed directly by the existing
 // setup-node runtime with no TypeScript stripping, no experimental flags,

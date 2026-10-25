@@ -1,4 +1,4 @@
-// REPRODUCTION mode from the RCA text (BRAINSTORM Part 3.4 / D5).
+// REPRODUCTION mode from the RCA text.
 //
 // This is a fixed rule table, not a model. Rocky's RCA is INPUT DATA (text
 // Checkly produced); the rules below only decide HOW the reproduction scene is

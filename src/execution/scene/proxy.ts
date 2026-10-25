@@ -301,7 +301,7 @@ export class SceneProxy {
     // order in each process. Pairing those by ordinal can deadlock or pair a
     // login with a script. Fetch/XHR requests have `sec-fetch-dest: empty`.
     // Non-browser API clients omit that header, so all of their calls retain
-    // the Phase 3 lockstep behavior.
+    // the lockstep barrier behavior.
     if (this.barrier && action) {
       const actionOrdinal = ++this.actionOrdinals[runIndex];
       await this.barrier.enter({ runIndex, ordinal: actionOrdinal, forward, release: () => {} });

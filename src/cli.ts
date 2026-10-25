@@ -575,7 +575,7 @@ function runCostReport(args: Args): ExitCode {
 }
 
 /**
- * `verify-fix init` — Phase 8 task 8.1.
+ * `verify-fix init`.
  *
  * Prepares verify-fix inside an EXISTING Checkly project. It never creates or
  * copies the example, never provisions a service, and never reads or stores a

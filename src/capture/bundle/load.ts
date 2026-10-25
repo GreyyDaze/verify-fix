@@ -182,7 +182,7 @@ function fromV3(m: ManifestV3, dir: string, files: Record<string, string>, confi
       : null,
     scenes,
     envAssumptions: m.envAssumptions,
-    // PR-7: without measured numbers the gate stays closed (UNCERTAIN, never PASS).
+    // Without measured numbers the gate stays closed (UNCERTAIN, never PASS).
     // A concurrency incident needs both a green one-at-a-time baseline and a
     // red overlap. A persistent live incident (such as check drift) needs the
     // original check to fail every time in `live`; an overlap number is not

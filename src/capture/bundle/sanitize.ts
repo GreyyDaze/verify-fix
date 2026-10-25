@@ -1,4 +1,4 @@
-// Credential policy for everything the bundle writes (BRAINSTORM D8):
+// Credential policy for everything the bundle writes:
 // the bundle may be committed to a repo, so it must never carry a secret.
 //   - env vars: names only (values are dropped before anything is written)
 //   - HAR: authorization/cookie headers, secret-looking query params and JSON

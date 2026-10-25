@@ -1,7 +1,7 @@
 import { Frequency, MultiStepCheck } from "checkly/constructs";
 import * as path from "node:path";
 
-// Local Stage 3 baseline: exactly ONE new MultiStepCheck construct for the
+// Canonical baseline: exactly ONE new MultiStepCheck construct for the
 // slots-booking example. It is discovered with the existing construct files
 // via Checkly's default `**/*.check.{js,ts}` pattern and joins the existing
 // project (no second project, no catalogue-only check). The transaction code

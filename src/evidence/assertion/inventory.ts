@@ -1,5 +1,5 @@
 // Assertion inventory: parse the check source into the machine-extractable
-// contract (prod PRD §5.1 step 1). Also: flow-step inventory (for
+// contract. Also: flow-step inventory (for
 // "remove the failing step" detection) and suppression detection
 // (catch/ignore/throttle wrapping of assertions).
 

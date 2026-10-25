@@ -1,5 +1,5 @@
-// Mutation — few, directed weak variants of the candidate check (ACH-style,
-// prod PRD §1.3): one operator family + one contextual/LLM-style family.
+// Mutation — few, directed weak variants of the candidate check:
+// one operator family + one contextual/LLM-style family.
 // A mutant "survives" if it masks the detection scene while the good patch
 // fails it — that is proof the oracle is blind there (STING weakness classes).
 

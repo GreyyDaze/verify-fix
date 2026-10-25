@@ -96,7 +96,7 @@ export function matchesTargetOrigin(raw: string, target: string | null): boolean
  * This no longer pins the example project's regions. It only rejects
  * malformed provider strings; whether a region is actually TRUSTED is decided
  * against the incident bundle's own declared locations
- * (`trustedMultistepScope`). Phase 9 task 9.2 forbids hardcoding regions.
+ * (`trustedMultistepScope`). Regions are never hardcoded.
  */
 export function multistepRegionForLocation(location: string): string | null {
   return isSyntacticallyValidRegion(location) ? location : null;

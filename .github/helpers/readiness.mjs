@@ -1,5 +1,5 @@
 // @ts-check
-// Readiness verdicts for the slots-booking preview/production gates (Stage 2).
+// Readiness verdicts for the slots-booking preview/production gates.
 //
 // Pure and dependency-free. A deployment is READY only when the target
 // answers 200 with the expected health JSON: `{ ok: true, store: string,

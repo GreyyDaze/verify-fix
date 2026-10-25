@@ -1,4 +1,4 @@
-// Remote scene executor for Phase 5.
+// Remote scene executor.
 //
 // HEALTHY and REGRESSION scenes execute the candidate through the customer's
 // own Checkly CLI. `checkly test` uploads the pull-request source as a recorded

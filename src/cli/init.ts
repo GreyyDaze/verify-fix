@@ -1,4 +1,4 @@
-// `verify-fix init` — Phase 8 task 8.1.
+// `verify-fix init`.
 //
 // Prepares verify-fix inside an EXISTING Checkly project. It never creates or
 // copies the example project, never provisions a service, and never reads or
@@ -56,7 +56,7 @@ function isDirectory(path: string): boolean {
  * the user's repo. The bundle glob covers the legacy in-repo default output
  * name; the incidents directory covers the conventional local capture folder.
  * A bundle is still saved outside the project by default — these are the
- * belt-and-braces rule requested by docs/BUNDLE-STORAGE-PLAN.md Part A. */
+ * belt-and-braces bundle-ignore rule. */
 export const BUNDLE_IGNORE_RULES = ["bundle-*/", "incidents/"] as const;
 
 /** True when every bundle rule already appears as its own line. */

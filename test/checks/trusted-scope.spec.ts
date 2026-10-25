@@ -1,5 +1,5 @@
-// Phase 9 task 9.2: "Do not hardcode fixture names, regions, routes, or
-// account-variable names."
+// Fixture names, regions, routes, and account-variable names are never
+// hardcoded.
 //
 // The verifier previously pinned the slots-booking EXAMPLE app's regions
 // (`us-east-1` / `eu-west-1`) in five admission gates. A tool sold to customers

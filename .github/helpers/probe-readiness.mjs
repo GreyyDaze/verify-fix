@@ -1,12 +1,12 @@
 // @ts-check
-// Non-interactive readiness probe for deployment URLs (Stage 2).
+// Non-interactive readiness probe for deployment URLs.
 //
 // Plain dependency-free ESM (`.mjs`): executed directly by the existing
 // setup-node runtime, never via TypeScript stripping, experimental flags, or
 // a `.ts` entrypoint.
 //
 // Public-first flow, with hard rules:
-//   - Phase 1 (public): every request goes to `${origin}/api/health` derived
+//   - Public probe: every request goes to `${origin}/api/health` derived
 //     with the URL API (no string concatenation) WITHOUT the bypass header —
 //     even when a bypass value is available in the environment. Only a 200
 //     with valid health JSON counts as readiness here, and it is reported
@@ -14,7 +14,7 @@
 //   - A protection response (302/401/403, manual redirect mode — redirects
 //     are never followed and Location is never trusted) marks the origin as
 //     protected. If no bypass value is available, the probe fails closed.
-//   - Phase 2 (bypass): retry the SAME validated origin and URL with the
+//   - Bypass probe: retry the SAME validated origin and URL with the
 //     bypass header. Only 200 + valid health JSON becomes ready. Another
 //     protection response fails immediately — a second 302 is never
 //     readiness. Invalid JSON after bypass keeps failing until exhausted.
@@ -196,7 +196,7 @@ async function probeOnce(url, bypassValue, fetchImpl, timeoutMs) {
  *   stored or requested by this repository. Empty/absent = unavailable.
  * @param {typeof fetch} [input.fetchImpl] Injected fetch (tests, hermetic runs).
  * @param {(ms: number) => Promise<void>} [input.sleepImpl]
- * @param {number} [input.attempts] Attempts per phase.
+ * @param {number} [input.attempts] Attempts per probe.
  * @param {number} [input.delayMs] Delay between attempts.
  * @param {number} [input.timeoutMs] Per-request abort timeout.
  * @returns {Promise<ProbeOutcome>}
@@ -211,7 +211,7 @@ export async function runReadinessProbe(input) {
   const timeoutMs = input.timeoutMs ?? 10000;
   const healthUrl = new URL("/api/health", origin).href;
 
-  // Phase 1: public probe — the bypass header is NEVER attached here.
+  // Public probe — the bypass header is NEVER attached here.
   let protectionSeen = false;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const probe = await probeOnce(healthUrl, null, fetchImpl, timeoutMs);
@@ -247,7 +247,7 @@ export async function runReadinessProbe(input) {
     return { ready: false, reason: "protected-no-bypass-available", bypassUsed: false };
   }
 
-  // Phase 2: same validated origin and URL, now with the bypass header.
+  // Bypass probe: same validated origin and URL, now with the bypass header.
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const probe = await probeOnce(healthUrl, bypass, fetchImpl, timeoutMs);
     if (probe.kind === "transport") {

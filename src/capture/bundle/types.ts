@@ -1,6 +1,6 @@
-// Bundle schema v3 — what `verify-fix bundle` generates (BRAINSTORM Part 3.3).
-// v2 (hand-written manifests + app-sim.ts) stays readable by `verify` until
-// Phase 3 migrates the verifier onto this format.
+// Bundle schema v3 — what `verify-fix bundle` generates.
+// v2 (hand-written manifests + a local app simulator) is still readable by
+// `verify`; the verifier reads both formats.
 
 import type { SceneType } from "../../types.ts";
 import type { AssertionInventory, MultistepScenario } from "../../types.ts";
@@ -12,7 +12,7 @@ export type SceneMode = "live" | "live-concurrent:2" | "replay:failing.har" | "r
 export interface SceneV3 {
   sceneId: string;
   type: SceneType;
-  /** how the scene is run — the generic scene layer (Phase 3/4) reads this */
+  /** how the scene is run — the generic scene layer reads this */
   mode: SceneMode;
   /** when mode is "both" for REPRODUCTION, the alternative mode */
   alternativeMode?: SceneMode;
@@ -111,7 +111,7 @@ export interface ManifestV3 {
     projectCommit: string | null;
   };
   /**
-   * Phase 9.10: the real sibling monitors in the account, with each check's
+   * The real sibling monitors in the account, with each check's
    * captured source closure. Recorded at capture time so regression scope is
    * evidence, not a guess. `complete: false` means the enumeration was
    * truncated or a closure could not be resolved, which forces UNCERTAIN.

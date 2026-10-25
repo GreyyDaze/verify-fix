@@ -11,8 +11,7 @@ import { isSyntacticallyValidRegion } from "./trusted-scope.ts";
 /**
  * The structural env keys every Multistep check declares. Account-variable
  * NAMES are deliberately absent: they are derived from the construct's own
- * region -> key map, so a customer's own regions and names are admitted
- * (Phase 9 task 9.2).
+ * region -> key map, so a customer's own regions and names are admitted.
  */
 export const MULTISTEP_STRUCTURAL_ENV_KEYS = [
   "ENVIRONMENT_URL",
@@ -61,8 +60,7 @@ const sameSorted = (a: readonly string[], b: readonly string[]): boolean => {
  *
  * The account VARIABLE NAMES are not fixed: any name is accepted provided
  * there is one distinct key per declared region. Hardcoding a name would
- * reject every customer whose keys differ from the example's
- * (Phase 9 task 9.2).
+ * reject every customer whose keys differ from the example's.
  *
  * SECURITY: every account key MUST be declared `secret: true`. A candidate that
  * flips an account variable to non-secret stores its value in plaintext, which

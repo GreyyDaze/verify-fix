@@ -1,4 +1,4 @@
-// Phase 9 task 9.1 / 9.4 — effective Playwright Check model.
+// Effective Playwright Check model.
 //
 // The bundle captures checkly.config.ts, playwright.config.ts and the spec, so
 // the effective model IS resolvable offline. A field that cannot be read from

@@ -5,8 +5,8 @@
 // slots-booking EXAMPLE app's regions — in five admission gates. A tool sold to
 // customers would reject every other customer's locations as untrusted, and a
 // plan change (Checkly Hobby no longer allowing `eu-west-1`) made the live
-// example undeployable. Phase 9 task 9.2 requires: "Do not hardcode fixture
-// names, regions, routes, or account-variable names."
+// example undeployable. Fixture names, regions, routes, and account-variable
+// names are never hardcoded.
 //
 // FAIL-CLOSED CONTRACT — this module must never widen trust:
 //   * A region is trusted only when the bundle itself declares it.

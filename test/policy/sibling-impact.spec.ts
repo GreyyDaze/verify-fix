@@ -1,4 +1,4 @@
-// Phase 9.10 — regression scope.
+// Regression scope.
 //
 // The point of these cases: a repair may only claim it left other monitors
 // alone when the bundle actually records which monitors exist and which files

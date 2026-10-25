@@ -1,4 +1,4 @@
-// Report — the traceable evidence chain (prod PRD §6 acid test + success #4):
+// Report — the traceable evidence chain.
 // a human can merge/block in ≤30s from the summary table + top-3 evidence lines.
 // Every sentence must reduce to "experiment X, oracle Y, matched/mismatched, strength Z".
 
@@ -56,7 +56,7 @@ export interface ReportDetails {
     requiredRegions: string[] | null;
     executedRegions: string[];
     affectedMonitors: { known: string[]; unresolved: boolean; reason: string | null };
-    /** Phase 9.10: one scene per affected sibling monitor. */
+    /** One scene per affected sibling monitor. */
     regressionScenes?: Array<{ sceneId: string; type: "REGRESSION"; monitorId: string; checkType: string; state: string }>;
   };
 }

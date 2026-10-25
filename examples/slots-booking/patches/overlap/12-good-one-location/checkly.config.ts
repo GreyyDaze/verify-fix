@@ -43,7 +43,7 @@ export default defineConfig({
         frequency: Frequency.EVERY_5M,
         locations: ['us-east-1'],
 
-        // THE INCIDENT SEED (Phase 2 of the plan):
+        // THE INCIDENT SEED:
         //   runParallel: true  → both locations run at the same moment.
         //   Both runs log in as the same TEST_USER.
         //   The app issues one session per account (newest login wins),

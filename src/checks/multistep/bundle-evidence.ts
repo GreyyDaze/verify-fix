@@ -251,7 +251,7 @@ export function constrainMultiStepManifest(m: ManifestV3,
   // bundle loses its sealed policy and every protect-requirement gate treats it
   // as PROTECTED_POLICY_MISSING.
   projected.protectedRequirements = m.protectedRequirements;
-  // The Phase 9.10 sibling-monitor inventory must survive the projection for
+  // The sibling-monitor inventory must survive the projection for
   // the same reason: without it the verifier cannot tell which other monitors
   // this check shares a project with, and would have to answer UNCERTAIN.
   projected.siblingMonitors = m.siblingMonitors;

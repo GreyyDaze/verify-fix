@@ -8,7 +8,7 @@
 //
 // Assertions are deliberately explicit (no `if`, no try/catch, no soft
 // expects). This is the "good" version of the check; the incident and the
-// candidate fixes come later in the plan.
+// candidate fixes illustrate possible repairs.
 import { test, expect } from '@playwright/test'
 // GOOD FIX: each stable Checkly location uses its own declared account.
 const TEST_USERS_BY_REGION: Record<string, string | undefined> = { 'us-east-1': process.env.TEST_USER_US_EAST_1, 'eu-west-1': process.env.TEST_USER_EU_WEST_1 }

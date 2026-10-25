@@ -1,4 +1,4 @@
-// Aggregate Phase 5 verification reports. Money is intentionally absent because
+// Aggregate verification reports. Money is intentionally absent because
 // account pricing is not evidence in an incident bundle.
 
 import { readFileSync, readdirSync, statSync } from "node:fs";

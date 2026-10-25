@@ -1,8 +1,8 @@
-// Contract engine — the oracle generator (prod PRD §5.1).
-// Deterministic. Validates verdict provenance against the two legal sources
-// (PR-3), builds the assertion inventory of original vs patched check, checks
-// the diff for weakened/removed/guarded core-path assertions, and verifies
-// envAssumptions + the reproduction-determinism gate (PR-7).
+// Contract engine — the oracle generator.
+// Deterministic. Validates verdict provenance against the two legal sources,
+// builds the assertion inventory of original vs patched check, checks the diff
+// for weakened/removed/guarded core-path assertions, and verifies
+// envAssumptions plus the reproduction-determinism gate.
 
 import type { Assertion, AssertionInventory, Bundle, EvidenceRow, Scene, SceneType } from "../../types.ts";
 import { parseMultiStepProject } from "../../checks/multistep/source.ts";
@@ -125,7 +125,7 @@ export function buildContract(bundle: Bundle, patchedSource: string, patchedFile
 
   const determinismGate = (() => {
     if (bundle.determinism.achieved < bundle.determinism.targetRuns) {
-      return { blocked: true, reason: `reproduction only verified for ${bundle.determinism.achieved}/${bundle.determinism.targetRuns} runs (PR-7 N≥20 bar not met)` };
+      return { blocked: true, reason: `reproduction only verified for ${bundle.determinism.achieved}/${bundle.determinism.targetRuns} runs (N≥20 bar not met)` };
     }
     const reproductionFailRate = bundle.determinism.reproductionFailRate ?? bundle.determinism.overlapFailRate;
     if (reproductionFailRate !== 1) {

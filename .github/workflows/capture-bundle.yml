@@ -1,4 +1,4 @@
-# Part B of docs/BUNDLE-STORAGE-PLAN.md: capture an incident bundle in CI,
+# Capture an incident bundle in CI,
 # store it as a GitHub Actions artifact (never in the repo), and record its
 # whole-bundle SHA-256 fingerprint for the protected gate to pin.
 #

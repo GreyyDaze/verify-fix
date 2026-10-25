@@ -1,6 +1,6 @@
-// Phase 9 task 9.15 — protected monitoring guarantees proof matrix.
+// Protected monitoring guarantees proof matrix.
 //
-// Every case the Phase 9 plan names: inheritance, overrides, new settings,
+// Every protected-monitoring case: inheritance, overrides, new settings,
 // unknown settings, location changes, concurrency changes, retries, activation,
 // alert behaviour, new monitor discovery, imported configuration, sibling
 // impact, policy tampering, missing and duplicate accounts, candidate-controlled
@@ -77,7 +77,7 @@ test("overrides: a project default may not override a protected check setting", 
   assert.ok(result.reasonCodes.includes("PROTECTED_REQUIREMENT_CHANGED"));
 });
 
-// ---- new settings (task 9.5) ------------------------------------------------
+// ---- new settings -----------------------------------------------------------
 
 test("new settings: a metadata-only change continues to experiments, it is not blocked", () => {
   const result = verdictFor({ "check.name": { state: "known", value: "booking-flow (renamed)" } });
@@ -141,7 +141,7 @@ test("unknown settings: a candidate missing a required field entirely is UNCERTA
   assert.ok(result.reasonCodes.includes("PROTECTED_REQUIREMENT_UNRESOLVED"));
 });
 
-// ---- the deliberate-reduction cases from the plan ---------------------------
+// ---- deliberate-reduction cases ---------------------------------------------
 
 test("location change: removing a location is FAILED; reordering is unchanged; adding is UNCERTAIN", () => {
   assert.equal(verdictFor({ locations: { state: "known", value: ["us-east-1"] } }).verdict, "FAILED");
@@ -233,7 +233,7 @@ test("policy tampering: a modified policy no longer matches its sealed digest", 
   assert.equal(compareProtectedRequirements(sealed, candidate({ locations: { state: "known", value: ["us-east-1"] } })).verdict, "FAILED");
 });
 
-// ---- candidate-controlled reproduction (task 9.7) ---------------------------
+// ---- candidate-controlled reproduction --------------------------------------
 
 test("candidate-controlled reproduction: the candidate cannot supply the trusted experiment conditions", () => {
   // Concurrency, regions and target all come from the sealed policy. A candidate

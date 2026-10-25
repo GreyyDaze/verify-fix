@@ -2,7 +2,7 @@
 // files — checkly.config.ts (playwrightConfigPath, pwProjects, retries) plus
 // playwright.config.ts (projects, tags, testDir, retries, baseURL).
 //
-// Phase 9 tasks 9.1 and 9.4 require resolving the final EFFECTIVE
+// Resolve the final EFFECTIVE
 // configuration from project defaults, groups, check-specific settings,
 // imported configuration and check-type settings — never assuming a default.
 // Nothing here invents a Checkly default: a value that cannot be read from the

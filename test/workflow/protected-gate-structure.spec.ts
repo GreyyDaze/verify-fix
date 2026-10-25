@@ -34,12 +34,12 @@ function jobBlocks(text: string): Record<string, string> {
 
 const jobs = jobBlocks(protectedGate);
 
-/** The caller remains byte-for-byte at the earlier Stage 2 pin. The
- * reviewed verifier V and later workflow snapshot W are separate FUTURE
- * inputs; this staged reusable workflow is not active at the old caller. */
-test("the Stage 2 caller stays byte-identical and does not activate V or W", () => {
+/** The caller remains byte-for-byte at the earlier pin. The reviewed
+ * verifier and later workflow snapshot are separate future inputs; this staged
+ * reusable workflow is not active at the old caller. */
+test("the caller stays byte-identical and does not activate the future pins", () => {
   assert.equal(createHash("sha256").update(gate).digest("hex"),
-    "3d984b94e436971a01717893ffb1d1dd974ce1be222534cec0db208264a684e5");
+    "8bfc4ce77486b9f709a6dc6a5f1671527b90d94aaddead87e70cb2c559a81db7");
   assert.match(gate, /protected-gate\.yml@9b4322c6e4f14d71ce89274a28c7a18444b00a61/);
   assert.match(gate, /trusted_ref: 9b4322c6e4f14d71ce89274a28c7a18444b00a61/);
   assert.doesNotMatch(gate, /verifier_ref:|workflow_ref:/);
@@ -95,7 +95,7 @@ test("production preflight is secret-free: no secrets, no environment, no Vercel
   assert.match(joined, /GH_TOKEN: \$\{\{ github\.token \}\}/, "preflight uses github.token only");
 });
 
-test("every helper-executing job checks out the later W helpers with a pin guard", () => {
+test("every helper-executing job checks out the later workflow helpers with a pin guard", () => {
   const invokers = Object.entries(jobs).filter(([, block]) =>
     /^\s*run: node .*\.github\/helpers\//m.test(block),
   );
@@ -541,13 +541,13 @@ test("all multiline workflow shell blocks parse under bash -n", () => {
   assert.ok(count >= 13, `checked only ${count} multiline run blocks`);
 });
 
-test("V verifier and later W helpers have separate checked-out refs; action pins are official immutable SHAs", () => {
+test("verifier and later workflow helpers have separate checked-out refs; action pins are official immutable SHAs", () => {
   assert.doesNotMatch(protectedGate, /run: npx /, "the workflow may execute only installed, lockfile-bound CLIs");
   assert.equal([...protectedGate.matchAll(/^\s+path: trusted$/gm)].length, 3);
   assert.equal([...protectedGate.matchAll(/^\s+ref: \$\{\{ inputs\.verifier_ref \}\}$/gm)].length, 3,
-    "three V verifier checkouts");
+    "three verifier checkouts");
   assert.equal([...protectedGate.matchAll(/^\s+ref: \$\{\{ inputs\.workflow_ref \}\}$/gm)].length, 3,
-    "three distinct W helper checkouts");
+    "three distinct workflow helper checkouts");
   assert.equal([...protectedGate.matchAll(/Require the protected verifier checkout to equal the trusted pin/g)].length, 3);
   assert.equal([...protectedGate.matchAll(/Require the helper checkout to equal the trusted pin/g)].length, 3);
   assert.doesNotMatch(protectedGate, /inputs\.trusted_ref|9b39750e61daabc21d80fd7ea3e17d651c3b6088/);

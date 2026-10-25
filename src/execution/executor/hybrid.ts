@@ -1,4 +1,4 @@
-// Phase 5 executor split.
+// Hybrid executor split.
 //
 // A real preview supplies all application behavior. REPRODUCTION and DETECTION
 // run locally through the deterministic scene proxy. HEALTHY and REGRESSION

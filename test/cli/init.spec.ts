@@ -1,4 +1,4 @@
-// Phase 8 task 8.1 — `verify-fix init` configures an EXISTING Checkly project.
+// `verify-fix init` configures an EXISTING Checkly project.
 //
 // Scope boundaries under test: init must not create or copy the example, must
 // not provision a service, must not read or store a credential, and must not

@@ -1,5 +1,5 @@
 /**
- * Phase 9 task 9.10 — regression scope.
+ * Sibling-monitor inventory — regression scope.
  *
  * A repair that only rewrites the incident check's own entrypoint cannot move
  * another monitor. A repair that touches a project-wide input (the Checkly

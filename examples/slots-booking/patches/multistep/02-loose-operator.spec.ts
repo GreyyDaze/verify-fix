@@ -1,5 +1,5 @@
 // Acceptance candidate: update the stale check contract to the live nested booking response.
-// Local Stage 3 baseline: the single MultiStepCheck transaction script.
+// Canonical baseline: the single MultiStepCheck transaction script.
 //
 // This file is the check's CODE ENTRYPOINT only. It must never match
 // Checkly's construct-discovery pattern (`**/*.check.{js,ts}`) — the

@@ -1,4 +1,4 @@
-// Decision table — AI-free verdict (prod PRD §6 law, unchanged). No LLM. Every
+// Decision table — AI-free verdict. No LLM. Every
 // reason traces to an executed comparison. This module is what grep audits:
 // it must contain no LLM import and no probabilistic judgment.
 
@@ -12,7 +12,7 @@ export interface DecisionInput {
   contract: ContractReport;
   observations: Map<string, SceneObservation>;
   adequacy: AdequacyOutput;
-  /** Determinism/PR-12 guards computed during execution. */
+  /** Determinism/flake guards computed during execution. */
   nonDeterministicScenes: string[];
   healthyRepetitionsMet: boolean;
   runBudgetExhausted: boolean;
@@ -112,12 +112,12 @@ export function decide(input: DecisionInput): Decision {
   }
 
   if (runBudgetExhausted) {
-    reasons.push("run budget exhausted → UNCERTAIN, never PASS (PR-10)");
+    reasons.push("run budget exhausted → UNCERTAIN, never PASS");
     return { verdict: "UNCERTAIN", exitCode: 2, rows, reasons, adequacy: adequacy.strength, weakness: adequacy.weakness };
   }
 
   if (adequacy.mutants.some((m) => m.inconclusive)) {
-    reasons.push("one or more mutation runs lack conclusive evidence → UNCERTAIN, never a kill or PASS (PR-10)");
+    reasons.push("one or more mutation runs lack conclusive evidence → UNCERTAIN, never a kill or PASS");
     return { verdict: "UNCERTAIN", exitCode: 2, rows, reasons, adequacy: adequacy.strength, weakness: adequacy.weakness };
   }
 
@@ -140,7 +140,7 @@ export function decide(input: DecisionInput): Decision {
     passOk = false;
   }
   if (independentSceneTypes.size < 2) {
-    reasons.push("fewer than 2 independent experiment types present (PR-6)");
+    reasons.push("fewer than 2 independent experiment types present");
     passOk = false;
   }
   if (weakHitsOnCore > 1) {
@@ -160,7 +160,7 @@ export function decide(input: DecisionInput): Decision {
     passOk = false;
   }
   if (!healthyRepetitionsMet) {
-    reasons.push("healthy runs not repeated ≥5 (PR-12 flake guard)");
+    reasons.push("healthy runs not repeated ≥5 (flake guard)");
     passOk = false;
   }
 

@@ -1,5 +1,5 @@
-// verify-fix core types. Port of bundle schema v2 (prod PRD §7) plus judgment types.
-// The oracle has exactly two legal provenance sources (PR-3): recorded Checkly
+// verify-fix core types. Bundle schema v2 plus judgment types.
+// The oracle has exactly two legal provenance sources: recorded Checkly
 // outcomes ("recorded:<runId>") and check-code assertions ("code:assert:<id>").
 // Anything else is rejected at ingestion.
 
@@ -87,7 +87,7 @@ export type ExitCode = 0 | 1 | 2;
 
 export type VerdictValue = "PASS" | "FAILED" | "UNCERTAIN";
 
-/** What an oracle expects of a scene: binary by construction (PR-3). */
+/** What an oracle expects of a scene: binary by construction. */
 export type OracleExpectation = "pass" | "fail";
 
 /**
@@ -244,7 +244,7 @@ export interface Bundle {
   oracleProvenance: { recorded: number; codeDerived: number };
   /** Parsed and digest-checked provider policy from a v3 trusted bundle. */
   protectedRequirements?: ProtectedPolicyEnvelope | null;
-  /** Phase 9.10 sibling-monitor inventory captured from the account. */
+  /** Sibling-monitor inventory captured from the account. */
   siblingMonitors?: { monitors: Array<{ id: string; name: string; checkType: string; files: string[] }>; complete: boolean; reason: string | null } | null;
   /** Fixed safe reason when the v3 policy is absent or invalid. */
   protectedRequirementsIssue?: string | null;
@@ -350,7 +350,7 @@ export interface Decision {
   weakness: WeaknessScan | null;
 }
 
-// ---- executor interface (interface = proves principled Checkly swap, PR-1) ----
+// ---- executor interface (the swap keeps the Checkly integration behind one boundary) ----
 
 /** What the executor knows about the candidate beyond its check code. */
 export interface RunContext {
@@ -426,10 +426,10 @@ export interface ExperimentExecutor {
   readonly kind: "scene" | "checkly" | "hybrid";
   /** Run the fixed check code in one scene state and observe its outcome. */
   runScene(bundle: Bundle, patchSource: string, scene: Scene, ctx?: RunContext): Promise<SceneObservation>;
-  /** True when the executor can produce live observed runs (PR-1). */
+  /** True when the executor can produce live observed runs. */
   isLive(): boolean;
   costReport(): ExecutionCost;
-  /** True when the per-scene run budget was hit (PR-10 → UNCERTAIN). */
+  /** True when the per-scene run budget was hit (→ UNCERTAIN). */
   budgetExhausted: boolean;
   /** Scene ids whose repeated observations disagreed (flake → UNCERTAIN). */
   nondeterministicScenes: string[];

@@ -1,4 +1,4 @@
-// Checkly CLI boundary for Phase 5.
+// Checkly CLI boundary.
 //
 // Dependency metadata plus the restricted monitoring file set are copied.
 // App source, build output, local dotenv files, registry credentials, and

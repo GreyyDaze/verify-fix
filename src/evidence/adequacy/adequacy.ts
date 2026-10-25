@@ -1,4 +1,4 @@
-// Adequacy engine (prod PRD §5.2): scans the suite against STING's four
+// Adequacy engine: scans the suite against the four
 // weakness classes and computes oracle_strength ∈ [0,1] from (a) assertion
 // falsifiability, (b) per-scene assertion coverage, (c) env-assumption
 // completeness, (d) mutant-kill rate. Weak → cannot PASS.
@@ -113,7 +113,7 @@ export function assessAdequacy(input: AdequacyInput): AdequacyOutput {
   const strength: OracleStrength = { score, falsifiability, coverage, envCompleteness, mutantKillRate };
 
   const blockers: string[] = [];
-  if (insufficientInputSpace) blockers.push("insufficient input space: fewer than 3 scenes or <2 independent scene types (PR-6)");
+  if (insufficientInputSpace) blockers.push("insufficient input space: fewer than 3 scenes or <2 independent scene types");
   if (partialPathCoverage) blockers.push("partial path coverage: one or more scenes exercise no falsifiable assertion");
   if (contract.unverifiedAssumptions.length > 0) blockers.push("unverified env assumptions (STING class 4 / 3-vs-18 lesson)");
   if (weakAssertions.length > 0) blockers.push(`${weakAssertions.length} weak (non-falsifiable) assertion(s) on core path`);

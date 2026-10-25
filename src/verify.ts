@@ -29,7 +29,7 @@ import { multiStepDiskRebound } from "./checks/multistep/rebind.ts";
 import { parseInventory, stripComments } from "./evidence/assertion/inventory.ts";
 import { compareProtectedRequirements, policyKnown, policyUnknown, type CandidateEffectiveRequirements, type ProtectedPolicyEnvelope, type ProtectedRequirementsComparison, type ResolvedPolicyValue } from "./policy/requirements.ts";
 
-export const PR12_HEALTHY_RUNS = 5; // PR-12: ≥5 repeated healthy runs, else flake → UNCERTAIN
+export const MIN_HEALTHY_RUNS = 5; // ≥5 repeated healthy runs, else flake → UNCERTAIN
 
 export interface VerifyOptions {
   bundle: Bundle;
@@ -86,7 +86,7 @@ export interface ProtectedRequirementsAssessment {
   staticVerdict: "PASS" | "FAILED" | "UNCERTAIN";
   reasonCodes: string[];
   changedMetadata: string[];
-  /** Phase 9 task 9.5: new settings that are understood and non-weakening. */
+  /** New settings that are understood and non-weakening. */
   supportedAdditions: string[];
   originalValues: Record<string, ResolvedPolicyValue>;
   candidateValues: Record<string, ResolvedPolicyValue>;
@@ -95,7 +95,7 @@ export interface ProtectedRequirementsAssessment {
   requiredRegions: string[] | null;
   executedRegions: string[];
   affectedMonitors: { known: string[]; unresolved: boolean; reason: string | null };
-  /** Phase 9.10: one scene per affected sibling monitor. */
+  /** One scene per affected sibling monitor. */
   regressionScenes?: Array<{ sceneId: string; type: "REGRESSION"; monitorId: string; checkType: string; state: string }>;
 }
 
@@ -119,7 +119,7 @@ function trustedRequirementConcurrency(bundle: Bundle, envelope: ProtectedPolicy
 }
 
 /**
- * Phase 9.10 — which other monitors can this candidate move?
+ * Sibling-monitor inventory — which other monitors can this candidate move?
  *
  * Replaces the earlier "any project file changed => UNCERTAIN" placeholder.
  * The inventory and each monitor's source closure were captured from the real
@@ -641,7 +641,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   }
   const healthySceneIds = bundle.scenes.filter((s) => s.type === "HEALTHY").map((s) => s.sceneId);
   const healthyRuns = healthySceneIds.map((id) => observations.get(id)?.repetitions ?? 0);
-  const healthyRepetitionsMet = healthySceneIds.length > 0 && healthyRuns.every((r) => r >= PR12_HEALTHY_RUNS);
+  const healthyRepetitionsMet = healthySceneIds.length > 0 && healthyRuns.every((r) => r >= MIN_HEALTHY_RUNS);
 
   const adequacy = assessAdequacy({ contract, sceneObservations: observations, mutants: mutantResults });
 

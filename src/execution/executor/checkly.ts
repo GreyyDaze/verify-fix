@@ -1,10 +1,10 @@
-// Checkly experiment executor — PR-1: every experiment observed via real
+// Checkly experiment executor — every experiment observed via real
 // Checkly (deploy → trigger → read), no side test runner decides a verdict.
 // Endpoints follow Checkly API v1 shapes (browser checks are /v1/check-checks).
 // NOTE: route shapes were written from the API's documented surface but cannot
 // be exercised without a live account + API key; `verify-fix checkly --dry-run`
 // prints exactly the operations a live run would perform. The definitive live
-// proof is a build-time task once credentials exist (prod PRD §11.2).
+// proof requires live credentials.
 
 import { emptyExecutionCost, type Bundle, type ExecutionCost, type ExperimentExecutor, type Scene, type SceneObservation, type TraceStep } from "../../types.ts";
 import { sceneExpected } from "../../evidence/contract/contract.ts";

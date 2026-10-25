@@ -13,7 +13,7 @@ import {
 
 const SHA = "a".repeat(40);
 const VERIFICATION_URL = "https://deploy-slug.vercel.app";
-// Stage 2: the stable test URL is a bare monitoring origin (no path).
+// The stable test URL is a bare monitoring origin (no path).
 const MONITORING_URL = "https://monitoring.example.org";
 
 // Raw GitHub REST deployment-status creator objects: login + type only.

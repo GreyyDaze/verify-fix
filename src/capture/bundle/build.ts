@@ -371,7 +371,7 @@ function boundedMultiStepSource(root: string, file: string): { path: string; con
 }
 
 /**
- * Phase 9.10: enumerate every check in the account and resolve each one's
+ * Enumerate every check in the account and resolve each one's
  * source closure from the project on disk, so the bundle records which files
  * each monitor is built from. The closure is what makes a later impact claim
  * ("this change cannot move that monitor") checkable instead of asserted.
@@ -1203,7 +1203,7 @@ export async function buildBundle(opts: BuildOptions, deps: BuildDeps): Promise<
 
   // 1. check
   const check = await client.getCheck(opts.checkId);
-  // Phase 9.10: record the account's real sibling monitors. A failure here is
+  // Record the account's real sibling monitors. A failure here is
   // non-fatal to capture but marks the inventory incomplete, which forces the
   // verifier to answer UNCERTAIN instead of claiming no other monitor moved.
   let siblingInventory: NonNullable<ManifestInputs["siblingMonitors"]> | null = null;

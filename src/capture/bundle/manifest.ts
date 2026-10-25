@@ -59,7 +59,7 @@ export interface ManifestInputs {
   assets: ManifestV3["provenance"]["assets"];
   apiCalls: ManifestV3["provenance"]["apiCalls"];
   accountId: string;
-  /** Phase 9.10 sibling-monitor inventory captured from the account. */
+  /** Sibling-monitor inventory captured from the account. */
   siblingMonitors?: { monitors: Array<{ id: string; name: string; checkType: string; files: string[] }>; complete: boolean; reason: string | null } | null;
   now: string;
   toolVersion: string;
@@ -1041,7 +1041,7 @@ export function buildManifest(input: ManifestInputs): ManifestV3 {
   } else {
     notes.push("no failing result found for this check: REPRODUCTION and DETECTION scenes are absent until an incident is captured (re-run `verify-fix bundle` after a failure)");
   }
-  notes.push("REGRESSION scenes (sibling checks) are not generated yet — planned once group listing is wired (Phase 3)");
+  notes.push("REGRESSION scenes (sibling checks) are not generated yet — planned once group listing is wired");
 
   const recorded = scenes.filter((s) => s.verdict.provenance.kind === "recorded").length;
   const codeDerived = scenes.length - recorded;

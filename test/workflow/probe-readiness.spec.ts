@@ -551,8 +551,8 @@ test("an oversized response during the bypass phase stops immediately", async ()
   assert.equal(fetchCalls, 2, "302 then one oversized bypass request — no further requests");
   assert.equal(sleepCount, 0, "definitive during bypass: no sleep, no retry");
   assert.equal(pulledBytes, 0, "the oversized body must not be consumed");
-  assert.equal(bypassHeaders[0], undefined, "phase 1 must not send the bypass header");
-  assert.equal(bypassHeaders[1], BYPASS_VALUE, "phase 2 sends the bypass header");
+  assert.equal(bypassHeaders[0], undefined, "the public probe must not send the bypass header");
+  assert.equal(bypassHeaders[1], BYPASS_VALUE, "the bypass probe sends the bypass header");
 });
 
 test("non-200 responses never read or retain the body", async () => {

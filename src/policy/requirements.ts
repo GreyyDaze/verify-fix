@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 
 /**
- * Phase 9 protected policy primitives. The bundle builder supplies facts from
+ * Protected policy primitives. The bundle builder supplies facts from
  * Checkly and statically resolved project sources. Missing/inherited values
  * stay unknown; this layer never invents Checkly defaults.
  */
@@ -143,7 +143,7 @@ export interface CandidateEffectiveRequirements {
 }
 
 /**
- * Phase 9 task 9.5: a setting is NOT rejected merely for being new.
+ * A setting is NOT rejected merely for being new.
  *
  * "Do not reject a setting merely because it is new. Determine what it
  * changes. A new setting that preserves protected guarantees continues to
@@ -179,7 +179,7 @@ export interface ProtectedRequirementsComparison {
   reasonCodes: string[];
   changedMetadata: string[];
   /** New settings that are understood and cannot weaken a protected guarantee.
-   *  Phase 9 task 9.5. Reported, never blocking. */
+   *  Reported, never blocking. */
   supportedAdditions: string[];
 }
 
@@ -382,7 +382,7 @@ export function compareProtectedRequirements(
       else changedMetadata.push(name);
     }
   }
-  // Phase 9 task 9.5. A new setting is analysed, not reflexively rejected:
+  // A new setting is analysed, not reflexively rejected:
   // a supported addition is reported and the candidate continues to the
   // experiments; only an unsupported or ambiguous effect is UNCERTAIN.
   for (const name of Object.keys(candidate.fields)) {

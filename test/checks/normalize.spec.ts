@@ -1,4 +1,4 @@
-// Stage-7 focused tests: real-shape Multistep result normalization.
+// Real-shape Multistep result normalization.
 // Fixtures are locally constructed and prove mechanics only.
 
 import { test } from "node:test";

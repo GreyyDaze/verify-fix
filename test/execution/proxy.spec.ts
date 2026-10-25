@@ -5,9 +5,9 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
-import { SceneProxy, shouldInterleave } from "../../../src/execution/scene/proxy.ts";
-import { parseMode } from "../../../src/execution/scene/modes.ts";
-import type { Har, HarEntry } from "../../../src/capture/trace/har-types.ts";
+import { SceneProxy, shouldInterleave } from "../../src/execution/scene/proxy.ts";
+import { parseMode } from "../../src/execution/scene/modes.ts";
+import type { Har, HarEntry } from "../../src/capture/trace/har-types.ts";
 
 let target: Server;
 let targetUrl: string;

@@ -3,11 +3,11 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { parseMode, effectiveConcurrency, needsTarget } from "../../../src/execution/scene/modes.ts";
-import { parseCheckConfig, diffCheckConfig, applyConfigPolicy } from "../../../src/execution/scene/config-diff.ts";
-import { parseEnvFile, referencedEnvVars, checkEnv } from "../../../src/execution/sandbox/env.ts";
-import { parseInventory, inventoryDiff } from "../../../src/evidence/assertion/inventory.ts";
-import { detectEnvScopeDodge, matchesTargetOrigin, regionalUserEnvKey } from "../../../src/execution/executor/scene.ts";
+import { parseMode, effectiveConcurrency, needsTarget } from "../../src/execution/scene/modes.ts";
+import { parseCheckConfig, diffCheckConfig, applyConfigPolicy } from "../../src/execution/scene/config-diff.ts";
+import { parseEnvFile, referencedEnvVars, checkEnv } from "../../src/execution/sandbox/env.ts";
+import { parseInventory, inventoryDiff } from "../../src/evidence/assertion/inventory.ts";
+import { detectEnvScopeDodge, matchesTargetOrigin, regionalUserEnvKey } from "../../src/execution/executor/scene.ts";
 
 describe("scene modes", () => {
   test("grammar: live, live-concurrent:N, replay:<har>, inject:<rule>; everything else is unknown, never a silent live", () => {

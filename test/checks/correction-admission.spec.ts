@@ -2,14 +2,14 @@
 // account, Checkly, a deployed check, or a real bundle/RCA.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeMultiStepCapture, observeMultiStepCapture } from "../../../src/checks/multistep/normalize.ts";
-import { extractTransaction } from "../../../src/checks/multistep/transaction.ts";
-import { sanitizeMultiStepCapture } from "../../../src/checks/multistep/sanitize.ts";
-import { buildMultiStepRecording, MULTISTEP_DRAFT_SCHEMA } from "../../../src/checks/multistep/capture.ts";
-import { multiStepShapeProblems } from "../../../src/checks/multistep/shape.ts";
-import type { MultistepScenario } from "../../../src/types.ts";
-import { scenarioLayout } from "../../../src/checks/multistep/layout.ts";
-import { validMultiStepStoredRecording } from "../../../src/checks/multistep/recording-schema.ts";
+import { normalizeMultiStepCapture, observeMultiStepCapture } from "../../src/checks/multistep/normalize.ts";
+import { extractTransaction } from "../../src/checks/multistep/transaction.ts";
+import { sanitizeMultiStepCapture } from "../../src/checks/multistep/sanitize.ts";
+import { buildMultiStepRecording, MULTISTEP_DRAFT_SCHEMA } from "../../src/checks/multistep/capture.ts";
+import { multiStepShapeProblems } from "../../src/checks/multistep/shape.ts";
+import type { MultistepScenario } from "../../src/types.ts";
+import { scenarioLayout } from "../../src/checks/multistep/layout.ts";
+import { validMultiStepStoredRecording } from "../../src/checks/multistep/recording-schema.ts";
 import { FAKE_ACCOUNT, FAKE_TOKEN, SELECTED_SLOT, failingTestResults, passingTestResults } from "./helpers.ts";
 
 type Report = Record<string, any>;

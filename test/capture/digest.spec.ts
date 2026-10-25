@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { bundleDigest, isBundleDigest } from "../../../src/capture/bundle/digest.ts";
+import { bundleDigest, isBundleDigest } from "../../src/capture/bundle/digest.ts";
 
 function tempBundle(): string {
   const dir = mkdtempSync(join(tmpdir(), "verify-fix-digest-"));

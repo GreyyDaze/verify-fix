@@ -7,9 +7,9 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
-import { isKnownMultiStepProblem, multistepProblemCategory } from "../../../src/checks/multistep/sanitize.ts";
+import { isKnownMultiStepProblem, multistepProblemCategory } from "../../src/checks/multistep/sanitize.ts";
 
-const srcDir = new URL("../../../src/", import.meta.url).pathname;
+const srcDir = new URL("../../src/", import.meta.url).pathname;
 const files = [
   ...readdirSync(`${srcDir}checks/multistep`).filter((name) => name.endsWith(".ts")).map((name) => `src/checks/multistep/${name}`),
   ...readdirSync(`${srcDir}capture/bundle`).filter((name) => name.endsWith(".ts")).map((name) => `src/capture/bundle/${name}`),
@@ -105,9 +105,9 @@ test("every dynamic wording family maps to its truthful category, never the gene
 });
 
 test("the sanitization gate names stats and sequence failures instead of a generic fallback", async () => {
-  const { normalizeMultiStepCapture } = await import("../../../src/checks/multistep/normalize.ts");
-  const { sanitizeMultiStepCapture } = await import("../../../src/checks/multistep/sanitize.ts");
-  const { extractTransaction } = await import("../../../src/checks/multistep/transaction.ts");
+  const { normalizeMultiStepCapture } = await import("../../src/checks/multistep/normalize.ts");
+  const { sanitizeMultiStepCapture } = await import("../../src/checks/multistep/sanitize.ts");
+  const { extractTransaction } = await import("../../src/checks/multistep/transaction.ts");
   const base = normalizeMultiStepCapture({
     testResults: readFileSync(new URL("./fixtures/scheduled-failing-test-results.json", import.meta.url), "utf8"),
     checkRunData: readFileSync(new URL("./fixtures/scheduled-failing-check-run-data.json", import.meta.url), "utf8"),

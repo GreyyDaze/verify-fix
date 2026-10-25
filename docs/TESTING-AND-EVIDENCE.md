@@ -49,10 +49,10 @@ These test failure boundaries deterministically. They do not prove that the live
 
 Important tests include:
 
-- test/execution/sandbox/evidence.spec.ts
-- test/checks/multistep/*
-- test/capture/bundle/*
-- test/execution/scene/*
+- test/execution/evidence.spec.ts
+- test/checks/*
+- test/capture/*
+- test/execution/*
 
 These exercise production CLI code. Some deliberately replace external services with local stand-ins. That is useful for deterministic testing but is not live-provider evidence.
 

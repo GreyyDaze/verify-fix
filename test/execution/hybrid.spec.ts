@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { HybridExecutor } from "../../../src/execution/executor/hybrid.ts";
-import type { Bundle, Scene, SceneObservation } from "../../../src/types.ts";
+import { HybridExecutor } from "../../src/execution/executor/hybrid.ts";
+import type { Bundle, Scene, SceneObservation } from "../../src/types.ts";
 
 const observation = (sceneId: string, source: "scene" | "checkly"): SceneObservation => ({
   sceneId,

@@ -8,8 +8,8 @@
 // that derivation stays fail-closed.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { trustedMultistepScope, isTrustedMultistepLocation, isTrustedMultistepEnvKey, isSyntacticallyValidRegion } from "../../../src/checks/multistep/trusted-scope.ts";
-import { multistepRegionForLocation } from "../../../src/execution/executor/scene.ts";
+import { trustedMultistepScope, isTrustedMultistepLocation, isTrustedMultistepEnvKey, isSyntacticallyValidRegion } from "../../src/checks/multistep/trusted-scope.ts";
+import { multistepRegionForLocation } from "../../src/execution/executor/scene.ts";
 
 const EXAMPLE = {
   locations: ["us-east-1", "eu-west-1"],

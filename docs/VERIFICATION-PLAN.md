@@ -96,7 +96,7 @@ Blocker: the entire family is unproven. Code is complete; evidence is synthetic.
    - `07-missing-await` — remove `await` from a transaction step
    - `08-reorder-steps` — reorder the transaction
 2. Add a driver spec that drives each candidate through the real CLI and
-   asserts the verdict, mirroring how `test/execution/scene/rules.spec.ts`
+   asserts the verdict, mirroring how `test/execution/rules.spec.ts`
    grades the Playwright families.
 3. Assert the expected matrix: good repair PASS; `02`–`08` FAILED; no candidate
    may reach PASS.

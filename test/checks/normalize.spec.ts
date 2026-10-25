@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeMultiStepCapture, observeMultiStepCapture } from "../../../src/checks/multistep/normalize.ts";
+import { normalizeMultiStepCapture, observeMultiStepCapture } from "../../src/checks/multistep/normalize.ts";
 import {
   failingLogs,
   failingTestResults,

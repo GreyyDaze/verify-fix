@@ -634,7 +634,7 @@ State: `mode` and a `Map<account, {version, lockHolders}>`. Endpoints:
 `expect(book.status).toBe(200)` weakened to `toBeGreaterThanOrEqual(0)` (must be
 caught).
 
-### 5.18 `test/execution/sandbox/evidence.spec.ts`
+### 5.18 `test/execution/evidence.spec.ts`
 Sandbox evidence rules that need no captured bundle: empty registry and a
 hitless check are vacuous, the sandbox gets only Checkly's variables plus the
 check's own, the outcome marker is explicit, seeded randomness is reproducible,
@@ -929,7 +929,7 @@ id it came from, so nothing in it has to be trusted on faith.
 
 `src/capture/checkly/{client,credentials,types}.ts`, `src/capture/trace/{zip,har-types,trace-to-har}.ts`,
 `src/capture/bundle/{build,manifest,measure,rca-mode,sanitize,types}.ts`, CLI in `src/cli.ts`;
-tests in `test/capture/bundle/*.spec.ts` (client, measure, digest, scenario).
+tests in `test/capture/*.spec.ts` (client, measure, digest, scenario).
 No captured or synthetic bundle is checked in, and no test loads one.
 
 ## 9c. The scene layer — Phase 3 (replaces the simulator)
@@ -1428,8 +1428,8 @@ to a unique canonical stale assertion in the failed step, never to a different
 source assertion; raw `pw:api` records may carry `queryParams`. With these
 corrections the existing scheduled result validates on the automatic
 remote-download path with zero multistep problems and warnings in
-`test/checks/multistep/problem-taxonomy.spec.ts` — artifact bytes under
-`test/checks/multistep/fixtures/` (Checkly already
+`test/checks/problem-taxonomy.spec.ts` — artifact bytes under
+`test/checks/fixtures/` (Checkly already
 redacts secrets to `*********`); no new Checkly run was triggered and no real
 parity is claimed. Every multistep problem literal is now proven by a
 taxonomy test to be an exact fixed category — the `MULTIPLE_` misspellings

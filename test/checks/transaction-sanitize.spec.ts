@@ -3,9 +3,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeMultiStepCapture } from "../../../src/checks/multistep/normalize.ts";
-import { extractTransaction, requestSequence } from "../../../src/checks/multistep/transaction.ts";
-import { ACCOUNT_LABEL, TOKEN_LABEL, sanitizeMultiStepCapture } from "../../../src/checks/multistep/sanitize.ts";
+import { normalizeMultiStepCapture } from "../../src/checks/multistep/normalize.ts";
+import { extractTransaction, requestSequence } from "../../src/checks/multistep/transaction.ts";
+import { ACCOUNT_LABEL, TOKEN_LABEL, sanitizeMultiStepCapture } from "../../src/checks/multistep/sanitize.ts";
 import { FAKE_ACCOUNT, FAKE_TOKEN, FAKE_ORIGIN, failingTestResults, passingLogs, passingTestResults } from "./helpers.ts";
 
 function passingCapture() {

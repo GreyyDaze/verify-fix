@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { readFile } from "node:fs/promises";
-import { startOriginBridge } from "../../../src/checks/multistep/origin-bridge.ts";
+import { startOriginBridge } from "../../src/checks/multistep/origin-bridge.ts";
 
 interface UpstreamRecord {
   method: string;

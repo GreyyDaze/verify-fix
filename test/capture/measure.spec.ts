@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
-import { measureDeterminism, type Runner } from "../../../src/capture/bundle/measure.ts";
+import { measureDeterminism, type Runner } from "../../src/capture/bundle/measure.ts";
 
 /** A stand-in for `npx checkly test --record --reporter json` that writes the JSON report the real reporter writes. */
 function fakeChecklyTest(script: Array<"Pass" | "Fail" | "crash">): { runner: Runner; invocations: Array<{ args: string[]; cwd: string; startedAt: number; finishedAt?: number }> } {

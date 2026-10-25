@@ -262,8 +262,8 @@ line. (4) Real `pw:api` records also carry `queryParams`, now admitted by the
 raw reporter schema. The existing scheduled result then validates on the
 automatic remote-download path with zero multistep problems and warnings
 (nonempty scenes, failure at `book 09:30`, four ordered HTTP-200 requests, no
-confirmation step) in `test/checks/multistep/problem-taxonomy.spec.ts` against
-the artifact bytes (`test/checks/multistep/fixtures/scheduled-failing-*` — Checkly
+confirmation step) in `test/checks/problem-taxonomy.spec.ts` against
+the artifact bytes (`test/checks/fixtures/scheduled-failing-*` — Checkly
 already redacts every secret to the opaque `*********` form); no new Checkly
 run was triggered and no real evidence or parity is claimed.
 

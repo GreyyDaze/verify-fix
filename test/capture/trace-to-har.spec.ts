@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { listZip, openZip, readZipEntry, isZip } from "../../../src/capture/archive/zip.ts";
-import { traceZipToHar, mergeHars } from "../../../src/capture/trace/trace-to-har.ts";
-import { sanitizeHar, redact, envVarNamesOnly, redactJsonText } from "../../../src/capture/bundle/sanitize.ts";
-import { writeZip } from "../../helpers/zip-writer.ts";
-import { fakeTraceZip } from "../../helpers/fake-trace.ts";
+import { listZip, openZip, readZipEntry, isZip } from "../../src/capture/archive/zip.ts";
+import { traceZipToHar, mergeHars } from "../../src/capture/trace/trace-to-har.ts";
+import { sanitizeHar, redact, envVarNamesOnly, redactJsonText } from "../../src/capture/bundle/sanitize.ts";
+import { writeZip } from "../helpers/zip-writer.ts";
+import { fakeTraceZip } from "../helpers/fake-trace.ts";
 
 test("zip: round-trips deflate and store entries", () => {
   // Keep the fixture below the ZIP's 200:1 compression-ratio safety limit.

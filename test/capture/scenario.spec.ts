@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateMultistepScenario } from "../../../src/capture/bundle/scenario.ts";
-import { deriveMultiStepScenario } from "../../../src/capture/bundle/manifest.ts";
-import type { MultiStepCapture } from "../../../src/checks/multistep/normalize.ts";
-import { multistepWitnessProblems } from "../../../src/checks/multistep/shape.ts";
+import { validateMultistepScenario } from "../../src/capture/bundle/scenario.ts";
+import { deriveMultiStepScenario } from "../../src/capture/bundle/manifest.ts";
+import type { MultiStepCapture } from "../../src/checks/multistep/normalize.ts";
+import { multistepWitnessProblems } from "../../src/checks/multistep/shape.ts";
 
 const valid = {
   kind: "multistep",

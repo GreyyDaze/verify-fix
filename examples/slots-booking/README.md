@@ -145,6 +145,12 @@ npx checkly test -e ENVIRONMENT_URL=https://<deployment> --record
 npx checkly deploy
 ```
 
+CI runs the same local checks automatically on push and pull request — see
+`examples/slots-booking/.github/workflows/checkly.yml`. It builds the app,
+starts it on `localhost:3000`, and runs the Playwright suite against it. It
+does not deploy: cloud runs and `checkly deploy` need credentials, so they
+stay manual.
+
 ## Troubleshooting
 
 | Symptom | Cause |

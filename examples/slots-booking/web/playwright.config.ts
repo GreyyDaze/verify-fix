@@ -4,7 +4,7 @@ import { defineConfig, devices } from '@playwright/test'
 
 // Checkly's convention: ENVIRONMENT_URL points the check at a deployment.
 //   - `npx checkly test -e ENVIRONMENT_URL=https://<preview>.vercel.app`
-//   - The deploy workflow sets it from the verified stable alias.
+//   - A CI or deployment step sets it from the verified stable alias.
 // When it is not set, Checkly monitors production and local runs use the app
 // started by `npm run dev` / `npm run start`.
 const PRODUCTION_URL = 'https://slots-booking-verify-fix.vercel.app'

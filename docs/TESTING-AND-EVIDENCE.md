@@ -51,7 +51,6 @@ Important tests include:
 
 - test/sandbox-evidence.spec.ts
 - test/checks/multistep/*
-- test/checks/api/*
 - test/capture/bundle/*
 - test/execution/scene/*
 

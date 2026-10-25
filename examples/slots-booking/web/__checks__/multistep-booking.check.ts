@@ -2,11 +2,11 @@ import { Frequency, MultiStepCheck } from "checkly/constructs";
 import * as path from "node:path";
 
 // Canonical baseline: exactly ONE new MultiStepCheck construct for the
-// slots-booking example. It is discovered with the existing construct files
-// via Checkly's default `**/*.check.{js,ts}` pattern and joins the existing
-// project (no second project, no catalogue-only check). The transaction code
-// lives in multistep-booking.spec.ts, which deliberately does NOT match the
-// construct-discovery pattern — it is referenced only as this check's
+// slots-booking example. It is discovered via the project's
+// `**/__checks__/**/*.check.ts` pattern and joins the existing project
+// (no second project, no catalogue-only check). The transaction code
+// lives in multistep-booking.spec.ts, which deliberately does NOT match
+// the construct-discovery pattern — it is referenced only as this check's
 // entrypoint.
 //
 // Accounts: ENVIRONMENT_URL has no fallback; the per-region Multistep
@@ -14,7 +14,7 @@ import * as path from "node:path";
 // two scheduled checks cannot invalidate each other's sessions, and each
 // Checkly location gets its own account so concurrent locations cannot
 // invalidate each other either. Committing this file commits variable NAMES
-// only — values come from the environment at the later checkpoint.
+// only — values come from the environment at deploy time.
 new MultiStepCheck("slots-booking-multistep", {
   name: "slots booking multistep transaction",
   description: "Logs in, reads the session, lists slots, books 09:30, and confirms the booking.",

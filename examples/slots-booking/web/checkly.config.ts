@@ -31,8 +31,9 @@ export default defineConfig({
   checks: {
     // Where the Playwright config lives, relative to this file.
     playwrightConfigPath: './playwright.config.ts',
-    // Explicit `*.check.ts` convention for construct discovery.
-    checkMatch: '**/*.check.ts',
+    // Checkly's recommended convention: constructs live in __checks__ folders
+    // and use the *.check.ts suffix, leaving the rest of the app untouched.
+    checkMatch: '**/__checks__/**/*.check.ts',
 
     // Applies to every check in the project unless a check overrides it.
     frequency: Frequency.EVERY_5M,

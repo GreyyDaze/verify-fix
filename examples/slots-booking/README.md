@@ -47,8 +47,8 @@ examples/slots-booking/
 ├── web/                             Next.js app + Checkly project
 │   ├── app/, lib/                   application and session store
 │   ├── playwright.config.ts
-│   ├── tests/booking.spec.ts        Playwright check source
-│   ├── checks/
+│   ├── tests/booking.spec.ts        Playwright check suite source
+│   ├── __checks__/                  Checkly constructs
 │   │   ├── availability.check.ts    ApiCheck
 │   │   ├── availability.setup.ts    API auth setup
 │   │   ├── multistep-booking.check.ts
@@ -79,8 +79,8 @@ Secret values live in the environment or Checkly; never commit them.
 | --- | --- |
 | `tests/booking.spec.ts` | Two regions log in as the same account; the slower run books with a superseded token and gets `401`. |
 | `tests/booking.spec.ts` locator | App renames `data-testid="book-status"` to `booking-status`; the stale check fails. |
-| `checks/availability.check.ts` | App renames the response field `availability` to `status`; the check still asserts the old field. |
-| `checks/multistep-booking.spec.ts` | App moves the booking fields under `booking.*`; the check still reads the flat fields. |
+| `__checks__/availability.check.ts` | App renames the response field `availability` to `status`; the check still asserts the old field. |
+| `__checks__/multistep-booking.spec.ts` | App moves the booking fields under `booking.*`; the check still reads the flat fields. |
 
 ## Patches
 

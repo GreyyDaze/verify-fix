@@ -186,8 +186,8 @@ describe("pull-request identity and target binding", () => {
 describe("pinned git revision gate", () => {
   test("an exact clean SHA is immutable and gate-eligible from any Git host", () => {
     const root = repository();
-    mkdirSync(join(root, "web/checks"), { recursive: true });
-    writeFileSync(join(root, "web/checks/booking.spec.ts"), "test\n");
+    mkdirSync(join(root, "web/__checks__"), { recursive: true });
+    writeFileSync(join(root, "web/__checks__/booking.spec.ts"), "test\n");
     const base = commitAll(root);
     const revision = snapshotLocalCandidate(join(root, "web"), base, base);
     try {

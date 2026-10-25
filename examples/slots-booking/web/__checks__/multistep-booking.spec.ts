@@ -1,8 +1,8 @@
 // Canonical baseline: the single MultiStepCheck transaction script.
 //
 // This file is the check's CODE ENTRYPOINT only. It must never match
-// Checkly's construct-discovery pattern (`**/*.check.{js,ts}`) — the
-// construct lives in multistep-booking.check.ts and points here.
+// Checkly's construct-discovery pattern (`**/__checks__/**/*.check.ts`) —
+// the construct lives in multistep-booking.check.ts and points here.
 //
 // Contract discipline: five ordered, awaited test.step() calls; hard
 // expects only; no try/catch, no retries, no timeout changes, no skipping,

@@ -59,16 +59,15 @@ These exercise production CLI code. Some deliberately replace external services 
 
 ## 4. Real application evidence
 
-The seeded slots-booking application is used to reproduce real application behavior.
+The sandbox evidence tests start the seeded slots-booking application and prove
+that a run which never reaches `ENVIRONMENT_URL` is vacuous, that the sandbox
+receives only Checkly's variables plus the check's own, and that seeded
+randomness is reproducible. The app is a local stand-in for the target, not
+captured evidence.
 
-The verification tests check:
-- the original failure is actually observed
-- the verifier contacts the application
-- a good repair passes
-- known bad repairs fail
-- weakened assertions are detected
-- configuration-only or retry-only changes do not create a false PASS
-- repeated observations remain deterministic where required
+The suite no longer replays an example incident from a bundle, real or
+synthetic. Doing so coupled the tests to one example project and proved nothing
+generic, so those bundle-level suites were removed rather than reconstructed.
 
 ## 5. Real Checkly acceptance
 

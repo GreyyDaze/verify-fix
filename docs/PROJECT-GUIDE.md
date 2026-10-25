@@ -640,10 +640,12 @@ hitless check are vacuous, the sandbox gets only Checkly's variables plus the
 check's own, the outcome marker is explicit, seeded randomness is reproducible,
 and comment stripping preserves line numbers.
 
-Captured-bundle integration suites (golden tests, seeded example verdicts, and
-the packed-CLI external-customer run) are intentionally not committed. They
-depended on example-specific evidence, so the repository keeps no captured
-bundle and no test that loads one.
+Captured-bundle integration suites (golden tests, seeded example verdicts,
+capture-mechanics bundles, and the packed-CLI external-customer run) are
+intentionally not committed and have not been replaced with synthetic bundles:
+a synthetic reconstruction would still couple tests to one example project and
+prove nothing generic. The suite now constructs or loads no bundle at all; the
+pure scenario, digest, parser, and policy tests remain.
 
 ---
 
@@ -927,8 +929,8 @@ id it came from, so nothing in it has to be trusted on faith.
 
 `src/capture/checkly/{client,credentials,types}.ts`, `src/capture/trace/{zip,har-types,trace-to-har}.ts`,
 `src/capture/bundle/{build,manifest,measure,rca-mode,sanitize,types}.ts`, CLI in `src/cli.ts`;
-tests in `test/bundle/*.spec.ts` with a real ZIP writer and a fake Checkly served
-over local HTTP (`test/bundle/cli-http.spec.ts`).
+tests in `test/capture/bundle/*.spec.ts` (client, measure, digest, scenario).
+No captured or synthetic bundle is checked in, and no test loads one.
 
 ## 9c. The scene layer — Phase 3 (replaces the simulator)
 
@@ -1426,8 +1428,8 @@ to a unique canonical stale assertion in the failed step, never to a different
 source assertion; raw `pw:api` records may carry `queryParams`. With these
 corrections the existing scheduled result validates on the automatic
 remote-download path with zero multistep problems and warnings in
-`test/multistep/scheduled-result.spec.ts` — synthetic fixture of the real
-artifact bytes committed under `test/multistep/fixtures/` (Checkly already
+`test/checks/multistep/problem-taxonomy.spec.ts` — artifact bytes under
+`test/checks/multistep/fixtures/` (Checkly already
 redacts secrets to `*********`); no new Checkly run was triggered and no real
 parity is claimed. Every multistep problem literal is now proven by a
 taxonomy test to be an exact fixed category — the `MULTIPLE_` misspellings

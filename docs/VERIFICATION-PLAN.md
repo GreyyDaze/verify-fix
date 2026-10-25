@@ -95,9 +95,9 @@ Blocker: the entire family is unproven. Code is complete; evidence is synthetic.
    - `06-hardcode` — assert a constant instead of the response
    - `07-missing-await` — remove `await` from a transaction step
    - `08-reorder-steps` — reorder the transaction
-2. Extend `test/multistep/correction-scene.spec.ts` to drive each candidate
-   through the real CLI and assert the verdict, mirroring how
-   `test/scene/rules.spec.ts` grades the Playwright families.
+2. Add a driver spec that drives each candidate through the real CLI and
+   asserts the verdict, mirroring how `test/execution/scene/rules.spec.ts`
+   grades the Playwright families.
 3. Assert the expected matrix: good repair PASS; `02`–`08` FAILED; no candidate
    may reach PASS.
 
@@ -115,8 +115,8 @@ Blocker: the entire family is unproven. Code is complete; evidence is synthetic.
    measures 20 repetitions, then asserts three CLI verdicts:
    nested-response repair PASS (0), unchanged original FAILED (1), repair
    without a target UNCERTAIN (2).
-8. Commit the sanitized bundle as a new `incidents/` directory and add a golden
-   test over it.
+8. Keep the sanitized bundle outside the repository. Do not add a golden test
+   over it: the suite keeps no captured or synthetic bundle.
 9. Run the protected gate against the repair at an exact PR head; confirm both
    locations go green on the scheduled run.
 10. Capture the Multistep bundle with `--measure N` so its determinism is
@@ -143,8 +143,8 @@ values openly and do not claim cloud provenance for them.
 **Local first**
 
 1. Nothing to build. `--measure N` exists (`src/capture/bundle/measure.ts`) and Phase 1
-   ran it live. Confirm the golden tests still pass against both existing
-   bundles before re-capturing, so any diff is attributable to the re-measure.
+   ran it live. Re-capture outside the repository, so any diff is attributable
+   to the re-measure rather than to a fixture change.
 
 **Then real account**
 
@@ -169,7 +169,7 @@ values openly and do not claim cloud provenance for them.
    determinism block, fresh result IDs, and timestamps to change. Any change to
    `recordings/`, `rca.json`, or the scene oracles is a signal — stop and
    investigate before committing.
-6. Update the golden tests over both bundles and re-run the scene matrix so the
+6. Re-run the scene matrix against both re-measured bundles so the
    Phase 3/4 verdicts (overlap `01`/`12` PASS, `02`–`10`/`13` FAILED, `11`
    never PASS; drift `01` PASS, `02`–`05` FAILED) are re-proven against the
    re-measured bundles.
@@ -230,8 +230,8 @@ to complete before CI enforcement.
 
 ### B1. API family: real hand-written candidates
 
-Blocker: the API matrix is 1 good + 1 fake, and both are built by string
-replacement in `test/api/verify.spec.ts:15` rather than as files. Coverage of
+Blocker: the API matrix is 1 good + 1 fake, and both were built by string
+replacement in the removed `test/api/verify.spec.ts` rather than as files. Coverage of
 the fake categories currently lives in policy unit tests, not in candidate
 files driven through the CLI.
 

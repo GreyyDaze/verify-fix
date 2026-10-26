@@ -67,7 +67,7 @@ args=(verify
 [[ -z "${VF_PROJECT:-}" ]] || args+=(--project "$VF_PROJECT")
 [[ -z "${VF_ENV_FILE:-}" ]] || args+=(--env-file "$VF_ENV_FILE")
 [[ -z "${VF_ENV_NAME:-}" ]] || args+=(--env-name "$VF_ENV_NAME")
-[[ -z "${VF_REQUIREMENTS_MODE:-}" ]] || args+=(--requirements-mode "$VF_REQUIREMENTS_MODE")
+args+=(--requirements-mode "${VF_REQUIREMENTS_MODE:-shadow}")
 [[ -z "${VF_REQUIREMENTS_DIGEST:-}" ]] || args+=(--requirements-digest "$VF_REQUIREMENTS_DIGEST")
 [[ -z "${VF_REPORT_MARKDOWN:-}" ]] || args+=(--report-markdown "$VF_REPORT_MARKDOWN")
 

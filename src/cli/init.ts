@@ -27,6 +27,8 @@ export interface DetectedProject {
   hasPackageJson: boolean;
   hasIncidentsDir: boolean;
   hasVerifyFixInstalled: boolean;
+  /** The package.json already carries every script init would add. */
+  hasVerifyFixScripts: boolean;
   /** Root .gitignore already ignores captured incident bundles. */
   hasBundleIgnore: boolean;
   /** Present but never parsed for values — only its existence is reported. */
@@ -80,9 +82,17 @@ export function detectProject(cwd: string): DetectedProject {
   const configFile = PROJECT_MARKERS.map((name) => join(root, name)).find(isFile) ?? null;
   const packageJson = join(root, "package.json");
   let hasVerifyFixInstalled = false;
+  let hasVerifyFixScripts = false;
   if (isFile(packageJson) && statSync(packageJson).size <= MAX_PACKAGE_JSON_BYTES) {
+    const text = readFileSync(packageJson, "utf8");
     // Read only the dependency name, never any value.
-    hasVerifyFixInstalled = /"verify-fix"\s*:\s*"(?:\^|~|>=?\s*\d|latest)/.test(readFileSync(packageJson, "utf8"));
+    hasVerifyFixInstalled = /"verify-fix"\s*:\s*"(?:\^|~|>=?\s*\d|latest)/.test(text);
+    try {
+      const scripts = (JSON.parse(text) as { scripts?: Record<string, string> }).scripts ?? {};
+      hasVerifyFixScripts = Object.entries(PACKAGE_SCRIPTS).every(([name, command]) => scripts[name] === command);
+    } catch {
+      hasVerifyFixScripts = false;
+    }
   }
   const gitignore = join(root, ".gitignore");
   const hasBundleIgnore = isFile(gitignore) && statSync(gitignore).size <= MAX_PACKAGE_JSON_BYTES
@@ -95,6 +105,7 @@ export function detectProject(cwd: string): DetectedProject {
     hasPackageJson: isFile(packageJson),
     hasIncidentsDir: isDirectory(join(root, "incidents")),
     hasVerifyFixInstalled,
+    hasVerifyFixScripts,
     hasBundleIgnore,
     hasEnvFile: [".env", ".env.local", ".env.production"].some((name) => isFile(join(root, name))),
   };
@@ -138,7 +149,7 @@ export function planInit(cwd: string): InitPlan {
     notes.push("An env file is present. Its contents are NEVER read, parsed, copied, or stored.");
   }
 
-  if (!project.hasVerifyFixInstalled && project.hasPackageJson) {
+  if (!project.hasVerifyFixInstalled && !project.hasVerifyFixScripts && project.hasPackageJson) {
     actions.push({
       path: "package.json",
       description: `add the verify-fix scripts: ${Object.keys(PACKAGE_SCRIPTS).join(", ")}`,

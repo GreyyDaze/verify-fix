@@ -220,7 +220,7 @@ ENVIRONMENT_URL=http://localhost:3000 TEST_USER=demo npx playwright test
 | [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md) | Complete manual — install, commands, gate integration, verdicts, troubleshooting |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System design, data flow, components, security model, **7 implementation techniques** |
 | [`docs/DESIGN-DECISIONS.md`](docs/DESIGN-DECISIONS.md) | 7 architectural choices with rationale/tradeoffs, grouped by responsibility |
-| [`docs/TESTING.md`](docs/TESTING.md) | Test taxonomy (6 categories), principles, 196 tests in CI, why not other approaches |
+| [`docs/TESTING.md`](docs/TESTING.md) | Test taxonomy (6 categories), principles, 198 tests in CI, why not other approaches |
 | [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md) | Real Checkly provider acceptance commands (capture + full verification), prerequisites |
 
 ---
@@ -229,17 +229,17 @@ ENVIRONMENT_URL=http://localhost:3000 TEST_USER=demo npx playwright test
 
 ```bash
 npm run typecheck   # clean
-npm test            # 196 tests pass (Node native test runner)
+npm test            # 198 tests pass (Node native test runner)
 ```
 
 | Category | Tests | Real Provider? |
 |----------|-------|----------------|
 | Unit / Contract (policy, checks, capture, report) | 126 | No |
-| CLI Integration | 19 | No (real CLI) |
+| CLI Integration | 20 | No (real CLI) |
 | Application Integration (execution) | 34 | Local app |
-| Workflow / CI (gate adapter) | 7 | No |
+| Workflow / CI (gate adapter) | 8 | No |
 | External Package (revision) | 10 | No |
-| **Total (CI)** | **196** | — |
+| **Total (CI)** | **198** | — |
 | Real Provider Acceptance | 2 commands | **Yes** (opt-in, manual) |
 
 ---

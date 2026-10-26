@@ -63,11 +63,11 @@ This document describes the test taxonomy, principles, and how correctness is pr
 | Suite | Tests | Focus |
 |---|---:|---|
 | Unit / Contract | 126 | Policy comparison, assertion identity, problem taxonomy, bundle digest, capture mechanics, cost report |
-| CLI Integration | 19 | Version/help contract, argument parsing, init planning, local measure |
+| CLI Integration | 20 | Version/help contract, argument parsing, init planning, local measure |
 | Application Integration | 34 | Playwright sandbox, Checkly executor, scene proxy modes, rules |
-| Workflow / CI | 7 | `ci-gate.sh` syntax, env handling, provider-agnostic flags, version pinning |
+| Workflow / CI | 8 | `ci-gate.sh` syntax, env handling, provider-agnostic flags, version pinning |
 | External Package | 10 | Temp project creation, revision snapshot, dirty detection |
-| **Total (CI)** | **196** | **All run in `npm test` (Node native test runner)** |
+| **Total (CI)** | **198** | **All run in `npm test` (Node native test runner)** |
 
 Real-provider acceptance: 2 commands (capture + verify), run manually.
 

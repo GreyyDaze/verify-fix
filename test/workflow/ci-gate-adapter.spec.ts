@@ -83,6 +83,7 @@ function stubCli(root: string, name: string, verdict: string, eligible: boolean,
   writeFileSync(path, `
     import { writeFileSync } from "node:fs";
     const args = process.argv.slice(2);
+    writeFileSync(${JSON.stringify(path)} + ".args.json", JSON.stringify(args));
     writeFileSync(args[args.indexOf("--report-json") + 1], JSON.stringify({
       verdict: ${JSON.stringify(verdict)},
       targetBinding: { gateEligible: ${eligible} },
@@ -91,6 +92,30 @@ function stubCli(root: string, name: string, verdict: string, eligible: boolean,
   `);
   return path;
 }
+
+test("the gate defaults the requirements mode to shadow and honours an override", () => {
+  const root = mkdtempSync(join(tmpdir(), "verify-fix-ci-gate-mode-"));
+  try {
+    const cli = stubCli(root, "mode.mjs", "PASS", true);
+    const modePassed = () => {
+      const args = JSON.parse(readFileSync(`${cli}.args.json`, "utf8")) as string[];
+      return args[args.indexOf("--requirements-mode") + 1];
+    };
+
+    const byDefault = spawnSync("bash", [scriptPath], { encoding: "utf8", env: adapterEnv(root, cli) });
+    assert.equal(byDefault.status, 0, `${byDefault.stdout}${byDefault.stderr}`);
+    assert.equal(modePassed(), "shadow", "an unset mode must not silently enforce");
+
+    const overridden = spawnSync("bash", [scriptPath], {
+      encoding: "utf8",
+      env: { ...adapterEnv(root, cli), VF_REQUIREMENTS_MODE: "enforce" },
+    });
+    assert.equal(overridden.status, 0, `${overridden.stdout}${overridden.stderr}`);
+    assert.equal(modePassed(), "enforce");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("the neutral gate adapter accepts only a gate-eligible PASS", () => {
   const root = mkdtempSync(join(tmpdir(), "verify-fix-ci-gate-pass-"));

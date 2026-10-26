@@ -111,6 +111,17 @@ test("init is a no-op when verify-fix is already a dependency", () => {
   assert.deepEqual(plan.actions, []);
 });
 
+test("init is a no-op after the scripts were already written", () => {
+  const dir = tempProject({ "checkly.config.ts": CONFIG,
+    "package.json": '{"name":"x","scripts":{}}', "incidents/.gitkeep": "",
+    ".gitignore": "bundle-*/\nincidents/\n" });
+  const merged = mergePackageScripts(readFileSync(join(dir, "package.json"), "utf8"));
+  writeFileSync(join(dir, "package.json"), merged);
+  const plan = planInit(dir);
+  assert.equal(plan.project.hasVerifyFixScripts, true);
+  assert.deepEqual(plan.actions, [], "a second run must not claim it will rewrite package.json");
+});
+
 test("detectProject never throws on a hostile or absent directory", () => {
   const dir = tempProject({});
   assert.doesNotThrow(() => detectProject(dir));

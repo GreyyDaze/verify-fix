@@ -68,7 +68,7 @@ verify-fix verify \
 |---|---|---|
 | `verify-fix bundle` | Capture incident from Checkly | `--check`, `--result`, `--pass-result`, `--out`, `--measure` |
 | `verify-fix verify` | Grade candidate patch | `--bundle`, `--patch`, `--target`, `--candidate-revision`, `--base`, `--executor`, `--requirements-mode`, `--requirements-digest`, `--report-json`, `--report-markdown` |
-| `verify-fix init` | Scaffold Checkly project in existing repo | `--yes` (required to write), `--project-path` |
+| `verify-fix init` | Configure an existing Checkly project (adds verify-fix scripts and bundle ignore rules; never creates a project) | `--yes` (required to write) |
 | `verify-fix measure` | Measure determinism (20+ runs) | `--bundle`, `--target`, `--project`, `--runs` |
 | `verify-fix cost-report` | Aggregate cost across reports | `--reports <dir>` |
 
@@ -214,9 +214,11 @@ The static gate runs *before* any execution, comparing the candidate's effective
 
 | Mode | Behavior | Use Case |
 |---|---|---|
-| `shadow` (default) | Reports violations, exits 0 | Rollout observation |
-| `migration` | Requires versioned bundle digest; reports violations | Pinning requirements |
-| `enforce` | Violations → exit 1 (block) | Production gate |
+| `shadow` (default) | Static-requirement violations are reported only; the verdict is unchanged | Rollout observation |
+| `migration` | Requires a pinned `--requirements-digest`; violations are reported only | Pinning requirements |
+| `enforce` | Static-requirement violations fail the verdict (exit 1) | Production gate |
+
+Modes govern the **static requirements gate only**. `shadow` does not turn a failing execution, a missing assertion, or a weak oracle into a pass — those still fail the verdict.
 
 ```bash
 verify-fix verify --requirements-mode enforce --requirements-digest <sha256> ...

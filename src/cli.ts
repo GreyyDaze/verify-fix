@@ -36,7 +36,7 @@ import { buildBundle } from "./capture/bundle/build.ts";
 import type { BodyPolicy } from "./capture/trace/trace-to-har.ts";
 import type { ExitCode } from "./types.ts";
 
-const TOOL_VERSION = "0.1.1";
+const TOOL_VERSION = "0.1.2";
 
 interface Args {
   command: string | null;

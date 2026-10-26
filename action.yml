@@ -1,5 +1,5 @@
 name: "verify-fix gate"
-description: "Grade an agent-proposed monitoring-check repair against a captured incident bundle. Fails closed unless the exact candidate revision PASSes."
+description: "Gate agent-proposed monitoring-check repairs; fails closed unless the exact candidate revision passes."
 author: "Aminah"
 branding:
   icon: "shield"

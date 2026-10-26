@@ -223,7 +223,7 @@ ENVIRONMENT_URL=http://localhost:3000 TEST_USER=demo npx playwright test
 | [`docs/TESTING.md`](docs/TESTING.md) | Test taxonomy (6 categories), principles, 196 tests in CI, why not other approaches |
 | [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md) | Real Checkly provider acceptance commands (capture + full verification), prerequisites |
 
-Also: [`CHANGELOG.md`](CHANGELOG.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
+See [`SECURITY.md`](SECURITY.md) for the vulnerability disclosure process.
 
 ---
 

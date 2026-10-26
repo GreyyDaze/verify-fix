@@ -1,24 +1,58 @@
 {
   "name": "verify-fix",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "description": "Pre-merge verification CLI: AI-free oracle engine for agent-proposed monitoring-check repairs.",
   "type": "module",
+  "license": "MIT",
+  "author": "Aminah",
+  "homepage": "https://github.com/GreyyDaze/verify-fix#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GreyyDaze/verify-fix.git"
+  },
+  "bugs": {
+    "url": "https://github.com/GreyyDaze/verify-fix/issues"
+  },
+  "keywords": [
+    "checkly",
+    "playwright",
+    "monitoring",
+    "synthetic-monitoring",
+    "verification",
+    "agent",
+    "ai",
+    "ci",
+    "gate",
+    "oracle",
+    "mutation-testing"
+  ],
   "bin": {
     "verify-fix": "bin/verify-fix"
   },
   "files": [
     "bin/",
     "dist/",
+    "scripts/ci-gate.sh",
+    "action.yml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "SECURITY.md",
     "src/execution/sandbox/check-api.ts",
     "src/evidence/assertion/id.ts"
   ],
   "engines": {
-    "node": ">=24"
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "prepack": "npm run build",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build",
     "test": "node --no-warnings --test \"test/**/*.spec.ts\"",
     "typecheck": "tsc --noEmit",
     "verify": "node src/cli.ts",

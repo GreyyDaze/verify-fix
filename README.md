@@ -3,7 +3,7 @@
 > **A deterministic oracle that grades candidate patches to monitoring checks (Playwright, API, Multistep) against captured incident evidence — no LLM in the decision path.**
 
 [![npm version](https://img.shields.io/npm/v/verify-fix?label=verify-fix)](https://www.npmjs.com/package/verify-fix)
-[![Node](https://img.shields.io/badge/node-%3E%3D24-brightgreen)](https://nodejs.org/)
+[![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 ---
@@ -160,6 +160,26 @@ The provider-neutral gate is a single POSIX script: **`scripts/ci-gate.sh`**
 | 2 | UNCERTAIN (missing evidence, flaky) |
 | 3+ | Configuration error (missing var, fingerprint mismatch) |
 
+Prefer a typed interface? The same gate ships as a composite GitHub Action:
+
+```yaml
+- uses: GreyyDaze/verify-fix@v0.1.0
+  with:
+    bundle-dir: ${{ steps.capture.outputs.bundle }}
+    bundle-digest: ${{ steps.capture.outputs.digest }}
+    candidate-project: web
+    candidate-revision: ${{ github.sha }}
+    target: https://preview.example.com
+    target-revision: ${{ github.sha }}
+    target-metadata: ./deployment-metadata.json
+    requirements-mode: shadow
+    cli-version: 0.1.0
+    checkly-api-key: ${{ secrets.CHECKLY_API_KEY }}
+    checkly-account-id: ${{ secrets.CHECKLY_ACCOUNT_ID }}
+```
+
+Pin the toolchain with `VF_CLI` + `VF_CLI_VERSION`; the gate refuses to run if the installed CLI version differs.
+
 ---
 
 ## Example Project — `examples/slots-booking/`
@@ -200,8 +220,10 @@ ENVIRONMENT_URL=http://localhost:3000 TEST_USER=demo npx playwright test
 | [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md) | Complete manual — install, commands, gate integration, verdicts, troubleshooting |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System design, data flow, components, security model, **7 implementation techniques** |
 | [`docs/DESIGN-DECISIONS.md`](docs/DESIGN-DECISIONS.md) | 7 architectural choices with rationale/tradeoffs, grouped by responsibility |
-| [`docs/TESTING.md`](docs/TESTING.md) | Test taxonomy (6 categories), principles, 189 tests in CI, why not other approaches |
+| [`docs/TESTING.md`](docs/TESTING.md) | Test taxonomy (6 categories), principles, 196 tests in CI, why not other approaches |
 | [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md) | Real Checkly provider acceptance commands (capture + full verification), prerequisites |
+
+Also: [`CHANGELOG.md`](CHANGELOG.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
 ---
 
@@ -209,17 +231,17 @@ ENVIRONMENT_URL=http://localhost:3000 TEST_USER=demo npx playwright test
 
 ```bash
 npm run typecheck   # clean
-npm test            # 189 tests pass (Node native test runner)
+npm test            # 196 tests pass (Node native test runner)
 ```
 
 | Category | Tests | Real Provider? |
 |----------|-------|----------------|
-| Unit / Contract | ~80 | No |
-| CLI Integration | ~45 | No (real CLI) |
-| Application Integration | ~35 | Local app |
-| Workflow / CI | 5 | No |
-| External Package | ~15 | No |
-| **Total (CI)** | **189** | — |
+| Unit / Contract (policy, checks, capture, report) | 126 | No |
+| CLI Integration | 19 | No (real CLI) |
+| Application Integration (execution) | 34 | Local app |
+| Workflow / CI (gate adapter) | 7 | No |
+| External Package (revision) | 10 | No |
+| **Total (CI)** | **196** | — |
 | Real Provider Acceptance | 2 commands | **Yes** (opt-in, manual) |
 
 ---

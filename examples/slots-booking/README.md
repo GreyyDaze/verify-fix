@@ -14,7 +14,7 @@ used as the customer-side example for verify-fix.
 
 ## Prerequisites
 
-- Node.js 24+
+- Node.js 22+
 - npm
 - A Checkly account for cloud runs and deploys
 - Vercel and Upstash only if you want to deploy the app

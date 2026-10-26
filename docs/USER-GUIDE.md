@@ -16,7 +16,9 @@ npm i -g verify-fix
 npx verify-fix --help
 ```
 
-Requires Node.js 24+.
+Requires Node.js 22+.
+
+**Platforms:** macOS, Linux, and Windows. The CLI itself is cross-platform, but the CI gate (`scripts/ci-gate.sh`) is a POSIX bash script — on Windows run it under WSL, Git Bash, or use the GitHub Action wrapper, which runs bash for you.
 
 ---
 
@@ -104,6 +106,41 @@ The provider-neutral gate is `scripts/ci-gate.sh`. It runs in any CI (GitHub Act
 | `VF_PROJECT` | Checkly project name override |
 | `VF_REPORT_JSON` | Output path for JSON report |
 | `VF_REPORT_MARKDOWN` | Output path for Markdown report |
+| `VF_CLI` | Path to a pinned `verify-fix` binary (default: the bundled one) |
+| `VF_CLI_VERSION` | Expected `verify-fix --version`; the gate refuses to run on mismatch |
+
+### GitHub Action Wrapper
+
+The repository ships a composite action (`action.yml`) that runs the same script with typed inputs:
+
+```yaml
+- uses: GreyyDaze/verify-fix@v0.1.0
+  with:
+    bundle-dir: ${{ steps.capture.outputs.bundle }}
+    bundle-digest: ${{ steps.capture.outputs.digest }}
+    candidate-project: web
+    candidate-revision: ${{ github.sha }}
+    base: origin/main
+    target: https://preview.example.com
+    target-revision: ${{ github.sha }}
+    target-metadata: ./deployment-metadata.json
+    requirements-mode: shadow
+    cli-version: 0.1.0
+    checkly-api-key: ${{ secrets.CHECKLY_API_KEY }}
+    checkly-account-id: ${{ secrets.CHECKLY_ACCOUNT_ID }}
+```
+
+### Pinning the Toolchain
+
+The gate executes whatever `verify-fix` binary it finds. To make a build reproducible, install an exact release and pin it:
+
+```bash
+npm i -g verify-fix@0.1.0
+export VF_CLI="$(command -v verify-fix)"
+export VF_CLI_VERSION=0.1.0
+```
+
+If the installed CLI reports a different version, the gate exits `2` instead of grading with the wrong rules.
 
 ### Deployment Metadata (`VF_TARGET_METADATA`)
 
@@ -213,6 +250,10 @@ verify-fix cost-report --reports ./reports-dir
 | `FAILED: mutation passed` | Oracle too weak (mutant not rejected) | Add more specific assertions; increase determinism runs |
 | `FAILED: fingerprint mismatch` | Bundle was modified after capture | Re-capture; ensure bundle stored externally |
 | `Configuration error: VF_* missing` | Gate env vars not set | Supply all required `VF_*` variables in CI |
+| `VF_CLI_VERSION=... but the CLI reports ...` | Installed CLI is not the pinned version | Install the pinned release or update `VF_CLI_VERSION` |
+| `verify-fix: command not found` | Not installed globally | `npm i -g verify-fix` or use `npx verify-fix` |
+| `ci-gate.sh: bad interpreter` on Windows | Script needs a POSIX shell | Use WSL, Git Bash, or the GitHub Action wrapper |
+| Bundle dir missing on first run | No capture yet | `verify-fix bundle ...` creates `~/.verify-fix/bundles/<incident-id>` automatically |
 
 ---
 

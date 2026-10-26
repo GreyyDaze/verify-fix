@@ -104,6 +104,51 @@ test("the neutral gate adapter accepts only a gate-eligible PASS", () => {
   }
 });
 
+test("the neutral gate adapter fails closed when the pinned CLI version differs", () => {
+  const root = mkdtempSync(join(tmpdir(), "verify-fix-ci-gate-version-"));
+  try {
+    const path = join(root, "versioned.mjs");
+    writeFileSync(path, `
+      const args = process.argv.slice(2);
+      if (args.includes("--version")) { process.stdout.write("9.9.9\\n"); process.exit(0); }
+      process.exit(0);
+    `);
+    const mismatch = spawnSync("bash", [scriptPath], {
+      encoding: "utf8",
+      env: { ...adapterEnv(root, path), VF_CLI_VERSION: "0.1.0" },
+    });
+    assert.equal(mismatch.status, 2, `${mismatch.stdout}${mismatch.stderr}`);
+    assert.match(mismatch.stderr, /VF_CLI_VERSION=0\.1\.0 but the CLI reports '9\.9\.9'/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the neutral gate adapter continues when the pinned version matches", () => {
+  const root = mkdtempSync(join(tmpdir(), "verify-fix-ci-gate-version-ok-"));
+  try {
+    const path = join(root, "versioned-pass.mjs");
+    writeFileSync(path, `
+      import { writeFileSync } from "node:fs";
+      const args = process.argv.slice(2);
+      if (args.includes("--version")) { process.stdout.write("0.1.0\\n"); process.exit(0); }
+      writeFileSync(args[args.indexOf("--report-json") + 1], JSON.stringify({
+        verdict: "PASS",
+        targetBinding: { gateEligible: true },
+      }));
+      process.exit(0);
+    `);
+    const result = spawnSync("bash", [scriptPath], {
+      encoding: "utf8",
+      env: { ...adapterEnv(root, path), VF_CLI_VERSION: "0.1.0" },
+    });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /ci-gate: PASS \(gate-eligible\)/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("the neutral gate adapter fails closed on an ineligible PASS or failing verdict", () => {
   const root = mkdtempSync(join(tmpdir(), "verify-fix-ci-gate-fail-"));
   try {

@@ -10,7 +10,37 @@ permissions:
 
 jobs:
   test:
-    name: typecheck, test, build
+    name: typecheck, test, build (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Use Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  package:
+    name: package smoke test
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -26,11 +56,15 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Pack the publishable artifact
+        run: npm pack
 
-      - name: Test
-        run: npm test
-
-      - name: Build
-        run: npm run build
+      - name: Smoke-test the packed CLI
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pack-test" && cd "$RUNNER_TEMP/pack-test"
+          npm init -y >/dev/null
+          npm install --ignore-scripts "$GITHUB_WORKSPACE"/verify-fix-*.tgz
+          ./node_modules/.bin/verify-fix --version
+          ./node_modules/.bin/verify-fix --help >/dev/null
+          test -f ./node_modules/verify-fix/scripts/ci-gate.sh

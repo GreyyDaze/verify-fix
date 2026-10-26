@@ -18,7 +18,11 @@
 #
 # Optional:
 #   VF_PROJECT, VF_ENV_FILE, VF_ENV_NAME, VF_REPORT_JSON, VF_REPORT_MARKDOWN,
-#   VF_REQUIREMENTS_MODE, VF_REQUIREMENTS_DIGEST, VF_CLI
+#   VF_REQUIREMENTS_MODE, VF_REQUIREMENTS_DIGEST, VF_CLI, VF_CLI_VERSION
+#
+# Pinning: install an exact CLI release (npm i -g verify-fix@0.1.0), point
+# VF_CLI at that binary, and set VF_CLI_VERSION=0.1.0. The gate refuses to run
+# if the installed CLI reports a different version.
 set -euo pipefail
 
 fail() {
@@ -41,6 +45,12 @@ done
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cli="${VF_CLI:-$script_dir/../bin/verify-fix}"
 report_json="${VF_REPORT_JSON:-$(mktemp "${TMPDIR:-/tmp}/verify-fix-ci-report.XXXXXX")}"
+
+if [[ -n "${VF_CLI_VERSION:-}" ]]; then
+  actual_version="$(node "$cli" --version 2>/dev/null || true)"
+  [[ "$actual_version" == "$VF_CLI_VERSION" ]] \
+    || fail "VF_CLI_VERSION=$VF_CLI_VERSION but the CLI reports '${actual_version:-unknown}'"
+fi
 
 args=(verify
   --bundle "$VF_BUNDLE_DIR"

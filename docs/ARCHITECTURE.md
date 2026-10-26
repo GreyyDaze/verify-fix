@@ -145,6 +145,6 @@ Concurrency is controlled by a lockstep mechanism: one listener per concurrent r
 
 ## Deployment
 
-- **CLI**: Published npm package (`verify-fix`), entrypoint `bin/verify-fix`, `engines.node >=24`.
+- **CLI**: Published npm package (`verify-fix`), entrypoint `bin/verify-fix`, `engines.node >=22`.
 - **CI Gate**: `scripts/ci-gate.sh` — POSIX bash, runs anywhere (GitHub Actions, GitLab, Jenkins, Bitbucket, local). GitHub Actions reference adapter in `.github/workflows/ci.yml` (repo CI) and example CI in `examples/slots-booking/.github/workflows/checkly.yml`.
 - **Example**: `examples/slots-booking/` — Next.js app + Checkly project (Playwright suite, ApiCheck, Multistep) in one project, `__checks__/` convention, local CI runs Playwright against `localhost:3000`.

@@ -1,0 +1,86 @@
+name: "verify-fix gate"
+description: "Grade an agent-proposed monitoring-check repair against a captured incident bundle. Fails closed unless the exact candidate revision PASSes."
+author: "Aminah"
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  bundle-dir:
+    description: "Local directory of the captured bundle."
+    required: true
+  bundle-digest:
+    description: "Whole-bundle SHA-256 fingerprint (64 lowercase hex)."
+    required: true
+  candidate-project:
+    description: "Path to the Checkly project inside the candidate checkout."
+    required: true
+  candidate-revision:
+    description: "Exact 40-hex candidate commit SHA (clean tree)."
+    required: true
+  base:
+    description: "Base git ref used to describe candidate changes."
+    required: false
+    default: "origin/main"
+  target:
+    description: "Deployment origin (bare http/https origin)."
+    required: true
+  target-revision:
+    description: "Exact deployed revision; must equal candidate-revision."
+    required: true
+  target-metadata:
+    description: "Path to the deployment metadata JSON."
+    required: true
+  requirements-mode:
+    description: "shadow | migration | enforce (default shadow)."
+    required: false
+    default: "shadow"
+  requirements-digest:
+    description: "Pinned policy fingerprint for migration/enforce."
+    required: false
+  env-file:
+    description: "Optional Checkly env file path."
+    required: false
+  project:
+    description: "Optional already-installed Checkly project directory."
+    required: false
+  report-json:
+    description: "Where to write the JSON report."
+    required: false
+  report-markdown:
+    description: "Where to write the Markdown report."
+    required: false
+  cli-version:
+    description: "Expected `verify-fix --version` output; refuses to run on mismatch."
+    required: false
+  checkly-api-key:
+    description: "Checkly API key."
+    required: true
+  checkly-account-id:
+    description: "Checkly account ID."
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Run verify-fix gate
+      shell: bash
+      env:
+        VF_BUNDLE_DIR: ${{ inputs.bundle-dir }}
+        VF_BUNDLE_DIGEST: ${{ inputs.bundle-digest }}
+        VF_CANDIDATE_PROJECT: ${{ inputs.candidate-project }}
+        VF_CANDIDATE_REVISION: ${{ inputs.candidate-revision }}
+        VF_BASE: ${{ inputs.base }}
+        VF_TARGET: ${{ inputs.target }}
+        VF_TARGET_REVISION: ${{ inputs.target-revision }}
+        VF_TARGET_METADATA: ${{ inputs.target-metadata }}
+        VF_REQUIREMENTS_MODE: ${{ inputs.requirements-mode }}
+        VF_REQUIREMENTS_DIGEST: ${{ inputs.requirements-digest }}
+        VF_ENV_FILE: ${{ inputs.env-file }}
+        VF_PROJECT: ${{ inputs.project }}
+        VF_REPORT_JSON: ${{ inputs.report-json }}
+        VF_REPORT_MARKDOWN: ${{ inputs.report-markdown }}
+        VF_CLI_VERSION: ${{ inputs.cli-version }}
+        CHECKLY_API_KEY: ${{ inputs.checkly-api-key }}
+        CHECKLY_ACCOUNT_ID: ${{ inputs.checkly-account-id }}
+      run: "${{ github.action_path }}/scripts/ci-gate.sh"

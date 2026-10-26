@@ -67,6 +67,7 @@ interface Args {
   // bundle
   check: string | null;
   result: string | null;
+  passResult: string | null;
   out: string | null;
   project: string | null;
   assets: string | null;
@@ -87,11 +88,11 @@ interface Args {
 
 /** No option value, extra positional argument or misspelled flag is ever
  * silently ignored. In particular a token-looking argument is never echoed. */
-const FLAG_OPTIONS = new Set(["--help", "-h", "--dry-run", "--json", "--verbose", "--cloud-approved",
+const FLAG_OPTIONS = new Set(["--help", "-h", "--version", "-V", "--dry-run", "--json", "--verbose", "--cloud-approved",
   "--allow-fork-cloud", "--trigger-rca", "--keep-raw", "--yes", "-y"]);
 const VALUE_OPTIONS = new Set(["--patch", "--candidate-project", "--candidate-revision", "--pr", "--base", "--project-path", "--bundle",
   "--executor", "--target", "--target-revision", "--target-metadata", "--report-json", "--report-markdown",
-  "--env-file", "--env-name", "--check", "--result", "--out", "--project", "--assets", "--measure",
+  "--env-file", "--env-name", "--check", "--result", "--pass-result", "--out", "--project", "--assets", "--measure",
   "--measure-overlap", "--target-url", "--bodies", "--history", "--runs", "--reports"]);
 VALUE_OPTIONS.add("--requirements-mode");
 VALUE_OPTIONS.add("--requirements-digest");
@@ -130,7 +131,7 @@ function readEnvInputs(file: string | null): Record<string, string> {
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: null, patch: null, candidateProject: null, candidateRevision: null, pr: null, base: null, projectPath: ".", bundle: null, bundleDigest: null, executor: "scene", target: null, targetRevision: null, targetMetadata: null, cloudApproved: false, allowForkCloud: false, reportJson: null, reportMarkdown: null, envFile: null, envName: null, requirementsMode: "enforce", requirementsDigest: null, dryRun: false, json: false, verbose: false,
-    check: null, result: null, out: null, project: null, assets: null, measure: 0, measureOverlap: 0, targetUrl: null,
+    check: null, result: null, passResult: null, out: null, project: null, assets: null, measure: 0, measureOverlap: 0, targetUrl: null,
     triggerRca: false, bodies: "api", keepRaw: false, history: 1000, runs: 20, reports: null, yes: false,
   };
   const seen = new Set<string>();
@@ -183,6 +184,7 @@ function parseArgs(argv: string[]): Args {
       case "--verbose": args.verbose = true; break;
       case "--check": args.check = value(i, a); if (takes) i++; break;
       case "--result": args.result = value(i, a); if (takes) i++; break;
+      case "--pass-result": args.passResult = value(i, a); if (takes) i++; break;
       case "--out": args.out = value(i, a); if (takes) i++; break;
       case "--project": args.project = value(i, a); if (takes) i++; break;
       case "--assets": args.assets = value(i, a); if (takes) i++; break;
@@ -197,11 +199,12 @@ function parseArgs(argv: string[]): Args {
       case "--runs": args.runs = Number(value(i, a)); if (takes) i++; break;
       case "--reports": args.reports = value(i, a); if (takes) i++; break;
       case "--help": case "-h": args.command = "help"; break;
+      case "--version": case "-V": args.command = "version"; break;
       default: throw new Error("CLI_ARGUMENT_INVALID");
     }
   }
   const perCommand: Record<string, ReadonlySet<string>> = {
-    bundle: new Set(["--check", "--result", "--out", "--project", "--assets", "--measure", "--measure-overlap",
+    bundle: new Set(["--check", "--result", "--pass-result", "--out", "--project", "--assets", "--measure", "--measure-overlap",
       "--target-url", "--trigger-rca", "--bodies", "--keep-raw", "--history", "--json", "--verbose"]),
     verify: new Set(["--patch", "--candidate-project", "--candidate-revision", "--pr", "--base", "--project-path", "--bundle",
       "--executor", "--target", "--target-revision", "--target-metadata", "--cloud-approved", "--allow-fork-cloud",
@@ -211,6 +214,7 @@ function parseArgs(argv: string[]): Args {
     "cost-report": new Set(["--reports", "--json"]),
     init: new Set(["--yes", "-y"]),
     help: new Set(["--help", "-h"]),
+    version: new Set(["--version", "-V"]),
   };
   if (args.command && perCommand[args.command] && [...seen].some((key) =>
     !perCommand[args.command!]!.has(key))) throw new Error("CLI_ARGUMENT_INVALID");
@@ -221,7 +225,7 @@ function usage(): string {
   return [
     "verify-fix — pre-merge verification of an agent-proposed monitoring-check repair",
     "",
-    "  verify-fix bundle --check <checkId> [--result <failingResultId>] [--project <checkly project dir>] [--out <dir>]",
+    "  verify-fix bundle --check <checkId> [--result <failingResultId>] [--pass-result <passingResultId>] [--project <checkly project dir>] [--out <dir>]",
     "                    [--assets <downloaded-dir>] [--measure N] [--measure-overlap M] [--target-url <url>] [--trigger-rca]",
     "                    [--bodies api|all|none] [--keep-raw] [--history N] [--json] [--verbose]",
     "      Captures an incident from Checkly into a bundle: check config, sources, failing + last passing",
@@ -271,6 +275,9 @@ function usage(): string {
     "",
     "Exit codes: 0 = PASS/ok · 1 = FAILED · 2 = UNCERTAIN / usage error",
     "",
+    "  verify-fix --version | -V",
+    "      Prints the CLI version. Useful for pinning a trusted gate toolchain.",
+    "",
   ].join("\n");
 }
 
@@ -280,6 +287,7 @@ async function runBundle(args: Args): Promise<ExitCode> {
     return 2;
   }
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(args.check) || args.result && !/^[A-Za-z0-9_-]{1,128}$/.test(args.result)
+    || args.passResult && !/^[A-Za-z0-9_-]{1,128}$/.test(args.passResult)
     || args.targetUrl && !safeTargetOrigin(args.targetUrl)
     || !Number.isSafeInteger(args.history) || args.history < 1 || args.history > 5000
     || !Number.isSafeInteger(args.measure) || args.measure < 0 || args.measure > 500
@@ -307,6 +315,7 @@ async function runBundle(args: Args): Promise<ExitCode> {
       {
         checkId: args.check,
         resultId: args.result,
+        passingResultId: args.passResult ?? undefined,
         outDir: args.out ?? undefined,
         projectDir: project,
         assetsDir: args.assets,
@@ -622,9 +631,17 @@ async function main(): Promise<ExitCode> {
   let args: Args;
   try { args = parseArgs(process.argv.slice(2)); }
   catch { process.stderr.write("invalid or ambiguous CLI arguments\n"); return 2; }
-  if (args.command === "help" || !args.command) {
+  if (args.command === "help") {
+    process.stdout.write(usage());
+    return 0;
+  }
+  if (!args.command) {
     process.stdout.write(usage());
     return 2;
+  }
+  if (args.command === "version") {
+    process.stdout.write(TOOL_VERSION + "\n");
+    return 0;
   }
   if (args.command === "bundle") return runBundle(args);
   if (args.command === "measure") return runMeasure(args);

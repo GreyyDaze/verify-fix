@@ -37,7 +37,6 @@
     "action.yml",
     "README.md",
     "LICENSE",
-    "CHANGELOG.md",
     "SECURITY.md",
     "src/execution/sandbox/check-api.ts",
     "src/evidence/assertion/id.ts"

@@ -28,6 +28,10 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
+      - name: Install example app dependencies
+        run: npm ci --ignore-scripts
+        working-directory: examples/slots-booking/web
+
       - name: Typecheck
         run: npm run typecheck
 

@@ -1,6 +1,6 @@
 {
   "name": "verify-fix",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "description": "Pre-merge verification CLI: AI-free oracle engine for agent-proposed monitoring-check repairs.",
   "type": "module",

@@ -68,11 +68,37 @@ verify-fix verify \
 |---|---|---|
 | `verify-fix bundle` | Capture incident from Checkly | `--check`, `--result`, `--pass-result`, `--out`, `--measure` |
 | `verify-fix verify` | Grade candidate patch | `--bundle`, `--patch`, `--target`, `--candidate-revision`, `--base`, `--executor`, `--requirements-mode`, `--requirements-digest`, `--report-json`, `--report-markdown` |
+| `verify-fix verify --dry-run` | Preflight the wiring without executing anything | `--bundle`, `--patch`/`--candidate-project`/`--pr`, `--bundle-digest`, `--target-metadata`, `--project`, `--json` |
 | `verify-fix init` | Configure an existing Checkly project (adds verify-fix scripts and bundle ignore rules; never creates a project) | `--yes` (required to write) |
 | `verify-fix measure` | Measure determinism (20+ runs) | `--bundle`, `--target`, `--project`, `--runs` |
 | `verify-fix cost-report` | Aggregate cost across reports | `--reports <dir>` |
 
 Run `verify-fix <command> --help` for full flag list.
+
+### Preflight before a real run
+
+`--dry-run` checks everything a verification needs and then stops. It loads the bundle, verifies the fingerprint, and confirms the candidate source, project directory, deployment metadata, env file, and report paths exist. It opens no browser, makes no network call, and writes no report.
+
+```bash
+verify-fix verify \
+  --bundle ~/.verify-fix/bundles/inc-123 \
+  --bundle-digest <sha256> \
+  --candidate-project . --base origin/main \
+  --target https://preview.example.com \
+  --dry-run
+```
+
+```
+verify-fix preflight (dry run — no scenes executed, no network calls)
+
+  ok    bundle               /Users/me/.verify-fix/bundles/inc-123
+  ok    bundle fingerprint   matches sha256:...
+  ok    candidate project    .
+  ...
+preflight: ok
+```
+
+Exit `0` means the wiring is sound. Exit `2` means at least one input is missing or mismatched, and each failed line says which. Add `--json` for the same result as machine-readable output.
 
 ---
 

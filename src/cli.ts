@@ -8,7 +8,7 @@
 // Exit codes: 0 PASS/ok · 1 FAILED · 2 UNCERTAIN / usage / could not run.
 
 import { readFileSync, existsSync, lstatSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { loadBundle } from "./capture/bundle/load.ts";
 import { bundleDigest, isBundleDigest } from "./capture/bundle/digest.ts";
 import { verify } from "./verify.ts";
@@ -36,7 +36,7 @@ import { buildBundle } from "./capture/bundle/build.ts";
 import type { BodyPolicy } from "./capture/trace/trace-to-har.ts";
 import type { ExitCode } from "./types.ts";
 
-const TOOL_VERSION = "0.1.3";
+const TOOL_VERSION = "0.1.4";
 
 interface Args {
   command: string | null;
@@ -249,7 +249,7 @@ function usage(): string {
     "                    [--env-file <file>] [--env-name <name>] [--executor scene|hybrid]",
     "                    [--requirements-mode shadow|migration|enforce] [--requirements-digest <sha256>]",
     "                    [--bundle-digest <sha256>]",
-    "                    [--report-json <file>] [--report-markdown <file>] [--json] [--verbose]",
+    "                    [--report-json <file>] [--report-markdown <file>] [--json] [--verbose] [--dry-run]",
     "      Grades a candidate fix against a protected incident bundle. --patch remains for fixtures and small experiments.",
     "      Local mode snapshots HEAD plus staged, unstaged, and non-ignored untracked files before any check runs.",
     "      --candidate-revision pins an exact commit on any Git host: HEAD must equal it and the tree must be clean,",
@@ -260,6 +260,8 @@ function usage(): string {
     "      Hybrid PR mode requires protected approval. Deployment metadata makes an exact PR/preview binding gate-eligible.",
     "      --env-file gives the check its own variables (KEY=VALUE lines, like `checkly test --env-file`).",
     "      --bundle-digest pins the trusted bundle's SHA-256; a mismatch stops the run instead of grading against it.",
+    "      --dry-run loads the bundle and checks the wiring (fingerprint, patch, project, deployment metadata, report paths)",
+    "      without executing a scene or calling Checkly. Exit 0 when everything is in place, 2 otherwise.",
     "",
     "  verify-fix measure --bundle <dir> --target <url> --project <dir> [--runs 20] [--env-file <file>] [--verbose]",
     "      Runs the original Playwright or Multistep check against its reproduction mode, then writes measured",
@@ -427,6 +429,91 @@ async function runMeasure(args: Args): Promise<ExitCode> {
   }
 }
 
+/**
+ * `verify-fix verify --dry-run`.
+ *
+ * Validates the wiring a real run depends on — the bundle loads, the pinned
+ * fingerprint matches, the candidate source and target metadata exist — and
+ * exits without executing a scene, opening a browser, or calling Checkly.
+ * It never writes a report and never resolves credentials.
+ */
+function verifyPreflight(args: Args): ExitCode {
+  const checks: { name: string; ok: boolean; detail: string }[] = [];
+  const add = (name: string, ok: boolean, detail: string) => checks.push({ name, ok, detail });
+  const describe = (error: unknown): string => {
+    const raw = error instanceof Error ? error.message : String(error);
+    return raw
+      .replace(/https?:\/\/[^\s)\]}>"]+/g, "<redacted-url>")
+      .replace(/\/(?:Users|private|var|tmp)\/[^\s:]+/g, "<path>")
+      .slice(0, 300) || "unknown error";
+  };
+
+  let bundle: ReturnType<typeof loadBundle>["bundle"] | null = null;
+  try {
+    bundle = loadBundle(args.bundle!).bundle;
+    add("bundle", true, bundle.dir);
+  } catch (error) {
+    add("bundle", false, describe(error));
+  }
+
+  if (bundle) {
+    const actual = bundleDigest(bundle.dir);
+    if (args.bundleDigest === null) add("bundle fingerprint", true, `sha256:${actual} (not pinned)`);
+    else if (args.bundleDigest === actual) add("bundle fingerprint", true, `matches sha256:${actual}`);
+    else add("bundle fingerprint", false, `pinned sha256:${args.bundleDigest} but the bundle is sha256:${actual}`);
+
+    const needsProject = Boolean(bundle.playwright) || args.project !== null;
+    if (needsProject) {
+      const project = args.project;
+      add("project", Boolean(project) && existsSync(project!), project ?? "Playwright bundles need --project <dir> with installed dependencies");
+    }
+  }
+
+  if (args.patch) {
+    const present = existsSync(args.patch);
+    add("patch", present, present ? args.patch : `${args.patch} does not exist (not applied during a preflight)`);
+  } else if (args.candidateProject) {
+    add("candidate project", existsSync(args.candidateProject), args.candidateProject);
+  } else if (args.pr) {
+    add("pull request", true, `${args.pr} (resolved against GitHub during a real run; not fetched here)`);
+  }
+
+  if (args.targetMetadata) {
+    try {
+      const deployment = loadDeploymentMetadata(args.targetMetadata);
+      add("deployment metadata", true, `${deployment.provider} ${deployment.deploymentId} (${deployment.revision.slice(0, 7)})`);
+    } catch (error) {
+      add("deployment metadata", false, describe(error));
+    }
+  }
+
+  if (args.envFile) add("env file", existsSync(args.envFile), args.envFile);
+
+  for (const [name, path] of [["report json", args.reportJson], ["report markdown", args.reportMarkdown]] as const) {
+    if (!path) continue;
+    const parent = dirname(path);
+    add(name, existsSync(parent), existsSync(parent) ? path : `directory ${parent} does not exist`);
+  }
+
+  if (args.json) {
+    process.stdout.write(JSON.stringify({
+      dryRun: true,
+      ok: checks.every((check) => check.ok),
+      checks,
+    }, null, 2) + "\n");
+  } else {
+    process.stdout.write([
+      "verify-fix preflight (dry run — no scenes executed, no network calls)",
+      "",
+      ...checks.map((check) => `  ${check.ok ? "ok  " : "FAIL"}  ${check.name.padEnd(20)} ${check.detail}`),
+      "",
+      checks.every((check) => check.ok) ? "preflight: ok" : "preflight: failed",
+      "",
+    ].join("\n"));
+  }
+  return checks.every((check) => check.ok) ? 0 : 2;
+}
+
 async function runVerify(args: Args): Promise<ExitCode> {
   const candidateInputs = [args.patch, args.candidateProject, args.pr].filter(Boolean).length;
   if (!args.bundle || candidateInputs !== 1) {
@@ -447,10 +534,6 @@ async function runVerify(args: Args): Promise<ExitCode> {
   }
   if (args.candidateRevision !== null && !args.candidateProject) {
     process.stderr.write("--candidate-revision is used only with --candidate-project\n");
-    return 2;
-  }
-  if (args.dryRun) {
-    process.stderr.write("--dry-run belonged to the retired direct-API executor; use --executor scene or --executor hybrid\n");
     return 2;
   }
   if (args.target && !safeTargetOrigin(args.target)) {
@@ -484,6 +567,7 @@ async function runVerify(args: Args): Promise<ExitCode> {
     process.stderr.write("--executor must be scene or hybrid\n");
     return 2;
   }
+  if (args.dryRun) return verifyPreflight(args);
 
   let revision: CandidateRevision | null = null;
   try {

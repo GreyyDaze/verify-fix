@@ -20,8 +20,8 @@
 #   VF_PROJECT, VF_ENV_FILE, VF_ENV_NAME, VF_REPORT_JSON, VF_REPORT_MARKDOWN,
 #   VF_REQUIREMENTS_MODE, VF_REQUIREMENTS_DIGEST, VF_CLI, VF_CLI_VERSION
 #
-# Pinning: install an exact CLI release (npm i -g verify-fix@0.1.0), point
-# VF_CLI at that binary, and set VF_CLI_VERSION=0.1.0. The gate refuses to run
+# Pinning: install an exact CLI release (npm i -g verify-fix@0.1.4), point
+# VF_CLI at that binary, and set VF_CLI_VERSION=0.1.4. The gate refuses to run
 # if the installed CLI reports a different version.
 set -euo pipefail
 

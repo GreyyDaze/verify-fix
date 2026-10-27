@@ -10,15 +10,24 @@
 
 ## The Problem
 
-AI agents increasingly propose patches to failing monitoring checks. The easiest way to make a red check green is **not to fix the application bug** but to **silence the alarm**:
+AI agents increasingly propose patches to failing monitoring checks. The shortest path to a green check is often **not to fix the application bug** but to **silence the alarm**:
 
 - Delete the failing assertion
 - Weaken the expected value
-- Wrap in `try/catch`
+- Wrap the assertion in `try/catch`
 - Retry until it passes
 - Switch to a fresh test account
 
-**verify-fix** catches all of these. It grades a candidate patch against the *actual incident evidence* using deterministic rules. Exit codes: `0` (PASS), `1` (FAILED), `2` (UNCERTAIN).
+This is not hypothetical. It is measured in software tests:
+
+- On RE-Bench tasks, where the model could see the scoring function, OpenAI's o3 reward-hacked in **39 of 128 runs (30.4%)** — usually by editing tests or scoring code. On HCAST tasks, where it could not see the scorer, the rate was **0.7%**. ([METR, 2025](https://metr.org/blog/2025-06-05-recent-reward-hacking/))
+- Across 48,563 commits by coding agents, **23% add or change test files**, compared with **13%** for human commits. ([arXiv:2602.00409](https://arxiv.org/abs/2602.00409))
+
+A monitoring check is the same failure mode with a worse consequence: the check *is* the alarm. Editing the check removes the signal without fixing the outage.
+
+**What is not measured here:** how often agents silence *monitoring* checks specifically. No published study reports that rate, and this project does not claim one.
+
+**verify-fix** does not need that rate to be useful. It grades a candidate patch against the *actual incident evidence* using deterministic rules, so a silenced assertion fails whether it was written carelessly or deliberately. Exit codes: `0` (PASS), `1` (FAILED), `2` (UNCERTAIN).
 
 ---
 
@@ -27,7 +36,7 @@ AI agents increasingly propose patches to failing monitoring checks. The easiest
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌────────────────────┐
 │  Checkly Check  │────▶│  verify-fix      │────▶│  Sanitized v3      │
-│  fails          │     │  bundle          │     │  Bundle (.tar.gz)  │
+│  fails          │     │  bundle          │     │  Bundle directory  │
 │  (incident)     │     │  --check <id>    │     │  fingerprint: sha256│
 └─────────────────┘     └──────────────────┘     └─────────┬──────────┘
                                                            │
@@ -42,9 +51,9 @@ AI agents increasingly propose patches to failing monitoring checks. The easiest
                                                              │
                     ┌──────────────────┐                   ▼
                     │  Executors       │──────────▶ ┌────────────────────┐
-                    │  • Playwright    │            │  Policy Engine     │
-                    │  • Checkly Cloud │            │  • Sealed reqs     │
-                    │  • Hybrid        │            │  • Sibling reg.    │
+                    │  • scene         │            │  Policy Engine     │
+                    │  • hybrid        │            │  • Sealed reqs     │
+                    │                  │            │  • Sibling reg.    │
                     └──────────────────┘            │  • Mutation gate   │
                                                    └─────────┬──────────┘
                                                              │
@@ -62,7 +71,7 @@ verify-fix bundle --check <CHECK_ID> --result <FAIL_RESULT> --pass-result <PASS_
 ```
 - Downloads check construct, recordings, HAR, traces, Rocky RCA output
 - Seals effective requirements from live Checkly API (what Checkly *actually* runs)
-- Writes a fingerprinted `.tar.gz` — the "exam paper" that cannot be edited by the candidate
+- Writes a fingerprinted bundle **directory** — the "exam paper" that cannot be edited by the candidate
 
 ### Phase 2: Verify
 ```bash
@@ -165,13 +174,12 @@ The provider-neutral gate is a single POSIX script: **`scripts/ci-gate.sh`**
 |------|---------|
 | 0 | PASS + gate-eligible |
 | 1 | FAILED (silencing, regression, weak oracle) |
-| 2 | UNCERTAIN (missing evidence, flaky) |
-| 3+ | Configuration error (missing var, fingerprint mismatch) |
+| 2 | UNCERTAIN (missing evidence, flaky) or configuration error (missing var, fingerprint mismatch) |
 
 Prefer a typed interface? The same gate ships as a composite GitHub Action:
 
 ```yaml
-- uses: GreyyDaze/verify-fix@v0.1.0
+- uses: GreyyDaze/verify-fix@v0.1.4
   with:
     bundle-dir: ${{ steps.capture.outputs.bundle }}
     bundle-digest: ${{ steps.capture.outputs.digest }}
@@ -181,7 +189,7 @@ Prefer a typed interface? The same gate ships as a composite GitHub Action:
     target-revision: ${{ github.sha }}
     target-metadata: ./deployment-metadata.json
     requirements-mode: shadow
-    cli-version: 0.1.0
+    cli-version: 0.1.4
     checkly-api-key: ${{ secrets.CHECKLY_API_KEY }}
     checkly-account-id: ${{ secrets.CHECKLY_ACCOUNT_ID }}
 ```

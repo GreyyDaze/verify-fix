@@ -38,7 +38,7 @@ verify-fix bundle \
   --out ./bundle
 ```
 
-This downloads the check, recordings, assets, and Rocky RCA; writes a sanitized v3 bundle (`.tar.gz`) to `./bundle`; prints the SHA-256 fingerprint.
+This downloads the check, recordings, assets, and Rocky RCA; writes a sanitized v3 bundle **directory** to `./bundle`; prints the SHA-256 fingerprint.
 
 ### 3. Write the Repair Patch
 Create a patch file (or directory) with the proposed fix to the check source.
@@ -140,7 +140,7 @@ The provider-neutral gate is `scripts/ci-gate.sh`. It runs in any CI (GitHub Act
 The repository ships a composite action (`action.yml`) that runs the same script with typed inputs:
 
 ```yaml
-- uses: GreyyDaze/verify-fix@v0.1.0
+- uses: GreyyDaze/verify-fix@v0.1.4   # replace with the release you want to pin
   with:
     bundle-dir: ${{ steps.capture.outputs.bundle }}
     bundle-digest: ${{ steps.capture.outputs.digest }}
@@ -151,7 +151,7 @@ The repository ships a composite action (`action.yml`) that runs the same script
     target-revision: ${{ github.sha }}
     target-metadata: ./deployment-metadata.json
     requirements-mode: shadow
-    cli-version: 0.1.0
+    cli-version: 0.1.4
     checkly-api-key: ${{ secrets.CHECKLY_API_KEY }}
     checkly-account-id: ${{ secrets.CHECKLY_ACCOUNT_ID }}
 ```
@@ -161,9 +161,9 @@ The repository ships a composite action (`action.yml`) that runs the same script
 The gate executes whatever `verify-fix` binary it finds. To make a build reproducible, install an exact release and pin it:
 
 ```bash
-npm i -g verify-fix@0.1.0
+npm i -g verify-fix@0.1.4
 export VF_CLI="$(command -v verify-fix)"
-export VF_CLI_VERSION=0.1.0
+export VF_CLI_VERSION=0.1.4
 ```
 
 If the installed CLI reports a different version, the gate exits `2` instead of grading with the wrong rules.
@@ -186,8 +186,7 @@ If the installed CLI reports a different version, the gate exits `2` instead of 
 |---|---|
 | 0 | PASS + gate-eligible |
 | 1 | FAILED (silencing, regression, weak oracle) |
-| 2 | UNCERTAIN (missing evidence, flaky) |
-| 2+ | Configuration error (missing var, fingerprint mismatch, etc.) |
+| 2 | UNCERTAIN (missing evidence, flaky), or configuration error (missing var, fingerprint mismatch) |
 
 ---
 

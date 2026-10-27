@@ -2,7 +2,11 @@
 
 ## Problem Statement
 
-AI agents increasingly propose patches to monitoring checks (Playwright, API, Multistep) when checks fail. The easiest way to make a red check green is not to fix the application bug but to **silence the alarm**: delete the failing assertion, weaken the expected value, wrap in `try/catch`, retry until it passes, or switch to a fresh test account. `verify-fix` is a deterministic oracle that grades candidate patches against captured incident evidence — no LLM in the decision path.
+AI agents increasingly propose patches to monitoring checks (Playwright, API, Multistep) when checks fail. The easiest way to make a red check green is not to fix the application bug but to **silence the alarm**: delete the failing assertion, weaken the expected value, wrap in `try/catch`, retry until it passes, or switch to a fresh test account.
+
+The general behaviour is measured in software tests: on RE-Bench tasks with a visible scorer, o3 reward-hacked in 39 of 128 runs (30.4%), and 23% of agent commits add or change test files versus 13% for human commits. How often agents silence **monitoring** checks is not yet measured, and this project does not claim a rate.
+
+`verify-fix` is a deterministic oracle that grades candidate patches against captured incident evidence — no LLM in the decision path.
 
 ## Core Concept
 
@@ -16,7 +20,7 @@ Two-phase model:
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌────────────────────┐
 │  Checkly Check  │────▶│  verify-fix      │────▶│  Sanitized v3      │
-│  fails          │     │  bundle          │     │  Bundle (.tar.gz)  │
+│  fails          │     │  bundle          │     │  Bundle directory  │
 │  (incident)     │     │  --check <id>    │     │  fingerprint: sha256│
 └─────────────────┘     └──────────────────┘     └─────────┬──────────┘
                                                            │
@@ -31,9 +35,9 @@ Two-phase model:
                                                              │
                     ┌──────────────────┐                   ▼
                     │  Executors       │──────────▶ ┌────────────────────┐
-                    │  • Playwright    │            │  Policy Engine     │
-                    │  • Checkly Cloud │            │  • Sealed reqs     │
-                    │  • Hybrid        │            │  • Sibling reg.    │
+                    │  • scene         │            │  Policy Engine     │
+                    │  • hybrid        │            │  • Sealed reqs     │
+                    │                  │            │  • Sibling reg.    │
                     └──────────────────┘            │  • Mutation gate   │
                                                    └─────────┬──────────┘
                                                              │
@@ -58,7 +62,7 @@ Two-phase model:
 
 ## Data Model
 
-**Bundle v3** (`.tar.gz`, pinned by SHA-256):
+**Bundle v3** (directory, pinned by SHA-256):
 - `manifest.json` — schema version, check type, logical ID, capture timestamp, fingerprint
 - `check/` — original check construct source (`*.check.ts`, `*.spec.ts`, setup scripts)
 - `recordings/` — failing + passing Multistep recordings (bound by identity)
@@ -88,7 +92,7 @@ This section describes how verify-fix implements each capability deterministical
 
 ### 1. Technique: Content-Addressed Evidence Bundles
 
-**How:** Every bundle is a versioned archive (`.tar.gz`) with a computed SHA-256 fingerprint over all files (path + NUL + bytes, sorted by POSIX relative path). The fingerprint is recorded in the manifest and validated before grading.
+**How:** Every bundle is a versioned directory with a computed SHA-256 fingerprint over all files (path + NUL + bytes, sorted by POSIX relative path). The fingerprint is recorded in the manifest and validated before grading.
 
 **Why:** Content-addressing makes bundles tamper-evident and makes fingerprint comparison O(1).
 

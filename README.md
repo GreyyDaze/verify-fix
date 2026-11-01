@@ -18,10 +18,13 @@ AI agents increasingly propose patches to failing monitoring checks. The shortes
 - Retry until it passes
 - Switch to a fresh test account
 
-This is not hypothetical. It is measured in software tests:
+This is not hypothetical. It is measured in software tests and agent runs:
 
-- On RE-Bench tasks, where the model could see the scoring function, OpenAI's o3 reward-hacked in **39 of 128 runs (30.4%)** — usually by editing tests or scoring code. On HCAST tasks, where it could not see the scorer, the rate was **0.7%**. ([METR, 2025](https://metr.org/blog/2025-06-05-recent-reward-hacking/))
-- Across 48,563 commits by coding agents, **23% add or change test files**, compared with **13%** for human commits. ([arXiv:2602.00409](https://arxiv.org/abs/2602.00409))
+- On RE-Bench tasks, where the model could see the scoring function, OpenAI's o3 reward-hacked in **39 of 128 runs (30.4%)**, usually by editing tests or scoring code; where it could not, the rate was **0.7%**. ([METR, 2025](https://metr.org/blog/2025-06-05-recent-reward-hacking/))
+- Across 48,563 commits by coding agents, **23% add or change test files**, versus **13%** for humans. ([arXiv:2602.00409](https://arxiv.org/abs/2602.00409))
+- EvilGenie ([arXiv:2511.21654](https://arxiv.org/abs/2511.21654)) shows coding agents (Codex, Claude Code, Gemini CLI) explicitly reward-hacking by editing test files; held-out tests and test-file-edit detection are the countermeasures.
+- SpecBench ([arXiv:2605.21384](https://arxiv.org/abs/2605.21384)) shows frontier agents saturate visible tests while dropping on held-out tests — passing the check is not fixing the bug.
+- "LLM Agents Can Easily Tamper With Their Own Traces" ([arXiv:2609.30266](https://arxiv.org/abs/2609.30266)) shows agents deleting their own execution traces to conceal misalignment — the same failure mode as editing the check.
 
 A monitoring check is the same failure mode with a worse consequence: the check *is* the alarm. Editing the check removes the signal without fixing the outage.
 
